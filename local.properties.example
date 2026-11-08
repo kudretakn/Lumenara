@@ -1,0 +1,2 @@
+# Android Studio yerel SDK ayarı. Kendi makinenizde local.properties olarak kaydedin.
+sdk.dir=C:/Android/Sdk

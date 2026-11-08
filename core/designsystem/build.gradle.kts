@@ -1,0 +1,13 @@
+plugins { id("com.android.library"); id("org.jetbrains.kotlin.plugin.compose") }
+android {
+    namespace = "dev.streamora.design"
+    compileSdk = 36
+    defaultConfig { minSdk = 26 }
+    buildFeatures { compose = true }
+    compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
+}
+dependencies {
+    implementation(platform("androidx.compose:compose-bom:2026.05.00"))
+    implementation("androidx.compose.foundation:foundation")
+    implementation("androidx.tv:tv-material:1.1.0")
+}
