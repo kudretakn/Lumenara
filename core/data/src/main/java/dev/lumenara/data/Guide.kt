@@ -3,6 +3,9 @@ package dev.lumenara.data
 import androidx.room.*
 import dev.lumenara.catalog.*
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.Dispatchers
 
 @Entity(
     tableName = "feeds",
@@ -81,6 +84,45 @@ data class Mapping(@PrimaryKey val item: String, val feed: String, val channel: 
 
 @Dao
 interface GuideDao {
+    @Query("SELECT id,title,tvgId,search,source FROM items WHERE kind='LIVE' AND (:source='' OR source=:source)")
+    fun searchChannels(source: String): Flow<List<GuideChannel>>
+
+    @Query("""SELECT p.* FROM programmes p JOIN feeds f ON p.feed=f.id
+        WHERE (:source='' OR f.source=:source) AND instr(p.search,:query)>0 AND p.end>:from
+        ORDER BY CASE WHEN p.start<=:now AND p.end>:now THEN 0 WHEN p.start>:now THEN 1 ELSE 2 END,
+            CASE WHEN p.end>:now THEN p.start END, p.start DESC, p.feed, p.channel LIMIT 400""")
+    fun searchSlots(source: String, query: String, from: Long, now: Long): Flow<List<Slot>>
+
+    @Query("""SELECT p.* FROM programmes p JOIN feeds f ON p.feed=f.id
+        WHERE (:source='' OR f.source=:source) AND p.start<=:now AND p.end>:now""")
+    fun airingSlots(source: String, now: Long): Flow<List<Slot>>
+
+    @Query("""SELECT m.* FROM mappings m JOIN items i ON m.item=i.id
+        WHERE (:source='' OR i.source=:source)""")
+    fun sourceMappings(source: String): Flow<List<Mapping>>
+
+    @Query("""SELECT n.* FROM epgNames n JOIN feeds f ON n.feed=f.id
+        WHERE (:source='' OR f.source=:source)""")
+    fun sourceNames(source: String): Flow<List<GuideName>>
+
+    @Query("""SELECT DISTINCT p.feed,p.channel,f.source FROM programmes p JOIN feeds f ON p.feed=f.id
+        WHERE (:source='' OR f.source=:source)""")
+    fun programmeChannels(source: String): Flow<List<ProgrammeChannel>>
+
+    fun resolver(source: String): Flow<GuideResolver> = combine(
+        searchChannels(source), sourceMappings(source), sourceNames(source), programmeChannels(source),
+    ) { channels, mappings, names, present -> GuideResolver(channels, mappings, names, present.toSet()) }
+
+    fun searchPrograms(source: String, query: String, from: Long, now: Long): Flow<List<ProgramHit>> =
+        combine(resolver(source), searchSlots(source, searchable(query), from, now)) { resolver, slots ->
+            resolver.searchPrograms(slots, query, from, now)
+        }.flowOn(Dispatchers.Default)
+
+    fun nowAiring(source: String, now: Long, query: String = ""): Flow<List<AiringProgram>> =
+        combine(resolver(source), airingSlots(source, now)) { resolver, slots ->
+            resolver.nowAiring(slots, now, query)
+        }.flowOn(Dispatchers.Default)
+
     @Upsert suspend fun map(mapping: Mapping)
 
     @Query("DELETE FROM mappings WHERE item=:id") suspend fun unmap(id: String)

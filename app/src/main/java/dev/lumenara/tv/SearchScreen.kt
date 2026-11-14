@@ -20,8 +20,14 @@ import androidx.tv.material3.Button
 import androidx.tv.material3.Text
 import dev.lumenara.catalog.searchable
 import dev.lumenara.data.Item
+import dev.lumenara.data.ProgramHit
 import dev.lumenara.design.Ink
+import dev.lumenara.design.FocusCard
+import java.time.*
+import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.flow.*
 
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 @Composable
 internal fun SearchScreen(
     model: LibraryModel,
@@ -57,6 +63,20 @@ internal fun SearchScreen(
         }.collectAsStateWithLifecycle(emptyList())
         title to rows
     }
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) { wallClockTicks(30_000).collect { now = it } }
+    val programs by remember(source, query, now) {
+        if (query.isBlank()) flowOf(emptyList())
+        else model.repo.guide.searchPrograms(source, searchable(query), now - 7 * 86_400_000L, now)
+            .flatMapLatest { hits ->
+                val ids = hits.map { it.itemId }.distinct()
+                if (ids.isEmpty()) flowOf(emptyList())
+                else model.repo.library.liveByIds(source, ids).map { items ->
+                    val byId = items.associateBy { it.id }
+                    hits.mapNotNull { hit -> byId[hit.itemId]?.let { hit to it } }
+                }
+            }
+    }.collectAsStateWithLifecycle(emptyList())
     val notice by model.notice.collectAsStateWithLifecycle()
     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
         Column(Modifier.width(240.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -66,7 +86,7 @@ internal fun SearchScreen(
         }
         LazyColumn(Modifier.weight(1f).testTag("search-results").focusRestorer().focusGroup(),
             contentPadding = PaddingValues(8.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-            if (shelves.all { it.second.isEmpty() }) item { Text("Eşleşen içerik yok.", color = Ink.muted) }
+            if (programs.isEmpty() && shelves.all { it.second.isEmpty() }) item { Text("Eşleşen içerik yok.", color = Ink.muted) }
             items(shelves.filter { it.second.isNotEmpty() }, key = { it.first }) { (title, rows) ->
                 if (title == "Kanallar") ChannelShelf(model, title, rows, play, {})
                 else Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -77,9 +97,56 @@ internal fun SearchScreen(
                     }
                 }
             }
+            if (programs.isNotEmpty()) item {
+                Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    Text("Programlar", fontSize = 19.sp)
+                    LazyRow(Modifier.testTag("search-shelf-Programlar").focusRestorer().focusGroup(),
+                        contentPadding = PaddingValues(8.dp), horizontalArrangement = Arrangement.spacedBy(15.dp)) {
+                        items(programs, key = { (hit, _) -> "${hit.itemId}:${hit.slot.feed}:${hit.slot.channel}:${hit.slot.start}" }) { (hit, channel) ->
+                            ProgramCard(hit, channel, now) {
+                                val slot = hit.slot
+                                val atClick = System.currentTimeMillis()
+                                when {
+                                    atClick in slot.start until slot.end -> play(channel, programs.map { it.second }.distinctBy { it.id })
+                                    channel.archive.isNotEmpty() && slot.end <= atClick &&
+                                        slot.start >= atClick - channel.archiveDays.coerceIn(0, 365) * 86_400_000L ->
+                                        model.job("Arşiv programı açıldı.") {
+                                            val replay = model.repo.replay(channel, slot)
+                                            play(replay, listOf(replay))
+                                        }
+                                    else -> open(channel)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             if (shelves.any { it.second.size >= limit }) item {
                 Button(onClick = { limit += 80 }) { Text("Devamını göster") }
             }
+        }
+    }
+}
+
+@Composable
+private fun ProgramCard(hit: ProgramHit, channel: Item, now: Long, click: () -> Unit) {
+    val slot = hit.slot
+    val zone = ZoneId.systemDefault()
+    val day = Instant.ofEpochMilli(slot.start).atZone(zone).toLocalDate()
+    val today = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+    val label = when (day) {
+        today -> "Bugün"
+        today.plusDays(1) -> "Yarın"
+        today.minusDays(1) -> "Dün"
+        else -> day.format(DateTimeFormatter.ofPattern("dd.MM"))
+    }
+    val time = DateTimeFormatter.ofPattern("HH:mm").withZone(zone)
+    FocusCard(click, Modifier.width(260.dp).testTag("search-program-${channel.id}-${slot.start}")) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(slot.title, fontSize = 18.sp, maxLines = 2)
+            Text(channel.title, color = Ink.muted, fontSize = 15.sp)
+            Text("$label · ${time.format(Instant.ofEpochMilli(slot.start))}–${time.format(Instant.ofEpochMilli(slot.end))}", fontSize = 13.sp)
+            if (now in slot.start until slot.end) Text("Şimdi", color = Ink.accent, fontSize = 13.sp)
         }
     }
 }
