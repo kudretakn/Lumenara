@@ -12,12 +12,17 @@ import coil.ImageLoader
 import coil.decode.DataSource
 import coil.intercept.Interceptor
 import coil.request.SuccessResult
+import dev.streamora.data.Feed
+import dev.streamora.data.Mapping
+import dev.streamora.data.Slot
+import dev.streamora.data.Preferences
 import dev.streamora.data.Repository
 import dev.streamora.data.SourceSpec
 import java.io.File
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.*
+import okio.Buffer
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -102,6 +107,20 @@ class CinemaJourneyTest {
         }
         MockWebServer().use { server ->
             server.start()
+            val video = test.context.assets.open("streamora-test.mp4").use { it.readBytes() }
+            val preferences = Preferences(context)
+            val previousRecent = runBlocking { preferences.text("recent_live").first() }
+            val previousEngine = runBlocking { preferences.text("engine", "Media3").first() }
+            runBlocking {
+                repeat(25) { preferences.recordLive("fixture-$it") }
+                preferences.recordLive("fixture-10")
+                val ids = preferences.recentLive.first()
+                assertEquals(20, ids.size)
+                assertEquals("fixture-10", ids.first())
+                assertEquals(20, ids.distinct().size)
+                preferences.set("recent_live", "")
+                preferences.set("engine", "Media3")
+            }
             val catalog = JSONArray()
             titles.forEachIndexed { i, title ->
                 catalog.put(
@@ -129,17 +148,24 @@ class CinemaJourneyTest {
             }
             server.dispatcher =
                 object : Dispatcher() {
-                    override fun dispatch(request: RecordedRequest): MockResponse =
-                        MockResponse()
-                            .setBody(
-                                when (request.requestUrl?.queryParameter("action")) {
-                                    null -> """{"user_info":{"auth":1}}"""
-                                    "get_vod_categories" ->
-                                        """[{"category_id":1,"category_name":"Sinema"}]"""
-                                    "get_vod_streams" -> catalog.toString()
-                                    else -> "[]"
-                                }
-                            )
+                    override fun dispatch(request: RecordedRequest): MockResponse {
+                        if (request.requestUrl?.encodedPath?.startsWith("/live/") == true)
+                            return MockResponse().setHeader("Content-Type", "video/mp4")
+                                .setBody(Buffer().write(video))
+                        return MockResponse().setBody(
+                            when (request.requestUrl?.queryParameter("action")) {
+                                null -> """{"user_info":{"auth":1}}"""
+                                "get_vod_categories" ->
+                                    """[{"category_id":1,"category_name":"Sinema"}]"""
+                                "get_vod_streams" -> catalog.toString()
+                                "get_live_categories" ->
+                                    """[{"category_id":2,"category_name":"Haber"}]"""
+                                "get_live_streams" ->
+                                    """[{"stream_id":101,"name":"Test Haber","category_id":"2","stream_icon":"https://cinema.invalid/tile0.jpg"}]"""
+                                else -> "[]"
+                            }
+                        )
+                    }
                 }
             try {
                 node("✓ M3U").assertExists()
@@ -156,12 +182,20 @@ class CinemaJourneyTest {
                         }
                     assertFalse(movie.backdrop.contains("cinema.invalid"))
                     assertEquals("https://cinema.invalid/coast.jpg", repo.backdrop(movie))
+                    val channel = repo.library.browse(source.id, "LIVE", "", "", "", 1).first().single()
+                    val now = System.currentTimeMillis()
+                    repo.guide.put(Feed("home-test-guide", source.id, ""))
+                    repo.guide.slots(listOf(Slot("home-test-guide", "news", now - 60_000,
+                        now + 3_600_000, "Günün Haberleri", "", "günün haberleri")))
+                    repo.guide.map(Mapping(channel.id, "home-test-guide", "news"))
                 }
                 focus(screen.onNodeWithContentDescription("Ana Sayfa"))
                 device.pressDPadCenter()
                 focus(node("Oynat"))
                 screen.onNodeWithTag("nav-closed").assertExists()
                 capture("cinema-home")
+                capture("screens/home")
+                screen.onNodeWithText("Canlı TV’ye git").assertDoesNotExist()
                 capture("screens/nav-closed")
                 device.pressDPadLeft()
                 screen.waitForIdle()
@@ -179,6 +213,31 @@ class CinemaJourneyTest {
                 screen.waitForIdle()
                 screen.onNodeWithTag("nav-closed").assertExists()
                 node("Oynat").assertIsFocused()
+                // OK on a home channel card must open fullscreen without a detail step.
+                focus(screen.onNodeWithContentDescription("Test Haber"))
+                device.pressDPadCenter()
+                screen.waitUntil(15000) {
+                    runBlocking { preferences.recentLive.first().isNotEmpty() }
+                }
+                screen.onNodeWithContentDescription("Tam ekran oynatıcı").assertExists()
+                device.pressBack()
+                node("Son izlenen kanallar").assertExists()
+                screen.onNodeWithTag("home-shelves")
+                    .performScrollToNode(hasText("Son izlenen kanallar"))
+                focus(screen.onNode(hasContentDescription("Test Haber") and
+                    hasAnyAncestor(hasTestTag("channel-shelf-Son izlenen kanallar"))))
+                node("Günün Haberleri").assertExists()
+                capture("screens/home-shelves")
+                // The card in the recent shelf is the channel that actually started playback.
+                val recentId = runBlocking { preferences.recentLive.first().first() }
+                runBlocking {
+                    assertEquals("Test Haber", repo.library.liveByIds("", listOf(recentId))
+                        .first().single().title)
+                }
+                screen.onNodeWithTag("home-shelves")
+                    .performScrollToNode(hasText("Son eklenen filmler"))
+                screen.onNodeWithTag("shelf-Son eklenen filmler")
+                    .performScrollToNode(hasContentDescription("Kadife Gece"))
                 assertTrue(
                     "Afiş adı ekranın içinde kalmalı",
                     node("Kadife Gece").fetchSemanticsNode().boundsInRoot.bottom <=
@@ -247,6 +306,8 @@ class CinemaJourneyTest {
                 node("Varsayılan motor · Media3").assertExists()
             } finally {
                 runBlocking {
+                    preferences.set("recent_live", previousRecent)
+                    preferences.set("engine", previousEngine)
                     repo.library
                         .snapshot()
                         .filter { it.name == "Test · Sinema" }

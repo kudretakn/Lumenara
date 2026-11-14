@@ -2,6 +2,8 @@
 
 ## 0.3.0 (geliştiriliyor)
 
+- Canlı TV öncelikli ana sayfa, EPG ilerlemeli kanal rafları, DataStore’da son 20 kanal ve 9 saniyede dönen vitrin eklendi; ana sayfa yolculuk ve ekran görüntüsü adımları güncellendi.
+
 - Cam tasarım sistemi, 72/240 dp açılır sol menü ve iki sekmeli Listem eklendi; IPTV Kaynakları Ayarlar’a taşındı. Kumanda testleri ve açık/kapalı menü ekran görüntüsü adımları güncellendi.
 
 ## 0.2.1 · 6 Kasım 2026

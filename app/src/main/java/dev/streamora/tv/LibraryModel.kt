@@ -110,6 +110,11 @@ constructor(val repo: Repository, val prefs: Preferences) : androidx.lifecycle.V
         }
     }
 
+    fun started(item: Item) {
+        if (item.kind != "LIVE") return
+        viewModelScope.launch { prefs.recordLive(item.id) }
+    }
+
     fun progress(item: Item, time: Long, duration: Long) {
         if (item.kind in listOf("LIVE", "REPLAY") || time < 0) return
         viewModelScope.launch {

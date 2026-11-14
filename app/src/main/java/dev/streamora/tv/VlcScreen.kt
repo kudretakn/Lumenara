@@ -71,8 +71,13 @@ internal fun VlcScreen(
             if (start > 0 && item.kind != "LIVE") media.addOption(":start-time=${start/1000.0}")
             p.media = media
             media.release()
+            var recorded = false
             p.setEventListener {
                 when (it.type) {
+                    MediaPlayer.Event.Playing -> if (!recorded) {
+                        recorded = true
+                        model.started(item)
+                    }
                     MediaPlayer.Event.EncounteredError -> {
                         message = "VLC bu yayını oynatamadı."
                         panel = true

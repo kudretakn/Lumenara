@@ -92,8 +92,16 @@ internal fun Video(
                         .build()
                 player = engine
                 currentReady(engine)
+                var recorded = false
                 engine.addListener(
                     object : Player.Listener {
+                        override fun onIsPlayingChanged(isPlaying: Boolean) {
+                            if (isPlaying && !recorded) {
+                                recorded = true
+                                model.started(item)
+                            }
+                        }
+
                         override fun onPlayerError(cause: PlaybackException) {
                             error = playbackMessage(cause)
                             model.diagnostic("Media3 ${cause.errorCode}")

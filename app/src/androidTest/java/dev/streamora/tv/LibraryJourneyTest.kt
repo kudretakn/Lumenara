@@ -69,7 +69,7 @@ class LibraryJourneyTest {
                 select("HTTP uyumluluğu · Kapalı")
                 button("HTTP uyumluluğu · Açık").assertExists()
                 select("Bağlantıyı sına ve ekle")
-                button("Canlı TV’ye git").assertExists()
+                button("Şu an yayında — favori kanallar").assertExists()
                 screen.onNodeWithContentDescription("Canlı TV")
                     .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus)
                 screen.waitForIdle()

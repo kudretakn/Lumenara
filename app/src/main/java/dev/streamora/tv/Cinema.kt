@@ -160,14 +160,17 @@ internal fun Hero(
             fontSize = 10.sp,
             fontWeight = FontWeight.SemiBold,
         )
-        Text(
-            item.title,
-            fontSize = 38.sp,
-            lineHeight = 41.sp,
-            fontWeight = FontWeight.Bold,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
+        // Keep action buttons in place while the title and shared backdrop crossfade.
+        Crossfade(item.title, animationSpec = tween(600), label = "Vitrin başlığı") { title ->
+            Text(
+                title,
+                fontSize = 38.sp,
+                lineHeight = 41.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
         MovieMeta(item, info)
         if (info.summary.isNotBlank())
             Text(
@@ -192,16 +195,19 @@ internal fun Hero(
             ) {
                 NavIcon(2, Modifier.size(16.dp))
                 Spacer(Modifier.width(8.dp))
-                Text(
-                    if (item.kind == "SERIES") "Bölümleri aç"
-                    else if ((mark?.position ?: 0) > 0) "Devam et" else "Oynat"
-                )
+                Text("Oynat")
             }
             Button(
                 onClick = { open(item) },
                 colors = ButtonDefaults.colors(containerColor = Ink.surface.copy(alpha = .8f)),
             ) {
-                Text("Ayrıntılar")
+                Text("Detaylar")
+            }
+            Button(
+                onClick = { model.mark(item, false) },
+                colors = ButtonDefaults.colors(containerColor = Ink.surface.copy(alpha = .8f)),
+            ) {
+                Text(if (mark?.listed == true) "✓ Listem" else "+ Listem")
             }
         }
     }

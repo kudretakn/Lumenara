@@ -13,7 +13,9 @@ import androidx.compose.foundation.lazy.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.*
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.unit.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -22,6 +24,8 @@ import coil.compose.AsyncImage
 import dev.streamora.data.*
 import dev.streamora.design.Ink
 import dev.streamora.design.Pill
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.*
 
 @Composable
 internal fun Poster(model: LibraryModel, item: Item, modifier: Modifier) {
@@ -37,21 +41,11 @@ internal fun Poster(model: LibraryModel, item: Item, modifier: Modifier) {
 private fun Shelf(
     model: LibraryModel,
     title: String,
-    source: String,
-    kind: String,
+    rows: List<Item>,
     shelf: String,
     open: (Item) -> Unit,
     focus: (Item) -> Unit,
 ) {
-    val rows by
-        remember(source, kind, shelf, title) {
-                when (shelf) {
-                    "collection" -> model.repo.library.members(source, title)
-                    "suggest" -> model.repo.library.suggestions(source)
-                    else -> model.repo.library.browse(source, kind, "", "", shelf, 24)
-                }
-            }
-            .collectAsStateWithLifecycle(emptyList())
     if (rows.isEmpty()) return
     Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
         Text(
@@ -60,7 +54,7 @@ private fun Shelf(
             fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
         )
         LazyRow(
-            modifier = Modifier.focusRestorer().focusGroup(),
+            modifier = Modifier.testTag("shelf-$title").focusRestorer().focusGroup(),
             horizontalArrangement = Arrangement.spacedBy(15.dp),
             contentPadding = PaddingValues(5.dp),
         ) {
@@ -78,6 +72,7 @@ private fun Shelf(
     }
 }
 
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 @Composable
 internal fun Home(
     model: LibraryModel,
@@ -86,63 +81,99 @@ internal fun Home(
     play: (Item, List<Item>) -> Unit,
     info: MovieInfo,
     feature: (Item?) -> Unit,
-    live: () -> Unit,
+    interaction: Long,
 ) {
-    val collections by
-        remember(source) { model.repo.library.collections(source) }
-            .collectAsStateWithLifecycle(emptyList())
-    val candidates by
-        remember(source) { model.repo.library.browse(source, "", "", "", "", 24) }
-            .collectAsStateWithLifecycle(emptyList())
-    var focusedId by rememberSaveable(source) { mutableStateOf<String?>(null) }
-    var focused by remember(source) { mutableStateOf<Item?>(null) }
-    val first =
-        candidates.firstOrNull { it.id == focusedId }
-            ?: candidates.firstOrNull { it.kind == "MOVIE" || it.kind == "SERIES" }
-            ?: candidates.firstOrNull()
-    val hero = focused ?: first
-    LaunchedEffect(hero) { feature(hero) }
-    val choose: (Item) -> Unit = {
-        focused = it
-        focusedId = it.id
-    }
-    BoxWithConstraints(Modifier.fillMaxSize()) {
-        val heroHeight = (maxHeight * .49f).coerceAtLeast(230.dp)
-        Column {
-            Box(Modifier.fillMaxWidth().height(heroHeight)) {
-                hero?.let {
-                    Hero(
-                        model,
-                        it,
-                        info,
-                        open,
-                        play,
-                        Modifier.align(Alignment.CenterStart).padding(top = 12.dp),
-                    )
+    val collections by remember(source) { model.repo.library.collections(source) }
+        .collectAsStateWithLifecycle(emptyList())
+    val candidates by remember(source) { model.repo.library.homeFeatures(source) }
+        .collectAsStateWithLifecycle(emptyList())
+    val recent by remember(source) {
+        model.prefs.recentLive.flatMapLatest { ids ->
+            if (ids.isEmpty()) flowOf(emptyList())
+            else model.repo.library.liveByIds(source, ids).map { rows ->
+                val byId = rows.associateBy { it.id }
+                ids.mapNotNull { byId[it] }
+            }
+        }
+    }.collectAsStateWithLifecycle(emptyList())
+    val onAir by remember(source) {
+        model.repo.library.browse(source, "LIVE", "", "", "favorite", 20)
+            .flatMapLatest { favorites ->
+                if (favorites.isNotEmpty()) flowOf(favorites)
+                else model.repo.library.firstLiveCategory(source)
+            }
+    }.collectAsStateWithLifecycle(emptyList())
+    val shelfSpecs = listOf(
+        Triple("Kaldığın yerden devam et", "", "resume"),
+        Triple("Son eklenen filmler", "MOVIE", "recent"),
+        Triple("Yüksek puanlı filmler", "MOVIE", "popular"),
+        Triple("Diziler", "SERIES", ""),
+        Triple("İzleme listem", "", "list"),
+    ) + collections.map { Triple(it, "MOVIE", "collection") } +
+        Triple("İzlediklerinize göre", "", "suggest")
+    val shelves = shelfSpecs.map { (title, kind, shelf) ->
+        key(title, shelf) {
+            val rows by remember(source, title, kind, shelf) {
+                when (shelf) {
+                    "collection" -> model.repo.library.members(source, title)
+                    "suggest" -> model.repo.library.suggestions(source)
+                    else -> model.repo.library.browse(source, kind, "", "", shelf, 24)
                 }
+            }.collectAsStateWithLifecycle(emptyList())
+            Triple(title, shelf, rows)
+        }
+    }.filter { it.third.isNotEmpty() }
+    var page by rememberSaveable(source) { mutableIntStateOf(0) }
+    var shelvesFocused by rememberSaveable(source) { mutableStateOf(false) }
+    var focusedId by rememberSaveable(source) { mutableStateOf<String?>(null) }
+    val focused = (recent + onAir + shelves.flatMap { it.third } + candidates)
+        .firstOrNull { it.id == focusedId }
+    val rotating = candidates.getOrNull(page % candidates.size.coerceAtLeast(1))
+    val hero = if (shelvesFocused) focused ?: rotating else rotating
+    LaunchedEffect(source, candidates, shelvesFocused, interaction) {
+        if (!shelvesFocused && candidates.size > 1) {
+            while (true) {
+                delay(9_000)
+                page = (page + 1) % candidates.size
+            }
+        }
+    }
+    LaunchedEffect(hero) { feature(hero) }
+    val choose: (Item) -> Unit = { focusedId = it.id }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val heroHeight = maxHeight * .55f
+        Column {
+            Box(Modifier.fillMaxWidth().height(heroHeight)
+                .onFocusChanged { if (it.hasFocus) shelvesFocused = false }
+                .focusGroup()) {
+                hero?.let {
+                    Hero(model, it, info, open, play, Modifier.padding(top = 12.dp))
+                }
+                if (candidates.isNotEmpty())
+                    Row(Modifier.align(Alignment.BottomStart).padding(bottom = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        candidates.forEachIndexed { index, _ ->
+                            Box(Modifier.size(if (index == page % candidates.size) 8.dp else 6.dp)
+                                .background(if (index == page % candidates.size) Ink.focusRing else Ink.stroke,
+                                    androidx.compose.foundation.shape.CircleShape))
+                        }
+                    }
             }
             LazyColumn(
-                Modifier.weight(1f).focusRestorer().focusGroup(),
+                Modifier.weight(1f).testTag("home-shelves").onFocusChanged { shelvesFocused = it.hasFocus }
+                    .focusRestorer().focusGroup(),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 contentPadding = PaddingValues(top = 8.dp, bottom = 28.dp),
             ) {
-                item {
-                    Shelf(model, "Kaldığın yerden devam et", source, "", "resume", open, choose)
+                if (recent.isNotEmpty()) item(key = "recent-live") {
+                    ChannelShelf(model, "Son izlenen kanallar", recent, play, choose)
                 }
-                item {
-                    Shelf(model, "Son eklenen filmler", source, "MOVIE", "recent", open, choose)
+                if (onAir.isNotEmpty()) item(key = "on-air") {
+                    ChannelShelf(model, "Şu an yayında — favori kanallar", onAir, play, choose)
                 }
-                item {
-                    Shelf(model, "Yüksek puanlı filmler", source, "MOVIE", "popular", open, choose)
+                items(shelves, key = { "${it.second}:${it.first}" }) { (title, shelf, rows) ->
+                    Shelf(model, title, rows, shelf, open, choose)
                 }
-                item { Shelf(model, "Diziler", source, "SERIES", "", open, choose) }
-                item { Shelf(model, "Favori kanallar", source, "LIVE", "favorite", open, choose) }
-                item { Shelf(model, "İzleme listem", source, "", "list", open, choose) }
-                items(collections, key = { it }) { name ->
-                    Shelf(model, name, source, "MOVIE", "collection", open, choose)
-                }
-                item { Shelf(model, "İzlediklerinize göre", source, "", "suggest", open, choose) }
-                item { Button(onClick = live) { Text("Canlı TV’ye git") } }
             }
         }
     }

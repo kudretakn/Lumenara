@@ -86,13 +86,17 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
     val availableUpdate by model.update.collectAsStateWithLifecycle()
     var featured by remember(scope) { mutableStateOf<Item?>(null) }
     val info = cinemaInfo(model, featured)
+    var homeInteraction by remember { mutableLongStateOf(0L) }
     LaunchedEffect(section) {
         featured = null
         if (!railFocus && section != "IPTV Kaynakları") {
             if (!contentFocus.requestFocus()) rail.requestFocus()
         }
     }
-    Box(Modifier.fillMaxSize().background(Ink.background)) {
+    Box(Modifier.fillMaxSize().background(Ink.background).onPreviewKeyEvent {
+        if (section == "Ana Sayfa" && it.type == KeyEventType.KeyDown) homeInteraction++
+        false
+    }) {
         CinemaBackdrop(
             model,
             featured,
@@ -161,9 +165,7 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
                                         }
                                     }
                                 if (section == "Ana Sayfa")
-                                    Home(model, scope, open, play, info, { featured = it }) {
-                                        section = "Canlı TV"
-                                    }
+                                    Home(model, scope, open, play, info, { featured = it }, homeInteraction)
                                 else Browse(model, section, scope, open, play)
                             }
                     }
