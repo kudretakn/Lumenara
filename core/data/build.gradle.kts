@@ -6,7 +6,12 @@ plugins {
 android {
     namespace = "dev.lumenara.data"
     compileSdk = 36
-    defaultConfig { minSdk = 26 }
+    buildFeatures { buildConfig = true }
+    defaultConfig {
+        minSdk = 26
+        buildConfigField("String", "OPENSUBTITLES_API_KEY", "\"${System.getenv("OPENSUBTITLES_API_KEY").orEmpty().replace("\\", "\\\\").replace("\"", "\\\"")}\"")
+        buildConfigField("String", "TMDB_READ_TOKEN", "\"${System.getenv("TMDB_READ_TOKEN").orEmpty().replace("\\", "\\\\").replace("\"", "\\\"")}\"")
+    }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
 }
 room { schemaDirectory("$projectDir/schemas") }

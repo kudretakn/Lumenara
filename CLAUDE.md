@@ -15,6 +15,7 @@ Kişisel kullanım için Android TV IPTV oynatıcısı (Kotlin, Compose for TV, 
 - **Merge:** CI'daki **tüm** işler (`build` + `device`) pass olmadan merge yapılmaz; tam `gh pr checks` çıktısına bak. Hepsi yeşilse sormadan merge et. `main` korumalı.
 - **Kullanıcıya kalanlar:** Kimlik, ödeme ve imza anahtarı adımları kullanıcıya bırakılır. Geri alınamaz silme ya da para harcatan işlem için açık onay gerekir.
 - **Gizli bilgiler:** API anahtarları, imza anahtarı ve şifreler repoya ve loglara girmez. Release imza anahtarı yalnız kullanıcının Windows bilgisayarında durur; GitHub'a yalnız kullanıcının kendi eklediği secret'larla ulaşır. Altyazı API anahtarlarını kullanıcı uygulamanın Ayarlar ekranına girer (Keystore ile şifreli). Altyazı sitesi kazıma yok.
+  - İstisna (kullanıcı kararı, 14 Kasım 2026): OpenSubtitles API anahtarı ve TMDB Read Access Token, release derlemesinde `OPENSUBTITLES_API_KEY` ve `TMDB_READ_TOKEN` secret'larından `core/data` BuildConfig'ine gömülür. Repoda ve CI derlemelerinde boştur. Ayarlar'da girilen değer her zaman önce gelir. Herkese açık APK'dan çıkarılabilecekleri kabul edildi; sızarsa anahtar yenilenip secret güncellenir.
 - **İletişim:** Kullanıcıya kısa, Türkçe yanıt ver.
 
 ## Derleme ve test

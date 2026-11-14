@@ -31,9 +31,10 @@ class SubtitleCache(private val directory: File) {
 
 class SubtitleService(private val credentials: suspend () -> SubtitleCredentials, val cache: SubtitleCache) {
     constructor(prefs: Preferences, cache: SubtitleCache) : this({
-        SubtitleCredentials(prefs.secret("opensubtitles_key"), prefs.secret("opensubtitles_user"),
+        SubtitleCredentials(prefs.secret("opensubtitles_key").ifBlank { BuildConfig.OPENSUBTITLES_API_KEY }, prefs.secret("opensubtitles_user"),
             prefs.secret("opensubtitles_password"), prefs.secret("subdl_key"))
     }, cache)
+    val hasBuiltInOpenKey: Boolean get() = BuildConfig.OPENSUBTITLES_API_KEY.isNotBlank()
     // Injectable without changing release defaults. Endpoint enforces HTTPS except loopback fixtures.
     var openEndpoint = SubtitleEndpoint("https://api.opensubtitles.com/api/v1/")
     var subdlEndpoint = SubtitleEndpoint("https://api.subdl.com/api/v1/", "https://dl.subdl.com/")

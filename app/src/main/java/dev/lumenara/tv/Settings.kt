@@ -198,6 +198,8 @@ internal fun SettingsScreen(
         }
         item {
             Text("Film ve dizi bilgileri", fontSize = 20.sp)
+            if (model.repo.tmdbBuiltIn())
+                Text("Yerleşik TMDB erişimi var; alan boşsa o kullanılır.", color = Ink.muted)
             Field("TMDB API Read Access Token", token, { token = it }, true)
         }
         item {

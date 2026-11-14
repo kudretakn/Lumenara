@@ -136,7 +136,9 @@ class Repository private constructor(private val context: Context) {
     suspend fun configureTmdb(token: String) =
         withContext(Dispatchers.IO) { metadata.configure(token) }
 
-    fun tmdbConfigured() = metadata.configured()
+    fun tmdbConfigured() = metadata.userConfigured()
+
+    fun tmdbBuiltIn() = metadata.hasBuiltInToken
 
     private val lock = Mutex()
 

@@ -320,6 +320,7 @@ internal fun SubtitleKeys(model: LibraryModel) {
     LaunchedEffect(Unit) { fields.forEach { values[it.first] = model.prefs.secret(it.first) } }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("İnternetten altyazı")
+        if (model.repo.subtitles.hasBuiltInOpenKey) Text("Yerleşik OpenSubtitles anahtarı var; alan boşsa o kullanılır.")
         fields.forEach { (key, label) -> Field(label, values[key].orEmpty(), { values[key] = it }, true) }
         Button(onClick = { scope.launch {
             try { fields.forEach { model.prefs.setSecret(it.first, values[it.first].orEmpty()) }; message = "Altyazı ayarları kaydedildi." }

@@ -1,5 +1,9 @@
 # Lumenara sürüm kaydı
 
+## 0.3.1 · 15 Kasım 2026
+
+- Yerleşik OpenSubtitles anahtarı ve TMDB erişimi: release APK, GitHub secret'larından gelen anahtarlarla derlenir. Ayarlar'da anahtar girilmemişse internetten altyazı araması ve film/dizi bilgileri bunlarla kendiliğinden çalışır; Ayarlar'da girilen anahtar her zaman önce gelir. Ayarlar ekranı yerleşik erişim olduğunu kısa bir notla gösterir.
+
 ## 0.3.0 · 14 Kasım 2026
 
 - Uygulamanın adı Streamora'dan Lumenara'ya değişti: uygulama kimliği `dev.lumenara.tv`, paketler, veritabanı ve anahtar adları dahil. Streamora kurulumlarının üzerine güncellenmez (taşınacak kurulum yoktu). Yeni logo: sahne ışığı.

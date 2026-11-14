@@ -57,6 +57,9 @@ jobs:
           if [ -n "$missing" ]; then echo "Missing repository secrets:$missing"; exit 1; fi
 
       - name: Build release APK
+        env:
+          OPENSUBTITLES_API_KEY: ${{ secrets.OPENSUBTITLES_API_KEY }}
+          TMDB_READ_TOKEN: ${{ secrets.TMDB_READ_TOKEN }}
         run: ./gradlew test :app:assembleRelease --stacktrace
 
       - name: Sign and verify
