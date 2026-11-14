@@ -22,6 +22,8 @@ import androidx.tv.material3.*
 import coil.compose.AsyncImage
 import dev.streamora.data.*
 import dev.streamora.design.Ink
+import dev.streamora.design.FocusCard
+import dev.streamora.design.ProgressLine
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 
@@ -220,7 +222,7 @@ internal fun MovieCard(
         remember(item.id) { model.repo.library.observeMark(item.id) }
             .collectAsStateWithLifecycle(null)
     Column(modifier.width(if (portrait) 116.dp else 194.dp)) {
-        Surface(
+        FocusCard(
             onClick = { open(item) },
             modifier =
                 Modifier.fillMaxWidth()
@@ -229,14 +231,6 @@ internal fun MovieCard(
                         focused = it.isFocused
                         if (it.isFocused) focus(item)
                     },
-            shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
-            scale = ClickableSurfaceDefaults.scale(focusedScale = 1.045f),
-            border =
-                ClickableSurfaceDefaults.border(
-                    focusedBorder =
-                        Border(BorderStroke(2.dp, Color.White), shape = RoundedCornerShape(8.dp))
-                ),
-            colors = ClickableSurfaceDefaults.colors(containerColor = Ink.surface),
         ) {
             Box {
                 Poster(
@@ -250,14 +244,7 @@ internal fun MovieCard(
                             0f,
                             1f,
                         )
-                    Box(
-                        Modifier.align(Alignment.BottomStart)
-                            .fillMaxWidth()
-                            .height(3.dp)
-                            .background(Color.White.copy(alpha = .25f))
-                    ) {
-                        Box(Modifier.fillMaxWidth(ratio).fillMaxHeight().background(Color.White))
-                    }
+                    ProgressLine(ratio, Modifier.align(Alignment.BottomStart))
                 }
             }
         }
@@ -301,7 +288,7 @@ internal fun NavIcon(index: Int, modifier: Modifier = Modifier) {
             )
         }
         when (index) {
-            0 -> {
+            1 -> {
                 path(3f to 11f, 12f to 3f, 21f to 11f)
                 path(
                     6f to 10f,
@@ -314,7 +301,7 @@ internal fun NavIcon(index: Int, modifier: Modifier = Modifier) {
                     18f to 10f,
                 )
             }
-            1 -> {
+            2 -> {
                 drawRoundRect(
                     color,
                     Offset(3 * u, 6 * u),
@@ -325,8 +312,8 @@ internal fun NavIcon(index: Int, modifier: Modifier = Modifier) {
                 path(8f to 2f, 12f to 6f, 16f to 2f)
                 path(9f to 22f, 15f to 22f)
             }
-            2 -> path(8f to 4f, 20f to 12f, 8f to 20f, close = true)
-            3 -> {
+            3 -> path(8f to 4f, 20f to 12f, 8f to 20f, close = true)
+            4 -> {
                 drawRoundRect(
                     color,
                     Offset(4 * u, 7 * u),
@@ -336,35 +323,10 @@ internal fun NavIcon(index: Int, modifier: Modifier = Modifier) {
                 )
                 path(7f to 3f, 17f to 3f)
             }
-            4 ->
-                path(
-                    12f to 3f,
-                    15f to 9f,
-                    22f to 10f,
-                    17f to 15f,
-                    18f to 22f,
-                    12f to 18f,
-                    6f to 22f,
-                    7f to 15f,
-                    2f to 10f,
-                    9f to 9f,
-                    close = true,
-                )
             5 -> path(6f to 3f, 18f to 3f, 18f to 22f, 12f to 18f, 6f to 22f, close = true)
-            6 -> {
+            0 -> {
                 drawCircle(color, 7 * u, Offset(10 * u, 10 * u), style = stroke)
                 path(15f to 15f, 22f to 22f)
-            }
-            7 -> {
-                drawRoundRect(
-                    color,
-                    Offset(3 * u, 3 * u),
-                    androidx.compose.ui.geometry.Size(18 * u, 18 * u),
-                    androidx.compose.ui.geometry.CornerRadius(3 * u),
-                    style = stroke,
-                )
-                path(7f to 12f, 17f to 12f)
-                path(12f to 7f, 12f to 17f)
             }
             else -> {
                 drawCircle(color, 7 * u, center, style = stroke)

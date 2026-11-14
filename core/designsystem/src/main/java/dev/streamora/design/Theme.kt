@@ -2,6 +2,7 @@ package dev.streamora.design
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.sp
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.darkColorScheme
 
@@ -12,12 +13,17 @@ object Ink {
     val focus = Color(0xFFE6E9EF)
     val text = Color(0xFFF5F6F8)
     val muted = Color(0xFFA7ADB8)
+    val glass = Color.White.copy(alpha = .10f)
+    val glassStrong = Color(0xB8080B0F)
+    val stroke = Color.White.copy(alpha = .14f)
+    val focusRing = Color.White
     val accent = Color(0xFFC9D6DD)
 }
 
 @Composable
 fun StreamoraTheme(content: @Composable () -> Unit) =
     MaterialTheme(
+        typography = StreamoraTypography,
         colorScheme =
             darkColorScheme(
                 primary = Ink.accent,
@@ -35,3 +41,14 @@ fun StreamoraTheme(content: @Composable () -> Unit) =
             )
         },
     )
+
+val StreamoraTypography =
+    androidx.tv.material3.Typography().let {
+        it.copy(
+            displayLarge = it.displayLarge.copy(fontSize = 44.sp),
+            titleLarge = it.titleLarge.copy(fontSize = 28.sp),
+            headlineLarge = it.headlineLarge.copy(fontSize = 20.sp),
+            bodyLarge = it.bodyLarge.copy(fontSize = 15.sp),
+            labelSmall = it.labelSmall.copy(fontSize = 12.sp),
+        )
+    }

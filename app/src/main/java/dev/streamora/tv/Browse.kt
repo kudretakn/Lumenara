@@ -3,21 +3,25 @@ package dev.streamora.tv
 import android.app.Activity
 import android.content.Intent
 import android.speech.RecognizerIntent
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.*
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.unit.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
 import dev.streamora.data.*
 import dev.streamora.design.Ink
+import dev.streamora.design.Pill
 
 @Composable
 internal fun Poster(model: LibraryModel, item: Item, modifier: Modifier) {
@@ -56,6 +60,7 @@ private fun Shelf(
             fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
         )
         LazyRow(
+            modifier = Modifier.focusRestorer().focusGroup(),
             horizontalArrangement = Arrangement.spacedBy(15.dp),
             contentPadding = PaddingValues(5.dp),
         ) {
@@ -117,7 +122,7 @@ internal fun Home(
                 }
             }
             LazyColumn(
-                Modifier.weight(1f),
+                Modifier.weight(1f).focusRestorer().focusGroup(),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 contentPadding = PaddingValues(top = 8.dp, bottom = 28.dp),
             ) {
@@ -166,21 +171,30 @@ internal fun Browse(
         }
         Button(onClick = { timeline = true }) { Text("Yayın çizelgesi") }
     }
+    var listTab by rememberSaveable { mutableStateOf("Favoriler") }
+    if (section == "Listem") {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            listOf("Favoriler", "İzleme Listem").forEach { tab ->
+                Pill(tab, listTab == tab, onClick = { listTab = tab })
+            }
+        }
+    }
     val shelf =
-        when (section) {
+        when (if (section == "Listem") listTab else section) {
             "Favoriler" -> "favorite"
             "İzleme Listem" -> "list"
             else -> ""
         }
-    var query by remember { mutableStateOf("") }
-    var category by remember(source) { mutableStateOf("") }
-    var limit by remember(source, query, category) { mutableIntStateOf(80) }
-    var preview by remember(source, category) { mutableStateOf<Item?>(null) }
-    var advanced by remember { mutableStateOf(false) }
-    var year by remember { mutableStateOf("") }
-    var genre by remember { mutableStateOf("") }
-    var language by remember { mutableStateOf("") }
-    var rating by remember { mutableIntStateOf(0) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var category by rememberSaveable(source) { mutableStateOf("") }
+    var limit by rememberSaveable(source, query, category) { mutableIntStateOf(80) }
+    var previewId by rememberSaveable(source, category) { mutableStateOf<String?>(null) }
+    var advanced by rememberSaveable { mutableStateOf(false) }
+    BackHandler(advanced) { advanced = false }
+    var year by rememberSaveable { mutableStateOf("") }
+    var genre by rememberSaveable { mutableStateOf("") }
+    var language by rememberSaveable { mutableStateOf("") }
+    var rating by rememberSaveable { mutableIntStateOf(0) }
     LaunchedEffect(
         section,
         source,
@@ -209,6 +223,7 @@ internal fun Browse(
             )
     }
     val rows by model.results.collectAsStateWithLifecycle()
+    val preview = rows.firstOrNull { it.id == previewId }
     val groups by
         remember(kind, source) { model.repo.library.categories(kind, source) }
             .collectAsStateWithLifecycle(emptyList())
@@ -231,7 +246,7 @@ internal fun Browse(
                 Button(onClick = { rating = (rating + 1) % 10 }) { Text("Puan ≥ $rating") }
             }
     }
-    if (section == "Arama") {
+    if (section == "Ara") {
         Field("Kanal adı, kategori veya yayın kimliği", query, { query = it })
         fun listen() {
             runCatching {
@@ -261,7 +276,7 @@ internal fun Browse(
     }
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         if (groups.isNotEmpty())
-            LazyColumn(Modifier.width(122.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            LazyColumn(Modifier.width(122.dp).focusRestorer().focusGroup(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 items(listOf("") + groups, key = { it }) { group ->
                     Surface(onClick = { category = group }) {
                         Text(
@@ -275,7 +290,7 @@ internal fun Browse(
         if (section != "Canlı TV") {
             androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
                 columns = androidx.compose.foundation.lazy.grid.GridCells.Adaptive(116.dp),
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).focusRestorer().focusGroup(),
                 contentPadding = PaddingValues(6.dp),
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
                 verticalArrangement = Arrangement.spacedBy(18.dp),
@@ -294,11 +309,11 @@ internal fun Browse(
                     item { Button(onClick = { limit += 80 }) { Text("Devamını göster") } }
             }
         } else
-            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            LazyColumn(Modifier.weight(1f).focusRestorer().focusGroup(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (rows.isEmpty()) item { Text("Eşleşen içerik yok.", color = Ink.muted) }
                 items(rows, key = { it.id }) { item ->
                     Surface(
-                        onClick = { if (section == "Canlı TV") preview = item else open(item) }
+                        onClick = { if (section == "Canlı TV") previewId = item.id else open(item) }
                     ) {
                         Column(Modifier.fillMaxWidth().padding(8.dp)) {
                             Text(item.title, maxLines = 2)

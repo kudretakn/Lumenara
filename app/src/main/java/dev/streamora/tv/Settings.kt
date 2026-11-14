@@ -37,7 +37,7 @@ private fun Choice(model: LibraryModel, key: String, label: String, options: Lis
 
 @Composable
 @OptIn(coil.annotation.ExperimentalCoilApi::class)
-internal fun SettingsScreen(model: LibraryModel, sources: List<Source>) {
+internal fun SettingsScreen(model: LibraryModel, sources: List<Source>, openSources: () -> Unit) {
     val context = LocalContext.current
     val busy by model.busy.collectAsStateWithLifecycle()
     val notice by model.notice.collectAsStateWithLifecycle()
@@ -93,6 +93,7 @@ internal fun SettingsScreen(model: LibraryModel, sources: List<Source>) {
         verticalArrangement = Arrangement.spacedBy(7.dp),
         contentPadding = PaddingValues(bottom = 20.dp),
     ) {
+        item { Button(onClick = openSources) { Text("IPTV Kaynakları") } }
         item { Text("Türkçe   ·   Antrasit tema   ·   Streamora 0.1", color = Ink.muted) }
         item { Text("Oynatıcı", fontSize = 20.sp) }
         item { Choice(model, "engine", "Varsayılan motor", listOf("Media3", "VLC")) }

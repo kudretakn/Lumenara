@@ -92,10 +92,12 @@ class CinemaJourneyTest {
             // A real device screenshot includes GPU-composited image transitions and TV focus
             // rings.
             Thread.sleep(1300)
-            device.takeScreenshot(File(context.getExternalFilesDir(null), "$name.png"))
+            val file = File(context.getExternalFilesDir(null), "$name.png")
+            checkNotNull(file.parentFile).mkdirs()
+            assertTrue("Ekran görüntüsü kaydedilmeli: $name", device.takeScreenshot(file))
             device.executeShellCommand("mkdir -p /sdcard/Download/streamora-ui")
             device.executeShellCommand(
-                "cp ${context.getExternalFilesDir(null)}/$name.png /sdcard/Download/streamora-ui/$name.png"
+                "cp ${context.getExternalFilesDir(null)}/$name.png /sdcard/Download/streamora-ui/${file.name}"
             )
         }
         MockWebServer().use { server ->
@@ -158,7 +160,25 @@ class CinemaJourneyTest {
                 focus(screen.onNodeWithContentDescription("Ana Sayfa"))
                 device.pressDPadCenter()
                 focus(node("Oynat"))
+                screen.onNodeWithTag("nav-closed").assertExists()
                 capture("cinema-home")
+                capture("screens/nav-closed")
+                device.pressDPadLeft()
+                screen.waitForIdle()
+                screen.onNodeWithTag("nav-open").assertExists()
+                listOf("Ara", "Ana Sayfa", "Canlı TV", "Filmler", "Diziler", "Listem", "Ayarlar")
+                    .forEach { screen.onNodeWithContentDescription(it).assertExists() }
+                capture("screens/nav-open")
+                device.pressDPadRight()
+                screen.waitForIdle()
+                screen.onNodeWithTag("nav-closed").assertExists()
+                node("Oynat").assertIsFocused()
+                device.pressDPadLeft()
+                screen.waitForIdle()
+                device.pressBack()
+                screen.waitForIdle()
+                screen.onNodeWithTag("nav-closed").assertExists()
+                node("Oynat").assertIsFocused()
                 assertTrue(
                     "Afiş adı ekranın içinde kalmalı",
                     node("Kadife Gece").fetchSemanticsNode().boundsInRoot.bottom <=
@@ -196,8 +216,14 @@ class CinemaJourneyTest {
                 focus(screen.onNodeWithContentDescription("Diziler"))
                 device.pressDPadCenter()
                 node("Eşleşen içerik yok.").assertExists()
+                focus(screen.onNodeWithContentDescription("Listem"))
+                device.pressDPadCenter()
+                screen.waitForIdle()
+                screen.onNodeWithContentDescription("Favoriler").assertIsSelected()
                 focus(screen.onNodeWithContentDescription("İzleme Listem"))
                 device.pressDPadCenter()
+                screen.waitForIdle()
+                screen.onNodeWithContentDescription("İzleme Listem").assertIsSelected()
                 screen.waitUntil(5000) {
                     screen
                         .onAllNodesWithContentDescription("Kadife Gece")
@@ -205,6 +231,20 @@ class CinemaJourneyTest {
                         .isNotEmpty()
                 }
                 screen.onNodeWithContentDescription("Açık Deniz").assertDoesNotExist()
+                focus(screen.onNodeWithContentDescription("Filmler"))
+                device.pressDPadCenter()
+                node("Yıl").assertExists()
+                screen.onAllNodes(hasSetTextAction())[0].assertTextEquals("2025")
+                focus(screen.onNodeWithContentDescription("Ayarlar"))
+                device.pressDPadCenter()
+                node("IPTV Kaynakları").assertExists()
+                device.pressDPadRight()
+                screen.waitForIdle()
+                node("IPTV Kaynakları").assertIsFocused()
+                device.pressDPadCenter()
+                node("✓ M3U").assertExists()
+                device.pressBack()
+                node("Varsayılan motor · Media3").assertExists()
             } finally {
                 runBlocking {
                     repo.library

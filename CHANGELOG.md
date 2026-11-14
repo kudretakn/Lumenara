@@ -1,5 +1,9 @@
 # Sürüm kaydı
 
+## 0.3.0 (geliştiriliyor)
+
+- Cam tasarım sistemi, 72/240 dp açılır sol menü ve iki sekmeli Listem eklendi; IPTV Kaynakları Ayarlar’a taşındı. Kumanda testleri ve açık/kapalı menü ekran görüntüsü adımları güncellendi.
+
 ## 0.2.1 · 6 Kasım 2026
 
 - HTTP uyumluluğu açık kaynaklarda HTTP↔HTTPS yönlendirmeleri artık takip edilir. Önceden protokol değiştiren 301 yanıtı liste aktarımını durduruyordu. Aynı istemciyi kullanan katalog, rehber ve oynatma bağlantıları düzeltmeden yararlanır.
