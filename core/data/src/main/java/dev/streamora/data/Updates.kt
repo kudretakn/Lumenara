@@ -16,7 +16,7 @@ object Updates {
     fun validRepo(text: String) =
         text.matches(Regex("[A-Za-z0-9-]+/[A-Za-z0-9_.-]+")) && !text.contains("..")
 
-    private fun version(value: String): List<Int>? {
+    internal fun version(value: String): List<Int>? {
         val digits = value.trim().removePrefix("v")
         if (!digits.matches(Regex("[0-9]{1,8}(\\.[0-9]{1,8}){1,3}"))) return null
         return digits.split('.').map { it.toInt() } + listOf(0, 0, 0, 0)
@@ -31,13 +31,17 @@ object Updates {
                     _ ->
                     JSONObject(input.bufferedReader().readText())
                 }
+            parseRelease(release, repository, current)
+        }
+
+    internal fun parseRelease(release: JSONObject, repository: String, current: String): Update? {
             val tag = release.optString("tag_name")
-            val published = version(tag) ?: return@withContext null
-            val installed = version(current) ?: return@withContext null
+            val published = version(tag) ?: return null
+            val installed = version(current) ?: return null
             val different =
-                (0..3).firstOrNull { published[it] != installed[it] } ?: return@withContext null
-            if (published[different] < installed[different]) return@withContext null
-            val assets = release.optJSONArray("assets") ?: return@withContext null
+            (0..3).firstOrNull { published[it] != installed[it] } ?: return null
+            if (published[different] < installed[different]) return null
+            val assets = release.optJSONArray("assets") ?: return null
             val prefix = "https://github.com/$repository/releases/download/$tag/"
             val targets =
                 (0 until assets.length()).mapNotNull(assets::optJSONObject).filter {
@@ -51,7 +55,7 @@ object Updates {
             val hash = artifact.optString("digest").removePrefix("sha256:").lowercase()
             if (!hash.matches(Regex("[0-9a-f]{64}")))
                 throw SourceFailure("APK için SHA-256 özeti yayımlanmamış.")
-            Update(
+            return Update(
                 tag,
                 release.optString("body").take(6000),
                 artifact.getString("browser_download_url"),

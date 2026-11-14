@@ -118,7 +118,7 @@ internal class Xtream(private val spec: SourceSpec) {
                             else "",
                         days = row["tv_archive_duration"]?.toIntOrNull() ?: 0,
                         zone = zone,
-                        backdrop = row["backdrop_path"].orEmpty(),
+                        backdrop = row["backdrop_path"].orEmpty().takeIf { it.startsWith("https://", true) }.orEmpty(),
                     )
                 )
             }
