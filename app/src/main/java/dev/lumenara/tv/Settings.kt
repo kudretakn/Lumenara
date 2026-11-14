@@ -1,11 +1,15 @@
 package dev.lumenara.tv
 
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import android.media.MediaCodecList
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -52,6 +56,33 @@ internal fun SettingsScreen(
     var configured by remember { mutableStateOf(model.repo.tmdbConfigured()) }
     var expert by remember { mutableStateOf(false) }
     val release by model.update.collectAsStateWithLifecycle()
+    val installation by UpdateInstaller.state.collectAsStateWithLifecycle()
+    var awaitingInstallPermission by rememberSaveable { mutableStateOf(false) }
+    val install: (Update) -> Unit = { info ->
+        model.job("") { UpdateInstaller.install(context.applicationContext, info) }
+    }
+    val installPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        if (awaitingInstallPermission) {
+            awaitingInstallPermission = false
+            val info = release
+            if (!context.packageManager.canRequestPackageInstalls())
+                UpdateInstaller.failed("Bu kaynaktan uygulama yükleme izni verilmedi.")
+            else if (info != null) install(info)
+            else UpdateInstaller.failed("Sürüm bilgisi bulunamadı; yeniden kontrol edin.")
+        }
+    }
+    val confirmInstallation = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { /* The session receiver reports success, cancellation and failure. */ }
+    LaunchedEffect(installation.confirmation) {
+        installation.confirmation?.let { confirmation ->
+            UpdateInstaller.state.value = installation.copy(confirmation = null)
+            runCatching { confirmInstallation.launch(confirmation) }
+                .onFailure { UpdateInstaller.failed("Kurulum onayı açılamadı: ${it.localizedMessage}") }
+        }
+    }
     val configuredRepo by remember { model.prefs.text("github") }.collectAsStateWithLifecycle("")
     var github by remember(configuredRepo) { mutableStateOf(configuredRepo) }
     var codecs by remember { mutableStateOf("") }
@@ -194,6 +225,8 @@ internal fun SettingsScreen(
         item {
             Text("Uygulama güncellemeleri", fontSize = 20.sp)
             Field("GitHub deposu · sahip/depo", github, { github = it })
+            if (github.isBlank())
+                Text("Önerilen depo: kudretakn/Lumenara-releases", color = Ink.muted)
         }
         item {
             Button(
@@ -215,6 +248,30 @@ internal fun SettingsScreen(
             item {
                 Text("Yeni sürüm · ${info.version}")
                 Text(info.notes)
+                Text(
+                    "Kurulum için Android ayarlarında Lumenara’ya bu kaynaktan uygulama yükleme izni verin. İzin sonrası güncelleme devam eder.",
+                    color = Ink.muted,
+                )
+                Button(
+                    enabled = !busy && !installation.active && !awaitingInstallPermission,
+                    onClick = {
+                        if (context.packageManager.canRequestPackageInstalls()) install(info)
+                        else {
+                            awaitingInstallPermission = true
+                            runCatching {
+                                installPermission.launch(
+                                    Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                        Uri.parse("package:${context.packageName}"))
+                                )
+                            }.onFailure {
+                                awaitingInstallPermission = false
+                                UpdateInstaller.failed("Uygulama yükleme izni ayarları açılamadı.")
+                            }
+                        }
+                    },
+                ) {
+                    Text("Güncelle (${if (info.version.startsWith("v")) info.version else "v${info.version}"})")
+                }
                 Button(
                     enabled = !busy,
                     onClick = {
@@ -224,10 +281,11 @@ internal fun SettingsScreen(
                             }
                     },
                 ) {
-                    Text("APK’yı doğrula ve kaydet")
+                    Text("APK’yı dosyaya kaydet")
                 }
             }
         }
+        if (installation.message.isNotEmpty()) item { Text(installation.message, color = Ink.accent) }
         item {
             Button(onClick = { expert = !expert }) {
                 Text(if (expert) "Uzman modunu kapat" else "Uzman modu")

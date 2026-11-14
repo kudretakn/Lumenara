@@ -274,7 +274,8 @@ internal fun Browse(
             androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
                 columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(6),
                 modifier = Modifier.weight(1f).testTag("poster-grid").focusRestorer().focusGroup(),
-                contentPadding = PaddingValues(8.dp),
+                // TV safe area plus the title/year below the focusable poster.
+                contentPadding = PaddingValues(start = 8.dp, top = 8.dp, end = 8.dp, bottom = 64.dp),
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
                 verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
