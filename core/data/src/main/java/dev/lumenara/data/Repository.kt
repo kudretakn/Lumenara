@@ -9,6 +9,7 @@ import dev.lumenara.catalog.*
 import java.net.URI
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -48,6 +49,81 @@ class Repository private constructor(private val context: Context) {
     val guide = db.guide()
     private val vault = Vault(context)
     private val metadata = Metadata(context, vault)
+    private val preferences = Preferences(context)
+    val subtitles = SubtitleService(preferences, SubtitleCache(java.io.File(context.cacheDir, "subtitles")))
+
+    suspend fun production(item: Item): Item = if (item.kind == "EPISODE") library.item(item.parent) ?: item
+        else library.item(item.id) ?: item
+
+    private val versionIndex = java.util.concurrent.ConcurrentHashMap<String, Map<String, List<Item>>>()
+
+    suspend fun versions(item: Item): List<Item> = withContext(Dispatchers.IO) {
+        val base = production(item)
+        if (base.kind !in listOf("MOVIE", "SERIES")) return@withContext listOf(base)
+        val key = "${base.source}|${base.kind}|${base.generation}"
+        val index = versionIndex[key] ?: library.versionCandidates(base.source, base.kind).versionGroups()
+            .flatMap { group -> group.map { it.id to group } }.toMap().also { versionIndex[key] = it }
+        index[base.id] ?: listOf(base)
+    }
+
+    suspend fun preferenceKey(item: Item): String {
+        val base = production(item)
+        val suffix = if (item.kind == "EPISODE") item.seriesEpisode().let { "|${it.season}|${it.episode}" } else ""
+        return versionPreferenceIdentity(base) + suffix
+    }
+
+    private suspend fun versionPreferenceIdentity(item: Item): String =
+        versions(item).minByOrNull { it.id }?.preferenceIdentity() ?: production(item).preferenceIdentity()
+
+    suspend fun selectedVersion(item: Item): Item {
+        if (item.kind !in listOf("MOVIE", "SERIES", "EPISODE")) return item
+        val base = production(item)
+        val choices = versions(base)
+        val preferred = preferences.text("version_${versionPreferenceIdentity(base)}").first()
+        val version = choices.firstOrNull { productionName(it.title, it.year).version.name == preferred }
+            ?: choices.firstOrNull { productionName(it.title, it.year).version == AudioVersion.DUBBED }
+            ?: choices.firstOrNull { it.id == base.id } ?: base
+        return resolveVersion(item, version)
+    }
+
+    suspend fun chooseVersion(item: Item, version: Item): Item {
+        val resolved = resolveVersion(item, version)
+        preferences.set("version_${versionPreferenceIdentity(item)}", productionName(version.title, version.year).version.name)
+        return resolved
+    }
+
+    private suspend fun resolveVersion(item: Item, version: Item): Item {
+        if (item.kind != "EPISODE") return version
+        if (item.parent == version.id) return item
+        val number = item.seriesEpisode()
+        return expand(version).firstOrNull {
+            val candidate = it.seriesEpisode()
+            candidate.season == number.season && candidate.episode == number.episode
+        } ?: throw SourceFailure("Bu bölüm seçilen sürümde bulunamadı.")
+    }
+
+    suspend fun subtitleQuery(item: Item): SubtitleQuery = withContext(Dispatchers.IO) {
+        val base = production(item)
+        val name = productionName(base.title, base.year)
+        var query = SubtitleQuery(name.title, name.year, base.tmdbId())
+        val source = library.source(base.source)
+        if (source != null) {
+            val spec = SourceSpec.decode(vault.decrypt(source.endpoint))
+            if (spec.user.isNotBlank()) {
+                try {
+                    query = Xtream(spec).subtitleInfo(address(base), base.kind, name.title, name.year)
+                    if (query.tmdb.isNotBlank() && base.tmdbId() != query.tmdb) {
+                        library.save(listOf(base.copy(search = base.search.replace(Regex(" \\[tmdb:[0-9]+\\]"), "") + " [tmdb:${query.tmdb}]")))
+                        versionIndex.keys.removeAll { it.startsWith("${base.source}|") }
+                    }
+                }
+                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (_: Exception) { /* A title/year search remains available when provider info fails. */ }
+            }
+        }
+        if (item.kind == "EPISODE") item.seriesEpisode().let { query.copy(season = it.season, episode = it.episode) }
+        else query
+    }
 
     suspend fun details(item: Item) =
         metadata.details(item).also {
@@ -99,7 +175,10 @@ class Repository private constructor(private val context: Context) {
             }
         }
 
-    suspend fun remove(id: String) = lock.withLock { library.deleteSource(id) }
+    suspend fun remove(id: String) = lock.withLock {
+        library.deleteSource(id)
+        versionIndex.keys.removeAll { it.startsWith("$id|") }
+    }
 
     suspend fun addGuide(sourceId: String, url: String) =
         withContext(Dispatchers.IO) {
@@ -179,8 +258,19 @@ class Repository private constructor(private val context: Context) {
                 if (spec.user.isEmpty()) library.prunePlaylist(source.id, token)
                 else library.prune(source.id, token)
                 library.orphans(source.id)
+                for (kind in listOf("MOVIE", "SERIES")) {
+                    library.versionCandidates(source.id, kind).versionGroups().filter { it.size > 1 }.forEach { versions ->
+                        val marks = versions.mapNotNull { library.mark(it.id) }
+                        val newest = marks.maxByOrNull { it.updated }
+                        if (newest != null) {
+                            val shared = newest.copy(favorite = marks.any { it.favorite }, listed = marks.any { it.listed })
+                            versions.forEach { library.save(shared.copy(id = it.id)) }
+                        }
+                    }
+                }
                 library.save(source.copy(refreshed = token, count = library.count(source.id)))
             }
+            versionIndex.keys.removeAll { it.startsWith("${source.id}|") }
         } finally {
             staged.close()
         }
@@ -195,7 +285,8 @@ class Repository private constructor(private val context: Context) {
             entry.kind.name,
             entry.tvgId,
             vault.encrypt(entry.url),
-            searchable("${entry.title} ${entry.group} ${entry.tvgId}"),
+            searchable("${entry.title} ${entry.group} ${entry.tvgId}") +
+                (entry.tmdbId.toLongOrNull()?.takeIf { it > 0 }?.let { " [tmdb:$it]" } ?: ""),
             token,
             entry.logo.takeIf { it.startsWith("https://") }?.let(vault::encrypt).orEmpty(),
             parent = entry.parentUrl.takeIf(String::isNotBlank)?.let { contentKey(source, it) }.orEmpty(),
@@ -259,6 +350,16 @@ class Repository private constructor(private val context: Context) {
                     }
                     library.pruneEpisodes(series.id, token)
                 }
+                for (entry in entries) {
+                    if (library.mark(entry.id)?.updated == 0L || library.mark(entry.id) == null) {
+                        val number = entry.seriesEpisode()
+                        val shared = versions(series).filter { it.id != series.id }
+                            .flatMap { library.episodeSnapshot(it.id) }.filter {
+                                val n = it.seriesEpisode(); n.season == number.season && n.episode == number.episode
+                            }.mapNotNull { library.mark(it.id) }.maxByOrNull { it.updated }
+                        if (shared != null) library.save(shared.copy(id = entry.id))
+                    }
+                }
                 entries
             }
         }
@@ -275,7 +376,17 @@ class Repository private constructor(private val context: Context) {
         }
 
     suspend fun updateMark(id: String, transform: (Mark) -> Mark) = db.withTransaction {
-        if (library.exists(id)) library.save(transform(library.mark(id) ?: Mark(id)))
+        val item = library.item(id) ?: return@withTransaction
+        val siblings = if (item.kind == "EPISODE") {
+            val number = item.seriesEpisode()
+            versions(item).flatMap { library.episodeSnapshot(it.id) }.filter {
+                val n = it.seriesEpisode(); n.season == number.season && n.episode == number.episode
+            }
+        } else if (item.kind in listOf("MOVIE", "SERIES")) versions(item) else listOf(item)
+        val existing = siblings.mapNotNull { library.mark(it.id) }
+        val shared = library.mark(id) ?: existing.maxByOrNull { it.updated }?.copy(id = id) ?: Mark(id)
+        val result = transform(shared)
+        (siblings + item).distinctBy { it.id }.forEach { library.save(result.copy(id = it.id)) }
     }
 
     suspend fun schedule(hours: Long, checkNow: Boolean = false) {

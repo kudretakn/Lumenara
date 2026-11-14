@@ -106,6 +106,7 @@ internal fun SeriesDetails(model: LibraryModel, series: Item, play: (Item, List<
                         }
                     }
                 }
+                item { VersionChoice(model, series) }
                 item { Text("Sezonlar", fontSize = 24.sp, fontWeight = FontWeight.SemiBold) }
                 item {
                     LazyRow(Modifier.testTag("season-shelf").focusGroup(),

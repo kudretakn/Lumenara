@@ -9,6 +9,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.focus.*
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.stateDescription
@@ -23,6 +24,8 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import androidx.tv.material3.*
 import dev.lumenara.data.*
+import dev.lumenara.catalog.trackChoice
+import dev.lumenara.catalog.trackPreferenceRank
 import dev.lumenara.design.Ink
 import dev.lumenara.design.glass
 import dev.lumenara.player.*
@@ -47,6 +50,7 @@ internal fun Video(
     subtitle: MediaItem.SubtitleConfiguration? = null,
     failure: (Boolean) -> Unit = {},
     liveRetry: LiveRetry? = null,
+    subtitleDelayUs: java.util.concurrent.atomic.AtomicLong = java.util.concurrent.atomic.AtomicLong(),
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val owner = LocalLifecycleOwner.current
@@ -56,6 +60,7 @@ internal fun Video(
     val currentEnded by rememberUpdatedState(ended)
     var playbackActive by remember(item.id) { mutableStateOf(false) }
     var error by remember(item.id) { mutableStateOf("") }
+    var subtitleText by remember(item.id) { mutableStateOf("") }
     val retry = liveRetry ?: rememberLiveRetry(item.id, preview)
     val attempt = retry.generation
     val currentFailure by rememberUpdatedState(failure)
@@ -89,23 +94,56 @@ internal fun Video(
                         model.prefs.text("buffer", "Dengeli").first(),
                         subtitle?.uri,
                         automaticRetries = item.kind != "LIVE",
+                        subtitleDelayUs = subtitleDelayUs,
                     )
-                val language = model.prefs.text("sub", "Kapalı").first()
-                engine.trackSelectionParameters =
-                    engine.trackSelectionParameters
-                        .buildUpon()
-                        .setPreferredAudioLanguage(model.prefs.text("audio", "tr").first())
-                        .setPreferredTextLanguage(if (language == "Kapalı") null else language)
-                        .setTrackTypeDisabled(
-                            C.TRACK_TYPE_TEXT,
-                            language == "Kapalı" && subtitle == null,
-                        )
-                        .build()
+                val preferenceKey = model.repo.preferenceKey(item)
+                val audioPreference = model.prefs.playbackChoice("audio", preferenceKey)
+                val textPreference = model.prefs.playbackChoice("text", preferenceKey)
+                val dubbed = dev.lumenara.catalog.productionName(item.title, item.year).version == dev.lumenara.catalog.AudioVersion.DUBBED
+                engine.trackSelectionParameters = engine.trackSelectionParameters.buildUpon()
+                    .setPreferredAudioLanguages(audioPreference.ifBlank { "tr" }, "tur")
+                    .setPreferredTextLanguages("tr", "tur")
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, textPreference == "off" || textPreference.isBlank() && dubbed)
+                    .build()
                 player = engine
                 currentReady(engine)
                 var recorded = false
+                var formats = ""
                 engine.addListener(
                     object : Player.Listener {
+                        override fun onCues(cueGroup: androidx.media3.common.text.CueGroup) {
+                            subtitleText = cueGroup.cues.mapNotNull { it.text }.joinToString(" ")
+                        }
+
+                        override fun onTracksChanged(tracks: Tracks) {
+                            val signature = tracks.groups.joinToString { g -> (0 until g.length).joinToString { g.getTrackFormat(it).toString() } }
+                            if (signature == formats) return
+                            formats = signature
+                            val audio = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+                                .flatMap { g -> (0 until g.length).filter { g.isTrackSupported(it) }.map { g to it } }
+                            val requested = audio.filter { (g, i) -> trackPreferenceRank(audioPreference, g.getTrackFormat(i).language, g.getTrackFormat(i).id) < 2 }
+                                .minByOrNull { (g, i) -> trackPreferenceRank(audioPreference, g.getTrackFormat(i).language, g.getTrackFormat(i).id) }
+                            val turkish = audio.firstOrNull { (g, i) -> dev.lumenara.catalog.isTurkish(g.getTrackFormat(i).language) }
+                            val original = audio.firstOrNull { (g, i) -> g.getTrackFormat(i).selectionFlags and C.SELECTION_FLAG_DEFAULT != 0 } ?: audio.firstOrNull()
+                            val selectedAudio = requested ?: turkish ?: original
+                            val disableText = dev.lumenara.catalog.subtitlesDisabled(textPreference,
+                                selectedAudio?.let { (g, i) -> dev.lumenara.catalog.isTurkish(g.getTrackFormat(i).language) } == true, dubbed)
+                            val params = engine.trackSelectionParameters.buildUpon().setTrackTypeDisabled(C.TRACK_TYPE_TEXT, disableText)
+                            selectedAudio?.let { (g, i) -> params.setOverrideForType(TrackSelectionOverride(g.mediaTrackGroup, i)) }
+                            tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }.flatMap { g ->
+                                (0 until g.length).filter { g.isTrackSupported(it) }.map { g to it }
+                            }.let { texts ->
+                                val selectedText = texts.firstOrNull { (g, i) -> textPreference == "downloaded" &&
+                                    g.getTrackFormat(i).label == "Türkçe · İndirilen altyazı" }
+                                    ?: texts.filter { (g, i) -> trackPreferenceRank(textPreference, g.getTrackFormat(i).language, g.getTrackFormat(i).id) < 2 }
+                                        .minByOrNull { (g, i) -> trackPreferenceRank(textPreference, g.getTrackFormat(i).language, g.getTrackFormat(i).id) }
+                                    ?: texts.firstOrNull { (g, i) -> dev.lumenara.catalog.isTurkish(g.getTrackFormat(i).language) }
+                                if (selectedText == null) params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                                else selectedText.let { (g, i) -> params.setOverrideForType(TrackSelectionOverride(g.mediaTrackGroup, i)) }
+                            }
+                            engine.trackSelectionParameters = params.build()
+                        }
+
                         override fun onIsPlayingChanged(isPlaying: Boolean) {
                             playbackActive = isPlaying
                             if (isPlaying) { retry.playing(); error = "" }
@@ -182,6 +220,7 @@ internal fun Video(
     }
     Box(modifier.background(androidx.compose.ui.graphics.Color.Black).semantics {
         if (preview) stateDescription = if (playbackActive) "Oynatılıyor" else "Yükleniyor"
+        else if (subtitleText.isNotBlank()) stateDescription = "Altyazı · $subtitleText"
     }) {
         AndroidView(
             factory = {
@@ -245,6 +284,7 @@ internal fun Playback(
     var panel by remember { mutableStateOf(false) }
     var multi by remember { mutableStateOf(emptyList<Item>()) }
     var hint by remember { mutableStateOf("") }
+    var subtitleNotice by remember(item.id) { mutableStateOf("") }
     var channelQuery by remember { mutableStateOf("") }
     var category by remember { mutableStateOf("") }
     var limit by remember { mutableIntStateOf(80) }
@@ -269,7 +309,17 @@ internal fun Playback(
     val composeView = LocalView.current
     val live = item.kind == "LIVE"
     val fullscreen = rememberFullscreenState(item)
-    var subtitle by remember { mutableStateOf<MediaItem.SubtitleConfiguration?>(null) }
+    var subtitle by remember(item.id) { mutableStateOf<MediaItem.SubtitleConfiguration?>(null) }
+    var preferenceKey by remember(item.id) { mutableStateOf("") }
+    var delayMs by remember(item.id) { mutableLongStateOf(0) }
+    val subtitleDelay = remember(item.id) { java.util.concurrent.atomic.AtomicLong() }
+    LaunchedEffect(item.id) {
+        preferenceKey = model.repo.preferenceKey(item)
+        delayMs = model.prefs.text("delay_$preferenceKey", "0").first().toLongOrNull() ?: 0
+        subtitleDelay.set(delayMs * 1000)
+        val cached = withContext(Dispatchers.IO) { model.repo.subtitles.cache.find(preferenceKey) }
+        if (cached != null && model.prefs.playbackChoice("text", preferenceKey) != "off") subtitle = subtitleConfiguration(cached)
+    }
     fun move(delta: Int) {
         if (item.kind == "EPISODE" && delta == 1) group.nextItem(item)?.let(select)
         else {
@@ -302,6 +352,8 @@ internal fun Playback(
             },
             back,
             group = group,
+            subtitle = subtitle,
+            attachSubtitle = { subtitle = it },
             select = { channel, rows -> changeGroup(rows); select(channel) },
         ) {
             if (item.kind == "EPISODE") move(1)
@@ -312,9 +364,13 @@ internal fun Playback(
         changeGroup(rows); select(channel)
     } else null
     val retry = rememberLiveRetry(item.id)
+    val subtitleSearch = rememberSubtitleSearchState(model, item, status = { subtitleNotice = it }) {
+        subtitle = it
+        panel = false
+    }
     BackHandler { if (panel) panel = false else if (!fullscreen.dismiss()) back() }
-    LaunchedEffect(panel, fullscreen.guide, fullscreen.finished, failed, engine, retry.generation, retry.reconnecting) {
-        if (!panel && !fullscreen.guide && !fullscreen.finished && !failed) {
+    LaunchedEffect(subtitleSearch.open, panel, fullscreen.guide, fullscreen.finished, failed, engine, retry.generation, retry.reconnecting) {
+        if (!subtitleSearch.open && !panel && !fullscreen.guide && !fullscreen.finished && !failed) {
             // PlayerView updates and reconnect badge removal must finish before reclaiming focus.
             withFrameNanos { }
             if (!composeView.hasFocus()) composeView.requestFocus()
@@ -328,6 +384,7 @@ internal fun Playback(
             .focusRequester(focus)
             .semantics { contentDescription = "Tam ekran oynatıcı" }
             .onPreviewKeyEvent {
+                if (subtitleSearch.open) return@onPreviewKeyEvent false
                 val key = it.nativeKeyEvent
                 val code = key.keyCode
                 if (!panel && !failed && fullscreen.key(key, live, ::move,
@@ -366,6 +423,7 @@ internal fun Playback(
             liveRetry = retry,
             initial = transferred,
             subtitle = subtitle,
+            subtitleDelayUs = subtitleDelay,
             decoderFailure = { pos ->
                 if (!switched && fallback == "Açık") {
                     switched = true
@@ -385,6 +443,7 @@ internal fun Playback(
             if (item.kind == "EPISODE" && group.nextItem(item) != null)
                 ({ move(1) }) else null)
         numbers?.let { NumberEntry(it) }
+        SubtitleNotice(subtitleNotice) { subtitleNotice = "" }
         if (panel) {
             val candidates by
                 remember(item.source, category, channelQuery, limit) {
@@ -407,7 +466,7 @@ internal fun Playback(
                 remember(item.id) { model.repo.library.observeMark(item.id) }
                     .collectAsStateWithLifecycle(null)
             LazyColumn(
-                Modifier.width(310.dp).fillMaxHeight().padding(12.dp).glass().padding(12.dp),
+                Modifier.width(420.dp).fillMaxHeight().testTag("player-options").padding(start = 48.dp, top = 27.dp, bottom = 27.dp).glass().padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(5.dp),
             ) {
                 item {
@@ -425,7 +484,29 @@ internal fun Playback(
                         Text(if (mark?.favorite == true) "Favoriden çıkar" else "Favoriye ekle")
                     }
                 }
-                item { Tracks(engine) }
+                item { VersionChoice(model, item) { version ->
+                    scope.launch {
+                        // Read ExoPlayer on the main thread; updateMark runs its transform inside a DB transaction.
+                        // ExoPlayer must be read on the main thread; this callback may resume elsewhere.
+                        val snapshot = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main.immediate) {
+                            engine?.let { it.currentPosition.coerceAtLeast(0) to it.duration.coerceAtLeast(0) }
+                        }
+                        if (snapshot != null)
+                            model.repo.updateMark(item.id) { it.copy(position = snapshot.first, duration = snapshot.second) }
+                        if (version.kind == "EPISODE") changeGroup(model.repo.library.episodeSnapshot(version.parent).seriesOrder())
+                        select(version)
+                    }
+                } }
+                item { Tracks(engine, model, item) }
+                item { SubtitleSearch(subtitleSearch) }
+                item {
+                    Text("Altyazı kaydırma · ${delayMs / 1000.0} sn")
+                    Row { for (step in listOf(-500L, 500L)) Button(onClick = {
+                        delayMs = (delayMs + step).coerceIn(-60_000, 60_000)
+                        subtitleDelay.set(delayMs * 1000)
+                        scope.launch { model.prefs.set("delay_$preferenceKey", delayMs.toString()) }
+                    }) { Text(if (step < 0) "−0,5 sn" else "+0,5 sn") } }
+                }
                 if (item.introStartMs >= 0)
                     item {
                         engine?.let { p ->
@@ -446,9 +527,12 @@ internal fun Playback(
                             }
                     }
                 item {
-                    Subtitles {
-                        subtitle = it
-                        panel = false
+                    Subtitles { configuration ->
+                        scope.launch {
+                            model.prefs.set("text_$preferenceKey", if (configuration == null) "off" else "tr")
+                            subtitle = configuration
+                            panel = false
+                        }
                     }
                 }
                 if (!live)
@@ -561,12 +645,16 @@ internal fun Playback(
                     item { Button(onClick = { limit += 80 }) { Text("Devamını göster") } }
             }
         }
+        SubtitleResults(subtitleSearch, panel, focus)
     }
 }
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
-private fun Tracks(player: ExoPlayer?) {
+private fun Tracks(player: ExoPlayer?, model: LibraryModel, item: Item) {
+    val scope = rememberCoroutineScope()
+    var key by remember(item.id) { mutableStateOf("") }
+    LaunchedEffect(item.id) { key = model.repo.preferenceKey(item) }
     if (player == null) return
     var tracks by remember(player) { mutableStateOf(player.currentTracks) }
     DisposableEffect(player) {
@@ -587,6 +675,8 @@ private fun Tracks(player: ExoPlayer?) {
             val label = if (group.type == C.TRACK_TYPE_AUDIO) "Ses" else "Altyazı"
             Button(
                 onClick = {
+                    scope.launch { model.prefs.set("${if (group.type == C.TRACK_TYPE_AUDIO) "audio" else "text"}_$key",
+                        trackChoice(format.language, format.id)) }
                     player.trackSelectionParameters =
                         player.trackSelectionParameters
                             .buildUpon()
@@ -595,13 +685,14 @@ private fun Tracks(player: ExoPlayer?) {
                             .build()
                 }
             ) {
-                Text("$label · " + (format.label ?: format.language ?: (i + 1).toString()))
+                Text("$label · ${dev.lumenara.catalog.languageName(format.language)}" + (format.label?.let { " · $it" } ?: " · ${i + 1}"))
             }
         }
     }
     if (tracks.groups.any { it.type == C.TRACK_TYPE_TEXT })
         Button(
             onClick = {
+                scope.launch { model.prefs.set("text_$key", "off") }
                 player.trackSelectionParameters =
                     player.trackSelectionParameters
                         .buildUpon()

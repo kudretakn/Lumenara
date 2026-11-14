@@ -11,6 +11,7 @@ import androidx.compose.ui.focus.*
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.*
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.*
@@ -21,9 +22,13 @@ import dev.lumenara.data.nextItem
 import dev.lumenara.data.seriesOrder
 import dev.lumenara.design.Ink
 import dev.lumenara.design.glass
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.takeWhile
+import dev.lumenara.catalog.*
 import dev.lumenara.vlc.VlcInput
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
@@ -41,6 +46,8 @@ internal fun VlcScreen(
     exo: (Long) -> Unit,
     back: () -> Unit,
     group: List<Item>,
+    subtitle: androidx.media3.common.MediaItem.SubtitleConfiguration?,
+    attachSubtitle: (androidx.media3.common.MediaItem.SubtitleConfiguration?) -> Unit,
     select: (Item, List<Item>) -> Unit,
     next: () -> Unit,
 ) {
@@ -65,9 +72,146 @@ internal fun VlcScreen(
     var player by remember { mutableStateOf<MediaPlayer?>(null) }
     val playbackMutex = remember { Mutex() }
     var message by remember { mutableStateOf("") }
-    var delayMs by remember { mutableLongStateOf(0) }
-    LaunchedEffect(layout, panel, fullscreen.guide, fullscreen.finished, player, retry.generation, retry.reconnecting) {
-        if (!panel && !fullscreen.guide && !fullscreen.finished) {
+    var subtitleNotice by remember(item.id) { mutableStateOf("") }
+    val subtitleSearch = rememberSubtitleSearchState(model, item, status = { subtitleNotice = it }) {
+        attachSubtitle(it)
+        panel = false
+    }
+    var delayMs by remember(item.id) { mutableLongStateOf(0) }
+    var preferenceKey by remember(item.id) { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
+    var audioTracks by remember(item.id) { mutableStateOf(emptyList<MediaPlayer.TrackDescription>()) }
+    var textTracks by remember(item.id) { mutableStateOf(emptyList<MediaPlayer.TrackDescription>()) }
+    var languages by remember(item.id) { mutableStateOf(emptyMap<Int, String>()) }
+    LaunchedEffect(item.id) {
+        preferenceKey = model.repo.preferenceKey(item)
+        delayMs = model.prefs.text("delay_$preferenceKey", "0").first().toLongOrNull() ?: 0
+    }
+    var nativePlaying by remember(item.id) { mutableStateOf(false) }
+    val currentSubtitle by rememberUpdatedState(subtitle)
+    var activeSubtitle by remember(player) { mutableStateOf(false) }
+    var attached by remember(player, subtitle?.uri) { mutableStateOf<android.net.Uri?>(null) }
+    var slaveUri by remember(player, subtitle?.uri) { mutableStateOf<android.net.Uri?>(null) }
+    var slaveAttempts by remember(player, subtitle?.uri) { mutableIntStateOf(0) }
+    var tracksBeforeSlave by remember(player, subtitle?.uri) { mutableStateOf(emptySet<Int>()) }
+    var slaveTrack by remember(player, subtitle?.uri) { mutableStateOf<Int?>(null) }
+    var awaitingSlaveSelection by remember(player, subtitle?.uri) { mutableStateOf(false) }
+    var slaveRetryEvent by remember(player) { mutableIntStateOf(0) }
+    LaunchedEffect(player, subtitle?.uri) {
+        activeSubtitle = false
+        if (player == null) return@LaunchedEffect
+        val configuration = subtitle
+        if (configuration == null) {
+            player?.setSpuTrack(-1)
+            return@LaunchedEffect
+        }
+        var cached: java.io.File? = null
+        try {
+            slaveUri = if (configuration.uri.scheme == "content") withContext(Dispatchers.IO) {
+                val extension = when (configuration.mimeType) {
+                    androidx.media3.common.MimeTypes.TEXT_SSA -> ".ass"
+                    androidx.media3.common.MimeTypes.TEXT_VTT -> ".vtt"
+                    else -> ".srt"
+                }
+                val file = java.io.File.createTempFile("vlc-subtitle-", extension, context.cacheDir)
+                cached = file
+                context.contentResolver.openInputStream(configuration.uri).use { input ->
+                    requireNotNull(input) { "Subtitle content unavailable" }
+                    file.outputStream().use { output -> input.copyTo(output) }
+                }
+                android.net.Uri.fromFile(file)
+            } else configuration.uri
+            awaitCancellation()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            android.util.Log.d("LumenaraVlc", "subtitle resolve failed scheme=${configuration.uri.scheme}")
+        } finally {
+            cached?.delete()
+        }
+    }
+    fun refreshSlave(p: MediaPlayer) {
+        val tracks = p.spuTracks?.toList().orEmpty()
+        textTracks = tracks
+        if (attached != null) {
+            if (slaveTrack == null) {
+                slaveTrack = tracks.lastOrNull { it.id >= 0 && it.id !in tracksBeforeSlave }?.id
+            }
+            slaveTrack?.let { id ->
+                if (awaitingSlaveSelection && p.spuTrack != id) p.setSpuTrack(id)
+                if (p.spuTrack == id) awaitingSlaveSelection = false
+            }
+        }
+        val selected = p.spuTrack
+        activeSubtitle = attached != null && slaveTrack != null && selected == slaveTrack
+        android.util.Log.d("LumenaraVlc", "subtitle spuCount=${tracks.count { it.id >= 0 }} selected=$selected")
+    }
+    val refreshCurrentSlave by rememberUpdatedState<(MediaPlayer) -> Unit> { refreshSlave(it) }
+    LaunchedEffect(player, subtitle?.uri, slaveUri, nativePlaying, slaveRetryEvent) {
+        val p = player ?: return@LaunchedEffect
+        val uri = slaveUri ?: return@LaunchedEffect
+        if (nativePlaying && attached == null && slaveAttempts < 3) {
+            if (slaveAttempts == 0) tracksBeforeSlave = p.spuTracks?.map { it.id }?.toSet().orEmpty()
+            slaveAttempts++
+            val added = p.addSlave(org.videolan.libvlc.interfaces.IMedia.Slave.Type.Subtitle, uri, true)
+            android.util.Log.d("LumenaraVlc", "addSlave result=$added scheme=${uri.scheme} attempt=$slaveAttempts")
+            if (added) {
+                attached = subtitle?.uri
+                awaitingSlaveSelection = true
+            }
+            refreshSlave(p)
+        }
+    }
+    LaunchedEffect(player, attached) {
+        val p = player ?: return@LaunchedEffect
+        if (attached == null) return@LaunchedEffect
+        val until = System.currentTimeMillis() + 10_000
+        wallClockTicks(250).takeWhile { it <= until }.collect { refreshSlave(p) }
+    }
+    LaunchedEffect(player, subtitle?.uri) {
+        val p = player ?: return@LaunchedEffect
+        val key = model.repo.preferenceKey(item)
+        var signature = ""
+        wallClockTicks(500).collect {
+            val audio = p.audioTracks?.toList().orEmpty()
+            val text = p.spuTracks?.toList().orEmpty()
+            val current = audio.joinToString { "${it.id}:${it.name}" } + text.joinToString { "${it.id}:${it.name}" }
+            if (current != signature) {
+                signature = current
+                audioTracks = audio
+                textTracks = text
+                val media = p.media
+                try {
+                    languages = (0 until (media?.trackCount ?: 0)).mapNotNull { index ->
+                        media?.getTrack(index)?.let { track -> track.id to track.language.orEmpty() }
+                    }.toMap()
+                } finally { media?.release() }
+                val savedAudio = model.prefs.playbackChoice("audio", key)
+                val savedText = model.prefs.playbackChoice("text", key)
+                val chosenAudio = audio.filter { trackPreferenceRank(savedAudio, languages[it.id], it.id.toString()) < 2 }
+                    .minByOrNull { trackPreferenceRank(savedAudio, languages[it.id], it.id.toString()) }
+                    ?: audio.firstOrNull { isTurkish(languages[it.id]) || it.name.contains("Turkish", true) || it.name.contains("Türkçe", true) }
+                    ?: audio.firstOrNull { it.id >= 0 }
+                chosenAudio?.let { p.setAudioTrack(it.id) }
+                val dubbed = productionName(item.title, item.year).version == AudioVersion.DUBBED ||
+                    chosenAudio?.let { isTurkish(languages[it.id]) || it.name.contains("Turkish", true) || it.name.contains("Türkçe", true) } == true
+                // An explicitly attached subtitle takes precedence over automatic language defaults.
+                if (currentSubtitle == null) {
+                    if (subtitlesDisabled(savedText, turkishAudio = dubbed, dubbed = false)) p.setSpuTrack(-1)
+                    else {
+                        val chosenText = text.filter { trackPreferenceRank(savedText, languages[it.id], it.id.toString()) < 2 }
+                            .minByOrNull { trackPreferenceRank(savedText, languages[it.id], it.id.toString()) }
+                            ?: text.firstOrNull { isTurkish(languages[it.id]) || it.name.contains("Türkçe", true) || it.name.contains("Turkish", true) }
+                        p.setSpuTrack(chosenText?.id ?: -1)
+                    }
+                }
+            }
+            activeSubtitle = attached != null && slaveTrack != null && p.spuTrack == slaveTrack
+            p.setSpuDelay(delayMs * 1000)
+        }
+    }
+    LaunchedEffect(subtitleSearch.open, layout, panel, fullscreen.guide, fullscreen.finished, player, retry.generation, retry.reconnecting) {
+        if (!subtitleSearch.open && !panel && !fullscreen.guide && !fullscreen.finished) {
             if (!composeView.hasFocus()) composeView.requestFocus()
             val initialGranted = focus.requestFocus()
             android.util.Log.d("LumenaraFocus", "VLC trigger=layout/panel/fullscreen/retry initialGranted=$initialGranted viewHasFocus=${composeView.hasFocus()}")
@@ -82,6 +226,7 @@ internal fun VlcScreen(
     }
     LaunchedEffect(layout, item.id, retry.generation) {
         val surface = layout ?: return@LaunchedEffect
+        nativePlaying = false
         message = ""
         val playbackScope = this
         playbackMutex.withLock {
@@ -125,12 +270,21 @@ internal fun VlcScreen(
                         playbackScope.launch(Dispatchers.Main.immediate) {
                             when (event.type) {
                                 MediaPlayer.Event.Playing -> {
+                                    nativePlaying = true
+                                    slaveRetryEvent++
                                     retry.playing()
                                     message = ""
                                     if (!recorded) {
                                         recorded = true
                                         model.started(item)
                                     }
+                                }
+                                MediaPlayer.Event.Vout -> {
+                                    slaveRetryEvent++
+                                    refreshCurrentSlave(p)
+                                }
+                                MediaPlayer.Event.ESAdded, MediaPlayer.Event.ESSelected -> {
+                                    refreshCurrentSlave(p)
                                 }
                                 MediaPlayer.Event.EncounteredError -> {
                                     if (item.kind != "LIVE" || !retry.failed()) {
@@ -155,7 +309,7 @@ internal fun VlcScreen(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                android.util.Log.w("LumenaraVlc", "VLC playback failed", e)
+                android.util.Log.w("LumenaraVlc", "VLC playback failed: ${e.javaClass.simpleName}")
                 if (item.kind != "LIVE" || e !is java.io.IOException || !retry.failed()) {
                     message = "VLC bu kaynakta TS, MKV veya konumlandırılabilir MP4 dosyası gerektirir."
                     panel = true
@@ -165,6 +319,7 @@ internal fun VlcScreen(
                     val p = engine
                     withContext(Dispatchers.Main.immediate) {
                         player = null
+                        nativePlaying = false
                         p?.setEventListener(null)
                         p?.detachViews()
                     }
@@ -195,8 +350,12 @@ internal fun VlcScreen(
         Modifier.fillMaxSize()
             .background(androidx.compose.ui.graphics.Color.Black)
             .focusRequester(focus)
-            .semantics { contentDescription = "Tam ekran oynatıcı" }
+            .semantics {
+                contentDescription = "Tam ekran oynatıcı"
+                if (activeSubtitle) stateDescription = "İndirilen altyazı etkin"
+            }
             .onPreviewKeyEvent {
+                if (subtitleSearch.open) return@onPreviewKeyEvent false
                 val key = it.nativeKeyEvent
                 val code = key.keyCode
                 if (!panel && fullscreen.key(key, item.kind == "LIVE", ::move, { panel = true },
@@ -231,11 +390,12 @@ internal fun VlcScreen(
             if (item.kind == "EPISODE" && group.nextItem(item) != null) next else null)
         Reconnecting(retry)
         numbers?.let { NumberEntry(it) }
+        SubtitleNotice(subtitleNotice) { subtitleNotice = "" }
         if (panel) {
             val first = remember { FocusRequester() }
             LaunchedEffect(Unit) { first.requestFocus() }
             LazyColumn(
-                Modifier.width(330.dp).fillMaxHeight().padding(12.dp).glass().padding(16.dp),
+                Modifier.width(420.dp).fillMaxHeight().testTag("player-options").padding(start = 48.dp, top = 27.dp, bottom = 27.dp).glass().padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 item {
@@ -254,6 +414,22 @@ internal fun VlcScreen(
                 item {
                     Button(onClick = { exo(player?.time ?: position) }) { Text("Media3 ile aç") }
                 }
+                item { VersionChoice(model, item) { version ->
+                    scope.launch {
+                        val snapshot = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main.immediate) {
+                            player?.let { it.time.coerceAtLeast(0) to it.length.coerceAtLeast(0) }
+                        }
+                        if (snapshot != null)
+                            model.repo.updateMark(item.id) { it.copy(position = snapshot.first, duration = snapshot.second) }
+                        val rows = if (version.kind == "EPISODE") model.repo.library.episodeSnapshot(version.parent).seriesOrder() else group
+                        select(version, rows)
+                    }
+                } }
+                item { SubtitleSearch(subtitleSearch) }
+                item { Subtitles { configuration -> scope.launch {
+                    model.prefs.set("text_$preferenceKey", if (configuration == null) "off" else "tr")
+                    attachSubtitle(configuration)
+                } } }
                 player?.let { p ->
                     if (item.introStartMs >= 0)
                         item {
@@ -276,31 +452,39 @@ internal fun VlcScreen(
                                 Button(onClick = { p.setTime(p.time + 10000) }) { Text("+10 sn") }
                             }
                         }
-                    items(p.audioTracks?.toList().orEmpty()) { track ->
-                        Button(onClick = { p.setAudioTrack(track.id) }) {
-                            Text("Ses · ${track.name}")
+                    items(audioTracks) { track ->
+                        Button(onClick = {
+                            p.setAudioTrack(track.id)
+                            scope.launch { model.prefs.set("audio_$preferenceKey", trackChoice(languages[track.id], track.id.toString())) }
+                        }) {
+                            Text("Ses · ${languageName(languages[track.id])} · ${track.name}")
                         }
                     }
-                    items(p.spuTracks?.toList().orEmpty()) { track ->
-                        Button(onClick = { p.setSpuTrack(track.id) }) {
-                            Text("Altyazı · ${track.name}")
+                    items(textTracks) { track ->
+                        Button(onClick = {
+                            p.setSpuTrack(track.id)
+                            scope.launch { model.prefs.set("text_$preferenceKey", if (track.id < 0) "off" else trackChoice(languages[track.id], track.id.toString())) }
+                        }) {
+                            Text(if (track.id < 0) "Altyazıyı kapat" else "Altyazı · ${languageName(languages[track.id])} · ${track.name}")
                         }
                     }
                     item {
                         Text("Altyazı gecikmesi · $delayMs ms")
                         Row {
-                            for (step in listOf(-100L, 100L)) Button(
+                            for (step in listOf(-500L, 500L)) Button(
                                 onClick = {
-                                    delayMs += step
+                                    delayMs = (delayMs + step).coerceIn(-60_000, 60_000)
+                                    scope.launch { model.prefs.set("delay_$preferenceKey", delayMs.toString()) }
                                     p.setSpuDelay(delayMs * 1000)
                                 }
                             ) {
-                                Text(if (step < 0) "−100 ms" else "+100 ms")
+                                Text(if (step < 0) "−0,5 sn" else "+0,5 sn")
                             }
                         }
                     }
                 }
             }
         }
+        SubtitleResults(subtitleSearch, panel, focus)
     }
 }

@@ -107,6 +107,7 @@ internal class Xtream(private val spec: SourceSpec) {
                         row["rating"].orEmpty(),
                         row["language"].orEmpty(),
                         row["cast"].orEmpty(),
+                        tmdbId = row["tmdb_id"] ?: row["tmdb"].orEmpty(),
                         archive =
                             if (kind == Kind.LIVE && row["tv_archive"] == "1" && zone.isNotBlank())
                                 base
@@ -135,6 +136,28 @@ internal class Xtream(private val spec: SourceSpec) {
             .addPathSegment(spec.password)
             .addPathSegment("$id.$ext")
             .build()
+
+    fun subtitleInfo(address: String, kind: String, title: String, year: String): SubtitleQuery {
+        val url = if (kind == "SERIES") address.toHttpUrl() else {
+            val id = address.toHttpUrl().pathSegments.last().substringBeforeLast('.')
+            api("get_vod_info").addQueryParameter("vod_id", id).build()
+        }
+        return Transport.read(url.toString(), spec.allowHttp) { input, _ ->
+            val root = JSONObject(input.reader().readText())
+            val info = root.optJSONObject("info") ?: root.optJSONObject("movie_data") ?: root
+            fun number(vararg names: String) = names.asSequence().map { info.optString(it) }
+                .firstOrNull { it.toLongOrNull()?.let { n -> n > 0 } == true }.orEmpty()
+            val tmdb = number("tmdb_id", "tmdb", "tmdb_number")
+            val imdb = info.optString("imdb_id").ifBlank { info.optString("imdb") }
+                .let { if (it.matches(Regex("[0-9]+"))) "tt$it" else it }
+                .takeIf { it.matches(Regex("tt[0-9]+")) }.orEmpty()
+            val releaseYear = year.ifBlank {
+                listOf("releasedate", "release_date", "releaseDate", "year").asSequence()
+                    .map { info.optString(it).take(4) }.firstOrNull { it.matches(Regex("(?:19|20)[0-9]{2}")) }.orEmpty()
+            }
+            SubtitleQuery(title, releaseYear, tmdb, imdb)
+        }
+    }
 
     fun episodes(info: String, seriesTitle: String): List<Listing> =
         Transport.read(info, spec.allowHttp) { input, _ ->

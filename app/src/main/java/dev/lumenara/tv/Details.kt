@@ -140,6 +140,7 @@ internal fun Details(
                         }
                 }
             }
+            item { VersionChoice(model, item) }
             if (info.summary.isNotBlank()) item {
                 Text(info.summary, Modifier.widthIn(max = 460.dp), fontSize = 14.sp,
                     lineHeight = 21.sp, color = Ink.text.copy(alpha = .85f))

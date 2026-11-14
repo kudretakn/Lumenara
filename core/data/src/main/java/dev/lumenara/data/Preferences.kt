@@ -5,17 +5,40 @@ import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 private val Context.settings by preferencesDataStore(name = "preferences")
 
 class Preferences(context: Context) {
     private val store = context.applicationContext.settings
+    private val vault = Vault(context.applicationContext)
+
+    suspend fun secret(key: String): String = withContext(Dispatchers.IO) {
+        text("secret_$key").first().takeIf { it.isNotEmpty() }?.let(vault::decrypt).orEmpty()
+    }
+
+    suspend fun setSecret(key: String, value: String) = withContext(Dispatchers.IO) {
+        set("secret_$key", if (value.isEmpty()) "" else vault.encrypt(value))
+    }
 
     fun text(key: String, fallback: String = "") =
         store.data.map { it[stringPreferencesKey(key)] ?: fallback }
 
     suspend fun set(key: String, value: String) {
         store.edit { it[stringPreferencesKey(key)] = value }
+    }
+
+    suspend fun playbackChoice(type: String, key: String): String {
+        val local = text("${type}_$key").first()
+        if (local.isNotEmpty()) return local
+        val global = text(if (type == "audio") "audio" else "sub").first()
+        return when {
+            global == "Kapalı" -> "off"
+            global in listOf("tr", "en", "de", "fr") -> global
+            else -> ""
+        }
     }
 
     // Newline encoding preserves recency; DataStore edit makes concurrent updates atomic.

@@ -2,6 +2,7 @@ package dev.lumenara.data
 
 import androidx.room.*
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 
 @Entity(tableName = "sources")
 data class Source(
@@ -105,8 +106,10 @@ interface LibraryDao {
 
     @Query("""SELECT * FROM items WHERE (:source='' OR source=:source)
         AND kind IN ('MOVIE','SERIES') AND (backdrop!='' OR logo!='')
-        ORDER BY items.rowid DESC LIMIT 6""")
-    fun homeFeatures(source: String): Flow<List<Item>>
+        ORDER BY items.rowid DESC""")
+    fun homeFeaturesRows(source: String): Flow<List<Item>>
+
+    fun homeFeatures(source: String): Flow<List<Item>> = homeFeaturesRows(source).map { it.mergeVersions().take(6) }
 
     @Query("""SELECT * FROM items WHERE kind='LIVE' AND (:source='' OR source=:source)
         AND category=(SELECT category FROM items WHERE kind='LIVE'
@@ -128,16 +131,20 @@ interface LibraryDao {
 
     @Query(
         """SELECT items.* FROM items JOIN collections USING(id) WHERE name=:name AND (:source='' OR source=:source)
-        ORDER BY year,title LIMIT 60"""
+        ORDER BY year,title"""
     )
-    fun members(source: String, name: String): Flow<List<Item>>
+    fun membersRows(source: String, name: String): Flow<List<Item>>
+
+    fun members(source: String, name: String): Flow<List<Item>> = membersRows(source, name).map { it.mergeVersions().take(60) }
 
     @Query(
         """SELECT i.* FROM items i WHERE (:source='' OR i.source=:source) AND i.kind IN ('MOVIE','SERIES')
         AND i.category IN (SELECT j.category FROM items j JOIN marks m ON m.id=j.id WHERE m.favorite=1 OR m.position>0)
-        AND i.id NOT IN (SELECT id FROM marks WHERE position>0 OR favorite=1) ORDER BY CAST(i.rating AS REAL) DESC,i.title LIMIT 24"""
+        AND i.id NOT IN (SELECT id FROM marks WHERE position>0 OR favorite=1) ORDER BY CAST(i.rating AS REAL) DESC,i.title"""
     )
-    fun suggestions(source: String): Flow<List<Item>>
+    fun suggestionsRows(source: String): Flow<List<Item>>
+
+    fun suggestions(source: String): Flow<List<Item>> = suggestionsRows(source).map { it.mergeVersions().take(24) }
 
     @Query("SELECT * FROM sources ORDER BY name, id") fun sources(): Flow<List<Source>>
 
@@ -178,8 +185,10 @@ interface LibraryDao {
         WHERE (:source='' OR i.source=:source) AND i.kind IN ('MOVIE','SERIES')
         AND (i.kind!='SERIES' OR EXISTS(SELECT 1 FROM items ep LEFT JOIN marks m ON m.id=ep.id
             WHERE ep.parent=i.id AND (m.id IS NULL OR m.duration<=0 OR m.position<m.duration*0.90)))
-        ORDER BY history.activity DESC,i.id LIMIT 24""")
-    fun continueWatching(source: String): Flow<List<Item>>
+        ORDER BY history.activity DESC,i.id""")
+    fun continueWatchingRows(source: String): Flow<List<Item>>
+
+    fun continueWatching(source: String): Flow<List<Item>> = continueWatchingRows(source).map { it.mergeVersions().take(24) }
 
     @Query("DELETE FROM items WHERE parent=:id AND generation!=:token")
     suspend fun pruneEpisodes(id: String, token: Long)
@@ -212,20 +221,31 @@ interface LibraryDao {
             THEN substr(items.id,instr(items.id,':')+1) ELSE items.id END,tvgId,title,kind
         HAVING items.id=MIN(items.id)
         ORDER BY CASE WHEN :shelf='resume' THEN updated WHEN :shelf='recent' THEN items.rowid ELSE 0 END DESC,
-        CASE WHEN :shelf='popular' THEN CAST(rating AS REAL) ELSE 0 END DESC, title, items.id LIMIT :limit"""
+        CASE WHEN :shelf='popular' THEN CAST(rating AS REAL) ELSE 0 END DESC, title, items.id LIMIT :queryLimit"""
     )
-    fun browse(
+    fun browseRows(
         source: String,
         kind: String,
         category: String,
         query: String,
         shelf: String,
-        limit: Int,
+        queryLimit: Int,
         year: String = "",
         genre: String = "",
         language: String = "",
         minRating: Double = 0.0,
     ): Flow<List<Item>>
+
+    fun browse(source: String, kind: String, category: String, query: String, shelf: String, limit: Int,
+               year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0): Flow<List<Item>> =
+        browseRows(source, kind, category, query, shelf, if (kind == "LIVE") limit else -1, year, genre, language, minRating)
+            .map { it.mergeVersions().take(limit) }
+
+    @Query("SELECT * FROM items WHERE id=:id")
+    suspend fun item(id: String): Item?
+
+    @Query("SELECT * FROM items WHERE source=:source AND kind=:kind")
+    suspend fun versionCandidates(source: String, kind: String): List<Item>
 
     @Query(
         "SELECT DISTINCT category FROM items WHERE kind=:kind AND (:source='' OR source=:source) ORDER BY category"

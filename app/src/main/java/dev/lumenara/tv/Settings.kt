@@ -141,8 +141,8 @@ internal fun SettingsScreen(
         item { Choice(model, "engine", "Varsayılan motor", listOf("Media3", "VLC")) }
         item { Choice(model, "fallback", "Codec hatasında VLC", listOf("Açık", "Kapalı")) }
         item { Choice(model, "buffer", "Media3 tamponu", listOf("Dengeli", "Hızlı", "Kararlı")) }
-        item { Choice(model, "audio", "Ses dili", listOf("tr", "en", "de", "fr")) }
-        item { Choice(model, "sub", "Altyazı dili", listOf("Kapalı", "tr", "en", "de", "fr")) }
+        item { Choice(model, "audio", "Ses dili", listOf("Otomatik (Türkçe)", "tr", "en", "de", "fr")) }
+        item { Choice(model, "sub", "Altyazı dili", listOf("Otomatik (Türkçe)", "Kapalı", "tr", "en", "de", "fr")) }
         item { Choice(model, "size", "Altyazı boyutu", listOf("Orta", "Büyük", "Küçük")) }
         item { Choice(model, "color", "Altyazı rengi", listOf("Beyaz", "Sarı")) }
         item {
@@ -192,6 +192,9 @@ internal fun SettingsScreen(
             ) {
                 Text("Görsel önbelleğini temizle · ${disk/1048576} MB")
             }
+        }
+        item {
+            SubtitleKeys(model)
         }
         item {
             Text("Film ve dizi bilgileri", fontSize = 20.sp)
