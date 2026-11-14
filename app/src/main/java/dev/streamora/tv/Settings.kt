@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -37,7 +39,12 @@ private fun Choice(model: LibraryModel, key: String, label: String, options: Lis
 
 @Composable
 @OptIn(coil.annotation.ExperimentalCoilApi::class)
-internal fun SettingsScreen(model: LibraryModel, sources: List<Source>) {
+internal fun SettingsScreen(
+    model: LibraryModel,
+    sources: List<Source>,
+    sourceFocus: FocusRequester,
+    openSources: () -> Unit,
+) {
     val context = LocalContext.current
     val busy by model.busy.collectAsStateWithLifecycle()
     val notice by model.notice.collectAsStateWithLifecycle()
@@ -93,6 +100,11 @@ internal fun SettingsScreen(model: LibraryModel, sources: List<Source>) {
         verticalArrangement = Arrangement.spacedBy(7.dp),
         contentPadding = PaddingValues(bottom = 20.dp),
     ) {
+        item {
+            Button(onClick = openSources, modifier = Modifier.focusRequester(sourceFocus)) {
+                Text("IPTV Kaynakları")
+            }
+        }
         item { Text("Türkçe   ·   Antrasit tema   ·   Streamora 0.1", color = Ink.muted) }
         item { Text("Oynatıcı", fontSize = 20.sp) }
         item { Choice(model, "engine", "Varsayılan motor", listOf("Media3", "VLC")) }

@@ -10,6 +10,7 @@ import androidx.compose.ui.*
 import androidx.compose.ui.focus.*
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.*
 import androidx.compose.ui.viewinterop.AndroidView
@@ -22,9 +23,10 @@ import androidx.media3.ui.PlayerView
 import androidx.tv.material3.*
 import dev.streamora.data.*
 import dev.streamora.design.Ink
+import dev.streamora.design.glass
 import dev.streamora.player.*
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -49,6 +51,7 @@ internal fun Video(
     if (!lifecycle.isAtLeast(Lifecycle.State.STARTED)) return
     val currentReady by rememberUpdatedState(ready)
     val currentEnded by rememberUpdatedState(ended)
+    var playbackActive by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var attempt by remember { mutableIntStateOf(0) }
     var player by remember { mutableStateOf<ExoPlayer?>(null) }
@@ -92,8 +95,17 @@ internal fun Video(
                         .build()
                 player = engine
                 currentReady(engine)
+                var recorded = false
                 engine.addListener(
                     object : Player.Listener {
+                        override fun onIsPlayingChanged(isPlaying: Boolean) {
+                            playbackActive = isPlaying
+                            if (isPlaying && !preview && !recorded) {
+                                recorded = true
+                                model.started(item)
+                            }
+                        }
+
                         override fun onPlayerError(cause: PlaybackException) {
                             error = playbackMessage(cause)
                             model.diagnostic("Media3 ${cause.errorCode}")
@@ -142,18 +154,19 @@ internal fun Video(
     LaunchedEffect(player) {
         val engine = player ?: return@LaunchedEffect
         withContext(Dispatchers.Main.immediate) {
-            while (true) {
-                delay(5000)
+            wallClockTicks(5000).collect {
                 if (engine.isPlaying) model.progress(item, engine.currentPosition, engine.duration)
             }
         }
     }
-    Box(modifier.background(androidx.compose.ui.graphics.Color.Black)) {
+    Box(modifier.background(androidx.compose.ui.graphics.Color.Black).semantics {
+        if (preview) stateDescription = if (playbackActive) "Oynatılıyor" else "Yükleniyor"
+    }) {
         AndroidView(
             factory = {
                 PlayerView(it).apply {
-                    useController = !preview && item.kind != "LIVE"
-                    isFocusable = useController
+                    useController = false
+                    isFocusable = false
                     keepScreenOn = true
                 }
             },
@@ -184,7 +197,7 @@ internal fun Video(
         if (error.isNotEmpty())
             Column(Modifier.align(Alignment.Center).background(Ink.secondary).padding(12.dp)) {
                 Text(error, maxLines = 3)
-                Button(onClick = { attempt++ }) { Text("Yeniden dene") }
+                if (!preview) Button(onClick = { attempt++ }) { Text("Yeniden dene") }
             }
     }
 }
@@ -201,7 +214,6 @@ internal fun Playback(
     var panel by remember { mutableStateOf(false) }
     var multi by remember { mutableStateOf(emptyList<Item>()) }
     var hint by remember { mutableStateOf("") }
-    var operations by remember { mutableStateOf(false) }
     var channelQuery by remember { mutableStateOf("") }
     var category by remember { mutableStateOf("") }
     var limit by remember { mutableIntStateOf(80) }
@@ -223,6 +235,7 @@ internal fun Playback(
     var engine by remember { mutableStateOf<ExoPlayer?>(null) }
     val focus = remember { FocusRequester() }
     val live = item.kind == "LIVE"
+    val fullscreen = rememberFullscreenState(item)
     var subtitle by remember { mutableStateOf<MediaItem.SubtitleConfiguration?>(null) }
     fun move(delta: Int) {
         val at = group.indexOfFirst { it.id == item.id }
@@ -238,7 +251,7 @@ internal fun Playback(
         .collectAsStateWithLifecycle("Açık")
     if (preferred == null) return
     var vlc by remember { mutableStateOf(preferred == "VLC") }
-    var transferred by remember { mutableLongStateOf(-1) }
+    var transferred by remember(item.id) { mutableLongStateOf(-1) }
     var switched by remember { mutableStateOf(false) }
     if (vlc) {
         VlcScreen(
@@ -251,50 +264,28 @@ internal fun Playback(
                 vlc = false
             },
             back,
+            group = group,
+            select = { channel, rows -> changeGroup(rows); select(channel) },
         ) {
             if (item.kind == "EPISODE") move(1)
         }
         return
     }
-    BackHandler { if (panel) panel = false else back() }
-    LaunchedEffect(panel) { if (!panel) focus.requestFocus() }
+    BackHandler { if (panel) panel = false else if (!fullscreen.dismiss()) back() }
+    LaunchedEffect(panel, fullscreen.guide, fullscreen.finished) {
+        if (!panel && !fullscreen.guide && !fullscreen.finished) focus.requestFocus()
+    }
     Box(
         Modifier.fillMaxSize()
+            .background(androidx.compose.ui.graphics.Color.Black)
             .focusRequester(focus)
             .semantics { contentDescription = "Tam ekran oynatıcı" }
             .onPreviewKeyEvent {
                 val key = it.nativeKeyEvent
                 val code = key.keyCode
-                val ok =
-                    code in
-                        listOf(
-                            KeyEvent.KEYCODE_DPAD_CENTER,
-                            KeyEvent.KEYCODE_ENTER,
-                            KeyEvent.KEYCODE_NUMPAD_ENTER,
-                        )
-                if (
-                    !panel &&
-                        (ok ||
-                            code == KeyEvent.KEYCODE_MENU ||
-                            live &&
-                                code in
-                                    listOf(
-                                        KeyEvent.KEYCODE_DPAD_UP,
-                                        KeyEvent.KEYCODE_DPAD_DOWN,
-                                        KeyEvent.KEYCODE_DPAD_LEFT,
-                                        KeyEvent.KEYCODE_DPAD_RIGHT,
-                                    ))
-                ) {
-                    if (key.action == KeyEvent.ACTION_UP) {
-                        when (code) {
-                            KeyEvent.KEYCODE_DPAD_UP -> move(-1)
-                            KeyEvent.KEYCODE_DPAD_DOWN -> move(1)
-                            else -> {
-                                operations = ok && key.eventTime - key.downTime >= 500
-                                panel = true
-                            }
-                        }
-                    }
+                if (!panel && fullscreen.key(key, live, ::move,
+                        { panel = true },
+                        { delta -> engine?.let { p -> p.seekTo((p.currentPosition + delta).coerceAtLeast(0)) } })) {
                     true
                 } else if (
                     code in
@@ -332,8 +323,17 @@ internal fun Playback(
                     vlc = true
                 }
             },
-            ended = { if (item.kind == "EPISODE") move(1) },
+            ended = {
+                if (item.kind == "EPISODE")
+                    fullscreen.finished = group.getOrNull(group.indexOfFirst { it.id == item.id } + 1) != null
+            },
         )
+        if (!panel) FullscreenOverlay(model, item, group, fullscreen,
+            { channel, rows -> changeGroup(rows); select(channel) },
+            { panel = true },
+            { engine?.currentPosition ?: 0 }, { engine?.duration ?: 0 },
+            if (item.kind == "EPISODE" && group.getOrNull(group.indexOfFirst { it.id == item.id } + 1) != null)
+                ({ move(1) }) else null)
         if (panel) {
             val candidates by
                 remember(item.source, category, channelQuery, limit) {
@@ -356,10 +356,11 @@ internal fun Playback(
                 remember(item.id) { model.repo.library.observeMark(item.id) }
                     .collectAsStateWithLifecycle(null)
             LazyColumn(
-                Modifier.width(310.dp).fillMaxHeight().background(Ink.secondary).padding(12.dp),
+                Modifier.width(310.dp).fillMaxHeight().padding(12.dp).glass().padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(5.dp),
             ) {
                 item {
+                    Text("Seçenekler", fontSize = 20.sp)
                     Text(item.title, fontSize = 20.sp)
                     Text(item.category, color = Ink.muted)
                 }
@@ -474,7 +475,7 @@ internal fun Playback(
                         Button(onClick = { e.seekToDefaultPosition() }) { Text("Canlıya dön") }
                     }
                 }
-                if (live && !operations)
+                if (live)
                     item {
                         Field("Kanal ara", channelQuery, { channelQuery = it })
                         androidx.compose.foundation.lazy.LazyRow(
@@ -491,7 +492,7 @@ internal fun Playback(
                         }
                     }
                 val list =
-                    if (live && !operations) candidates else if (operations) emptyList() else group
+                    if (live) candidates else group
                 items(list, key = { it.id }) { channel ->
                     Button(
                         onClick = {
@@ -505,7 +506,7 @@ internal fun Playback(
                         Text(channel.title)
                     }
                 }
-                if (live && candidates.size >= limit && !operations)
+                if (live && candidates.size >= limit)
                     item { Button(onClick = { limit += 80 }) { Text("Devamını göster") } }
             }
         }

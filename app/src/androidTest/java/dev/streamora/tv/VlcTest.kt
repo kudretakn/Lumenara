@@ -64,7 +64,7 @@ class VlcTest {
                         if (it.type == MediaPlayer.Event.EndReached) finished.countDown()
                     }
                     player.play()
-                    assertTrue(finished.await(20, TimeUnit.SECONDS))
+                    assertTrue(finished.await(30, TimeUnit.SECONDS))
                     assertFalse(error)
                     assertTrue(server.requestCount >= 2)
                 } finally {

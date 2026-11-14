@@ -8,6 +8,7 @@ import android.system.OsConstants
 import dev.streamora.data.Transport
 import java.io.Closeable
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 import okhttp3.Call
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -21,8 +22,17 @@ private constructor(
     val demux: String,
     private val release: () -> Unit,
 ) : Closeable {
+    private val closed = AtomicBoolean(false)
+
     override fun close() {
-        release()
+        if (!closed.compareAndSet(false, true)) return
+        // Releasing an OkHttp response may perform socket I/O. Callers can be on
+        // the main thread, so dispatch the release when needed.
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            thread(name = "streamora-vlc-close", isDaemon = true) { release() }
+        } else {
+            release()
+        }
         descriptor.close()
     }
 

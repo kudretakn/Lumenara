@@ -12,6 +12,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.*
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -80,7 +81,7 @@ internal fun Setup(model: LibraryModel, sources: List<Source>, openHome: () -> U
             }
         }
     LazyColumn(
-        modifier = Modifier.widthIn(max = 470.dp),
+        modifier = Modifier.widthIn(max = 470.dp).testTag("source-setup"),
         verticalArrangement = Arrangement.spacedBy(8.dp),
         contentPadding = PaddingValues(start = 4.dp, top = 4.dp, bottom = 24.dp, end = 4.dp),
     ) {

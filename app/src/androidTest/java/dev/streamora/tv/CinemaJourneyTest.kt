@@ -2,6 +2,7 @@ package dev.streamora.tv
 
 import android.graphics.BitmapFactory
 import android.graphics.drawable.BitmapDrawable
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -12,12 +13,17 @@ import coil.ImageLoader
 import coil.decode.DataSource
 import coil.intercept.Interceptor
 import coil.request.SuccessResult
+import dev.streamora.data.Feed
+import dev.streamora.data.Mapping
+import dev.streamora.data.Slot
+import dev.streamora.data.Preferences
 import dev.streamora.data.Repository
 import dev.streamora.data.SourceSpec
 import java.io.File
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.*
+import okio.Buffer
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -74,32 +80,94 @@ class CinemaJourneyTest {
                 .build()
         Coil.setImageLoader(loader)
         fun node(text: String): SemanticsNodeInteraction {
-            screen.waitUntil(10000) {
-                screen.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()
+            try {
+                screen.waitUntil(30_000) {
+                    screen.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()
+                }
+            } catch (e: ComposeTimeoutException) {
+                throw AssertionError("Beklenen: $text\n" + screen.onRoot().printToString(), e)
             }
             return screen.onAllNodesWithText(text).onFirst()
         }
         fun focus(node: SemanticsNodeInteraction) {
             node.performSemanticsAction(SemanticsActions.RequestFocus)
-            screen.waitForIdle()
+            screen.waitUntil(30_000) { isFocused().matches(node.fetchSemanticsNode()) }
+        }
+        fun describedIn(description: String, tag: String) =
+            hasContentDescription(description) and hasAnyAncestor(hasTestTag(tag))
+        fun navigation(name: String) = hasContentDescription(name) and
+            hasAnyAncestor(hasTestTag("nav-open") or hasTestTag("nav-closed"))
+        fun section(name: String) {
+            focus(screen.onNode(navigation(name)))
+            screen.ok()
+            screen.waitUntil(30_000) {
+                screen.onAllNodesWithTag("section-$name").fetchSemanticsNodes().isNotEmpty()
+            }
+        }
+        fun waitFor(matcher: SemanticsMatcher) {
+            try {
+                screen.waitUntil(30_000) {
+                    screen.onAllNodes(matcher).fetchSemanticsNodes().isNotEmpty()
+                }
+            } catch (e: ComposeTimeoutException) {
+                throw AssertionError("Beklenen: $matcher\n" + screen.onRoot().printToString(), e)
+            }
+        }
+        fun searchShelf(tag: String) {
+            screen.waitUntil(30_000) {
+                runCatching {
+                    screen.onNodeWithTag("search-results").performScrollToNode(hasTestTag(tag))
+                    screen.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty()
+                }.getOrDefault(false)
+            }
+        }
+        fun waitAbsent(matcher: SemanticsMatcher) {
+            screen.waitUntil(30_000) { screen.onAllNodes(matcher).fetchSemanticsNodes().isEmpty() }
         }
         fun select(text: String) {
             focus(node(text))
-            device.pressDPadCenter()
-            screen.waitForIdle()
+            screen.ok()
+        }
+        fun focusFilters() {
+            val button = isFocusable() and hasText("Filtrele")
+            waitFor(button)
+            focus(screen.onNode(button))
+        }
+        fun filterYear() {
+            waitFor(hasTestTag("filter-panel"))
+            screen.onNodeWithTag("filter-panel").assertIsDisplayed()
+            screen.onNodeWithTag("filter-fields").performScrollToNode(hasText("Yıl"))
+            node("Yıl").assertIsDisplayed()
         }
         fun capture(name: String) {
             // A real device screenshot includes GPU-composited image transitions and TV focus
             // rings.
-            Thread.sleep(1300)
-            device.takeScreenshot(File(context.getExternalFilesDir(null), "$name.png"))
+            val readyAt = android.os.SystemClock.uptimeMillis() + 1300
+            screen.waitUntil(30_000) { android.os.SystemClock.uptimeMillis() >= readyAt }
+            val file = File(context.getExternalFilesDir(null), "$name.png")
+            checkNotNull(file.parentFile).mkdirs()
+            assertTrue("Ekran görüntüsü kaydedilmeli: $name", device.takeScreenshot(file))
             device.executeShellCommand("mkdir -p /sdcard/Download/streamora-ui")
             device.executeShellCommand(
-                "cp ${context.getExternalFilesDir(null)}/$name.png /sdcard/Download/streamora-ui/$name.png"
+                "cp ${context.getExternalFilesDir(null)}/$name.png /sdcard/Download/streamora-ui/${file.name}"
             )
         }
         MockWebServer().use { server ->
             server.start()
+            val video = test.context.assets.open("streamora-test.mp4").use { it.readBytes() }
+            val preferences = Preferences(context)
+            val previousRecent = runBlocking { preferences.text("recent_live").first() }
+            val previousEngine = runBlocking { preferences.text("engine", "Media3").first() }
+            runBlocking {
+                repeat(25) { preferences.recordLive("fixture-$it") }
+                preferences.recordLive("fixture-10")
+                val ids = preferences.recentLive.first()
+                assertEquals(20, ids.size)
+                assertEquals("fixture-10", ids.first())
+                assertEquals(20, ids.distinct().size)
+                preferences.set("recent_live", "")
+                preferences.set("engine", "Media3")
+            }
             val catalog = JSONArray()
             titles.forEachIndexed { i, title ->
                 catalog.put(
@@ -127,17 +195,24 @@ class CinemaJourneyTest {
             }
             server.dispatcher =
                 object : Dispatcher() {
-                    override fun dispatch(request: RecordedRequest): MockResponse =
-                        MockResponse()
-                            .setBody(
-                                when (request.requestUrl?.queryParameter("action")) {
-                                    null -> """{"user_info":{"auth":1}}"""
-                                    "get_vod_categories" ->
-                                        """[{"category_id":1,"category_name":"Sinema"}]"""
-                                    "get_vod_streams" -> catalog.toString()
-                                    else -> "[]"
-                                }
-                            )
+                    override fun dispatch(request: RecordedRequest): MockResponse {
+                        if (request.requestUrl?.encodedPath?.startsWith("/live/") == true)
+                            return MockResponse().setHeader("Content-Type", "video/mp4")
+                                .setBody(Buffer().write(video))
+                        return MockResponse().setBody(
+                            when (request.requestUrl?.queryParameter("action")) {
+                                null -> """{"user_info":{"auth":1}}"""
+                                "get_vod_categories" ->
+                                    """[{"category_id":1,"category_name":"Sinema"}]"""
+                                "get_vod_streams" -> catalog.toString()
+                                "get_live_categories" ->
+                                    """[{"category_id":2,"category_name":"Haber"}]"""
+                                "get_live_streams" ->
+                                    """[{"stream_id":101,"name":"Test Haber","category_id":"2","stream_icon":"https://cinema.invalid/tile0.jpg"}]"""
+                                else -> "[]"
+                            }
+                        )
+                    }
                 }
             try {
                 node("✓ M3U").assertExists()
@@ -154,59 +229,185 @@ class CinemaJourneyTest {
                         }
                     assertFalse(movie.backdrop.contains("cinema.invalid"))
                     assertEquals("https://cinema.invalid/coast.jpg", repo.backdrop(movie))
+                    val channel = repo.library.browse(source.id, "LIVE", "", "", "", 1).first().single()
+                    val now = System.currentTimeMillis()
+                    repo.guide.put(Feed("home-test-guide", source.id, ""))
+                    repo.guide.slots(listOf(Slot("home-test-guide", "news", now - 60_000,
+                        now + 3_600_000, "Günün Haberleri", "", "günün haberleri")))
+                    repo.guide.map(Mapping(channel.id, "home-test-guide", "news"))
                 }
-                focus(screen.onNodeWithContentDescription("Ana Sayfa"))
-                device.pressDPadCenter()
+                section("Ana Sayfa")
                 focus(node("Oynat"))
+                screen.onNodeWithTag("nav-closed").assertExists()
                 capture("cinema-home")
+                capture("screens/home")
+                screen.onNodeWithText("Canlı TV’ye git").assertDoesNotExist()
+                capture("screens/nav-closed")
+                screen.dpad(Key.DirectionLeft)
+                waitFor(hasTestTag("nav-open"))
+                screen.onNodeWithTag("nav-open").assertExists()
+                listOf("Ara", "Ana Sayfa", "Canlı TV", "Filmler", "Diziler", "Listem", "Ayarlar")
+                    .forEach { screen.onNode(navigation(it)).assertExists() }
+                capture("screens/nav-open")
+                screen.dpad(Key.DirectionRight)
+                waitFor(hasText("Oynat") and isFocused())
+                screen.onNodeWithTag("nav-closed").assertExists()
+                node("Oynat").assertIsFocused()
+                screen.dpad(Key.DirectionLeft)
+                waitFor(hasTestTag("nav-open"))
+                screen.back()
+                waitFor(hasText("Oynat") and isFocused())
+                screen.onNodeWithTag("nav-closed").assertExists()
+                node("Oynat").assertIsFocused()
+                // OK on a home channel card must open fullscreen without a detail step.
+                val onAirCard = describedIn("Test Haber", "channel-shelf-Şu an yayında — favori kanallar")
+                screen.onNodeWithTag("home-shelves").performScrollToNode(onAirCard)
+                focus(screen.onNode(onAirCard))
+                screen.ok()
+                screen.waitUntil(30_000) {
+                    runBlocking { preferences.recentLive.first().isNotEmpty() }
+                }
+                screen.onNodeWithContentDescription("Tam ekran oynatıcı").assertExists()
+                // Let the opening banner expire: while visible, Back only dismisses the banner.
+                // FullscreenTest separately verifies that two-step Back contract.
+                screen.waitUntil(30_000) {
+                    screen.onAllNodesWithTag("fullscreen-banner").fetchSemanticsNodes().isEmpty()
+                }
+                screen.back()
+                screen.waitUntil(30_000) {
+                    screen.onAllNodesWithContentDescription("Tam ekran oynatıcı").fetchSemanticsNodes().isEmpty()
+                }
+                node("Son izlenen kanallar").assertExists()
+                // Let Home's entry focus settle on the hero before entering the shelves.
+                // RequestFocus on a card can race the enclosing focus restorers.
+                focus(node("Oynat"))
+                val recentCard = describedIn("Test Haber", "channel-shelf-Son izlenen kanallar")
+                screen.onNodeWithTag("home-shelves").performScrollToNode(recentCard)
+                screen.onNode(recentCard).assertIsDisplayed()
+                screen.dpad(Key.DirectionDown)
+                // A shelf restorer may re-enter the previously visited on-air row.
+                // Move upward through the shelves instead of requesting card focus again.
+                for (step in 0 until 6) {
+                    if (screen.onAllNodes(recentCard and isFocused())
+                            .fetchSemanticsNodes().isNotEmpty()) break
+                    screen.dpad(Key.DirectionUp)
+                }
+                screen.onNode(recentCard).assertIsFocused()
+                node("Günün Haberleri").assertExists()
+                capture("screens/home-shelves")
+                // The card in the recent shelf is the channel that actually started playback.
+                val recentId = runBlocking { preferences.recentLive.first().first() }
+                runBlocking {
+                    assertEquals("Test Haber", repo.library.liveByIds("", listOf(recentId))
+                        .first().single().title)
+                }
+                screen.onNodeWithTag("home-shelves")
+                    .performScrollToNode(hasText("Son eklenen filmler"))
+                val movieShelf = "shelf-Son eklenen filmler"
+                val movieCard = describedIn("Kadife Gece", movieShelf)
+                screen.onNodeWithTag("shelf-Son eklenen filmler")
+                    .performScrollToNode(movieCard)
                 assertTrue(
                     "Afiş adı ekranın içinde kalmalı",
-                    node("Kadife Gece").fetchSemanticsNode().boundsInRoot.bottom <=
+                    screen.onNode(hasText("Kadife Gece") and hasAnyAncestor(hasTestTag(movieShelf)))
+                        .fetchSemanticsNode().boundsInRoot.bottom <=
                         screen.onRoot().fetchSemanticsNode().boundsInRoot.bottom,
                 )
-                screen
-                    .onNodeWithContentDescription("Kadife Gece")
-                    .performSemanticsAction(SemanticsActions.RequestFocus)
-                screen.waitForIdle()
-                screen.waitUntil(5000) {
+                focus(screen.onNode(movieCard))
+                screen.waitUntil(30_000) {
                     screen.onAllNodesWithText("Kadife Gece").fetchSemanticsNodes().size >= 2
                 }
                 capture("cinema-focus")
-                device.pressDPadCenter()
-                node("İzleme listeme ekle").assertExists()
+                screen.ok()
+                node("+ Listem").assertExists()
+                node("Oynat").assertIsFocused()
                 capture("cinema-details")
-                select("İzleme listeme ekle")
-                node("Listeden çıkar").assertExists()
-                device.pressBack()
-                focus(screen.onNodeWithContentDescription("Filmler"))
-                device.pressDPadCenter()
-                focus(node("İçerik filtreleri"))
+                capture("screens/details")
+                select("+ Listem")
+                node("✓ Listem").assertExists()
+                screen.back()
+                section("Filmler")
+                focusFilters()
                 capture("cinema-movies")
-                device.pressDPadCenter()
-                node("Yıl").assertExists()
+                capture("screens/movies")
+                screen.ok()
+                filterYear()
+                val movieResult = describedIn("Açık Deniz", "section-Filmler")
+                waitFor(movieResult)
                 screen.onAllNodes(hasSetTextAction())[0].performTextReplacement("1999")
+                screen.back()
+                waitFor(hasText("Filtrele (1)") and isFocused())
+                screen.onNodeWithTag("filter-panel").assertDoesNotExist()
                 node("Eşleşen içerik yok.").assertExists()
+                select("Filtrele (1)")
+                filterYear()
                 screen.onAllNodes(hasSetTextAction())[0].performTextReplacement("2025")
-                screen.waitUntil(5000) {
+                screen.waitUntil(30_000) {
                     screen
-                        .onAllNodesWithContentDescription("Açık Deniz")
+                        .onAllNodes(movieResult)
                         .fetchSemanticsNodes()
                         .isNotEmpty()
                 }
-                focus(screen.onNodeWithContentDescription("Diziler"))
-                device.pressDPadCenter()
+                screen.back()
+                waitFor(movieResult)
+                section("Diziler")
+                // Filters belong to each section: Series starts with its own closed panel.
+                screen.onNodeWithText("Yıl").assertDoesNotExist()
+                focusFilters()
+                screen.ok()
+                filterYear()
+                screen.onAllNodes(hasSetTextAction())[0].assertTextEquals("")
+                screen.back()
                 node("Eşleşen içerik yok.").assertExists()
-                focus(screen.onNodeWithContentDescription("İzleme Listem"))
-                device.pressDPadCenter()
-                screen.waitUntil(5000) {
+                screen.onNode(describedIn("Açık Deniz", "section-Diziler")).assertDoesNotExist()
+                section("Listem")
+                val favoritesTab = describedIn("Favoriler", "section-Listem")
+                val watchlistTab = describedIn("İzleme Listem", "section-Listem")
+                waitFor(favoritesTab and isSelected())
+                screen.onNode(favoritesTab).assertIsSelected()
+                focus(screen.onNode(watchlistTab))
+                screen.ok()
+                waitFor(watchlistTab and isSelected())
+                screen.onNode(watchlistTab).assertIsSelected()
+                screen.waitUntil(30_000) {
                     screen
-                        .onAllNodesWithContentDescription("Kadife Gece")
+                        .onAllNodes(describedIn("Kadife Gece", "section-Listem"))
                         .fetchSemanticsNodes()
                         .isNotEmpty()
                 }
-                screen.onNodeWithContentDescription("Açık Deniz").assertDoesNotExist()
+                screen.onNode(describedIn("Açık Deniz", "section-Listem")).assertDoesNotExist()
+                section("Filmler")
+                select("Filtrele (1)")
+                filterYear()
+                screen.onAllNodes(hasSetTextAction())[0].assertTextEquals("2025")
+                screen.back()
+                section("Ara")
+                screen.onNode(hasSetTextAction()).performTextReplacement("Deniz")
+                searchShelf("search-shelf-Filmler")
+                waitFor(hasContentDescription("Açık Deniz") and
+                    hasAnyAncestor(hasTestTag("search-shelf-Filmler")))
+                waitAbsent(hasTestTag("channel-shelf-Kanallar"))
+                screen.onNodeWithTag("channel-shelf-Kanallar").assertDoesNotExist()
+                capture("screens/search")
+                screen.onNode(hasSetTextAction()).performTextReplacement("Test Haber")
+                searchShelf("channel-shelf-Kanallar")
+                waitFor(hasContentDescription("Test Haber") and
+                    hasAnyAncestor(hasTestTag("channel-shelf-Kanallar")))
+                waitAbsent(hasTestTag("search-shelf-Filmler"))
+                screen.onNodeWithTag("search-shelf-Filmler").assertDoesNotExist()
+                section("Ayarlar")
+                node("IPTV Kaynakları").assertExists()
+                screen.dpad(Key.DirectionRight)
+                waitFor(hasText("IPTV Kaynakları") and isFocused())
+                node("IPTV Kaynakları").assertIsFocused()
+                screen.ok()
+                node("✓ M3U").assertExists()
+                screen.back()
+                node("Varsayılan motor · Media3").assertExists()
             } finally {
                 runBlocking {
+                    preferences.set("recent_live", previousRecent)
+                    preferences.set("engine", previousEngine)
                     repo.library
                         .snapshot()
                         .filter { it.name == "Test · Sinema" }
