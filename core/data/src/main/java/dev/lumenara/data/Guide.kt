@@ -143,6 +143,12 @@ interface GuideDao {
 
     @Query("DELETE FROM programmes WHERE feed=:feed") fun clear(feed: String)
 
+    @Query("DELETE FROM programmes WHERE feed=:feed AND (end<=:from OR start>=:until)")
+    fun pruneWindow(feed: String, from: Long, until: Long)
+
+    @Query("SELECT EXISTS(SELECT 1 FROM programmes WHERE feed=:feed AND (end<=:from OR start>=:until))")
+    fun hasOutsideWindow(feed: String, from: Long, until: Long): Boolean
+
     @Query("DELETE FROM epgNames WHERE feed=:feed") fun clearNames(feed: String)
 
     @Query("SELECT * FROM feeds WHERE source=:source") suspend fun feeds(source: String): List<Feed>
@@ -166,25 +172,51 @@ interface GuideDao {
     ): Flow<List<Slot>>
 }
 
-internal fun populateGuide(db: LibraryDb, feed: Feed, input: java.io.InputStream) {
+internal const val GUIDE_PAST_HOURS = 12L
+internal const val GUIDE_FUTURE_DAYS = 3L
+
+internal fun guideWindow(now: Long) =
+    (now - java.util.concurrent.TimeUnit.HOURS.toMillis(GUIDE_PAST_HOURS)) to
+        (now + java.util.concurrent.TimeUnit.DAYS.toMillis(GUIDE_FUTURE_DAYS))
+
+// Count all valid programmes so an otherwise valid feed outside the window can replace old data.
+internal fun readGuide(input: java.io.InputStream, now: Long, channel: (String, String) -> Unit, emit: (Programme) -> Unit) {
+    readGuide(input, now, channel, {}, emit)
+}
+
+private fun readGuide(input: java.io.InputStream, now: Long, channel: (String, String) -> Unit,
+    checkActive: () -> Unit, emit: (Programme) -> Unit) {
+    val (from, until) = guideWindow(now)
+    var total = 0
+    XmlTv.read(input, channel) { row ->
+        checkActive()
+        if (++total > 1_000_000) throw SourceFailure("Rehber program sınırını aştı.")
+        if (row.end > from && row.start < until) emit(row)
+    }
+    if (total == 0) throw SourceFailure("Rehberde geçerli program bulunamadı.")
+}
+
+internal fun populateGuide(db: LibraryDb, feed: Feed, input: java.io.InputStream, now: Long = System.currentTimeMillis(),
+    checkActive: () -> Unit = {}) {
     val dao = db.guide()
     dao.put(feed)
     dao.clear(feed.id)
     dao.clearNames(feed.id)
     val names = ArrayList<GuideName>(128)
     val slots = ArrayList<Slot>(128)
-    var total = 0
-    XmlTv.read(
+    readGuide(
         input,
+        now,
         { id, name ->
+            checkActive()
             names += GuideName(feed.id, id, searchable(name))
             if (names.size == 128) {
                 dao.put(names)
                 names.clear()
             }
         },
+        checkActive,
         { row ->
-            if (++total > 1_000_000) throw SourceFailure("Rehber program sınırını aştı.")
             slots +=
                 Slot(
                     feed.id,
@@ -201,7 +233,6 @@ internal fun populateGuide(db: LibraryDb, feed: Feed, input: java.io.InputStream
             }
         },
     )
-    if (total == 0) throw SourceFailure("Rehberde geçerli program bulunamadı.")
     dao.put(names)
     dao.slots(slots)
 }

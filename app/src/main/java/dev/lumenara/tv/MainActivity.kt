@@ -10,6 +10,16 @@ import dev.lumenara.design.LumenaraTheme
 class MainActivity : ComponentActivity() {
     private val library: LibraryModel by viewModels()
 
+    override fun onStart() {
+        super.onStart()
+        dev.lumenara.data.RefreshGate.foreground = true
+    }
+
+    override fun onStop() {
+        dev.lumenara.data.RefreshGate.foreground = false
+        super.onStop()
+    }
+
     override fun onSearchRequested(): Boolean {
         library.remoteSearch.value++
         return true
