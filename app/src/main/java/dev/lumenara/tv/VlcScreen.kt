@@ -10,6 +10,7 @@ import androidx.compose.ui.*
 import androidx.compose.ui.focus.*
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.*
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.*
@@ -51,6 +52,7 @@ internal fun VlcScreen(
     val numbers = if (item.kind == "LIVE") rememberLiveNumberControl(model, item.source, select) else null
     val retry = rememberLiveRetry(item.id)
     val context = LocalContext.current
+    val composeView = LocalView.current
     val focus = remember { FocusRequester() }
     var layout by remember { mutableStateOf<VLCVideoLayout?>(null) }
     var player by remember { mutableStateOf<MediaPlayer?>(null) }
@@ -59,11 +61,15 @@ internal fun VlcScreen(
     var delayMs by remember { mutableLongStateOf(0) }
     LaunchedEffect(layout, panel, fullscreen.guide, fullscreen.finished, player, retry.generation, retry.reconnecting) {
         if (!panel && !fullscreen.guide && !fullscreen.finished) {
-            focus.requestFocus()
+            if (!composeView.hasFocus()) composeView.requestFocus()
+            val initialGranted = focus.requestFocus()
+            android.util.Log.d("LumenaraFocus", "VLC trigger=layout/panel/fullscreen/retry initialGranted=$initialGranted viewHasFocus=${composeView.hasFocus()}")
             if (layout != null) {
                 // Reclaim Compose focus after native reattachment and reconnect badge removal.
                 withFrameNanos { }
-                focus.requestFocus()
+                if (!composeView.hasFocus()) composeView.requestFocus()
+                val granted = focus.requestFocus()
+                android.util.Log.d("LumenaraFocus", "VLC trigger=reattach/retry granted=$granted viewHasFocus=${composeView.hasFocus()}")
             }
         }
     }
@@ -200,6 +206,11 @@ internal fun VlcScreen(
                     isFocusable = false
                     isFocusableInTouchMode = false
                 }.also { view -> layout = view }
+            },
+            update = {
+                it.descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS
+                it.isFocusable = false
+                it.isFocusableInTouchMode = false
             },
             modifier = Modifier.fillMaxSize().focusProperties { canFocus = false },
         )

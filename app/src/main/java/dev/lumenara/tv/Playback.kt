@@ -8,6 +8,7 @@ import androidx.compose.foundation.lazy.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.focus.*
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.stateDescription
@@ -185,10 +186,15 @@ internal fun Video(
                 PlayerView(it).apply {
                     useController = false
                     isFocusable = false
+                    isFocusableInTouchMode = false
+                    descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS
                     keepScreenOn = true
                 }
             },
             update = {
+                it.isFocusable = false
+                it.isFocusableInTouchMode = false
+                it.descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS
                 it.player = player
                 it.subtitleView?.setFractionalTextSize(
                     when (size) {
@@ -258,6 +264,7 @@ internal fun Playback(
     var failed by remember(item.id) { mutableStateOf(false) }
     var engine by remember { mutableStateOf<ExoPlayer?>(null) }
     val focus = remember { FocusRequester() }
+    val composeView = LocalView.current
     val live = item.kind == "LIVE"
     val fullscreen = rememberFullscreenState(item)
     var subtitle by remember { mutableStateOf<MediaItem.SubtitleConfiguration?>(null) }
@@ -304,7 +311,9 @@ internal fun Playback(
         if (!panel && !fullscreen.guide && !fullscreen.finished && !failed) {
             // PlayerView updates and reconnect badge removal must finish before reclaiming focus.
             withFrameNanos { }
-            focus.requestFocus()
+            if (!composeView.hasFocus()) composeView.requestFocus()
+            val granted = focus.requestFocus()
+            android.util.Log.d("LumenaraFocus", "Media3 trigger=engine/retry/fullscreen granted=$granted viewHasFocus=${composeView.hasFocus()}")
         }
     }
     Box(

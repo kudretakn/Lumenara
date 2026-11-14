@@ -51,7 +51,8 @@ class FullscreenTest {
                 }
             } catch (e: ComposeTimeoutException) {
                 throw AssertionError(
-                    "Beklenen: $matcher, present=$present\n" + screen.onRoot().printToString(), e
+                    "Beklenen: $matcher, present=$present\n" + screen.onRoot().printToString() +
+                        "\ncurrentFocus=${screen.activity.currentFocus?.javaClass?.name}", e
                 )
             }
         }

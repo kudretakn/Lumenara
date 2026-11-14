@@ -31,7 +31,14 @@ class LiveComfortTest {
     @Test fun vlcReconnectsAndSupportsNumberAndPreviousChannel() = journey("VLC")
 
     private fun await(matcher: SemanticsMatcher, present: Boolean = true) {
-        screen.waitUntil(30_000) { screen.onAllNodes(matcher).fetchSemanticsNodes().isNotEmpty() == present }
+        try {
+            screen.waitUntil(30_000) { screen.onAllNodes(matcher).fetchSemanticsNodes().isNotEmpty() == present }
+        } catch (e: ComposeTimeoutException) {
+            throw AssertionError(
+                "Beklenen: $matcher, present=$present\n" + screen.onRoot().printToString() +
+                    "\ncurrentFocus=${screen.activity.currentFocus?.javaClass?.name}", e
+            )
+        }
     }
 
     private fun journey(engine: String) {
