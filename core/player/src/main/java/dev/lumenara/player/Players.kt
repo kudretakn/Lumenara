@@ -19,6 +19,7 @@ fun createPlayer(
     audioFocus: Boolean = true,
     profile: String = "Dengeli",
     subtitleUri: android.net.Uri? = null,
+    automaticRetries: Boolean = true,
 ): ExoPlayer {
     val control = DefaultLoadControl.Builder()
     when (profile) {
@@ -42,7 +43,14 @@ fun createPlayer(
         }
     return ExoPlayer.Builder(context)
         .setLoadControl(control.build())
-        .setMediaSourceFactory(DefaultMediaSourceFactory(requests))
+        .setMediaSourceFactory(DefaultMediaSourceFactory(requests).apply {
+            if (!automaticRetries) setLoadErrorHandlingPolicy(
+                object : androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy(0) {
+                    override fun getRetryDelayMsFor(info: androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo): Long =
+                        androidx.media3.common.C.TIME_UNSET
+                }
+            )
+        })
         .build()
         .apply { setAudioAttributes(AudioAttributes.DEFAULT, audioFocus) }
 }

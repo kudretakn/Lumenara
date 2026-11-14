@@ -13,6 +13,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -43,6 +44,9 @@ internal fun LiveScreen(
     returnToChannel: String? = null,
     onChannelFocusRestored: () -> Unit = {},
 ) {
+    var numberSource by remember(source) { mutableStateOf(source) }
+    val numbers = rememberLiveNumberControl(model, numberSource, select = play)
+    val channelNumbers = liveChannelNumbers(model, source)
     var timeline by rememberSaveable { mutableStateOf(false) }
     var category by rememberSaveable(source) { mutableStateOf("all") }
     var query by rememberSaveable { mutableStateOf("") }
@@ -108,7 +112,7 @@ internal fun LiveScreen(
         return
     }
     val preview = rows.firstOrNull { it.id == previewId }
-    BoxWithConstraints(Modifier.fillMaxSize().testTag("live-screen")) {
+    BoxWithConstraints(Modifier.fillMaxSize().testTag("live-screen").onPreviewKeyEvent { numbers.key(it.nativeKeyEvent) }) {
         // At 960 dp, safe areas and the navigation rail leave 816 dp for all three columns.
         val categoryWidth = minOf(200.dp, maxWidth * .22f)
         val channelWidth = minOf(420.dp, maxWidth * .44f)
@@ -145,7 +149,7 @@ internal fun LiveScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     if (rows.isEmpty()) item { Text("Eşleşen içerik yok.", color = Ink.muted) }
-                    itemsIndexed(rows, key = { _, item -> item.id }) { index, item ->
+                    items(rows, key = { it.id }) { item ->
                         val restoreFocus = item.id == returnToChannel
                         if (restoreFocus) LaunchedEffect(item.id) {
                             // Let the enclosing page finish its initial content focus request.
@@ -153,8 +157,8 @@ internal fun LiveScreen(
                             returnFocus.requestFocus()
                             onChannelFocusRestored()
                         }
-                        LiveChannelRow(model, item, index + 1, now,
-                            { play(item, rows) }, { open(item) }, { focusedId = item.id },
+                        LiveChannelRow(model, item, channelNumbers[item.id] ?: 1, now,
+                            { play(item, rows) }, { open(item) }, { focusedId = item.id; numberSource = item.source },
                             if (restoreFocus) Modifier.focusRequester(returnFocus) else Modifier)
                     }
                     if (category != "recent" && rows.size >= limit) item {
@@ -186,6 +190,7 @@ internal fun LiveScreen(
                 }
             }
         }
+        NumberEntry(numbers)
     }
 }
 

@@ -8,6 +8,7 @@ import androidx.compose.foundation.lazy.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.focus.*
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.stateDescription
@@ -44,6 +45,8 @@ internal fun Video(
     initial: Long = -1,
     decoderFailure: (Long) -> Unit = {},
     subtitle: MediaItem.SubtitleConfiguration? = null,
+    failure: (Boolean) -> Unit = {},
+    liveRetry: LiveRetry? = null,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val owner = LocalLifecycleOwner.current
@@ -51,9 +54,12 @@ internal fun Video(
     if (!lifecycle.isAtLeast(Lifecycle.State.STARTED)) return
     val currentReady by rememberUpdatedState(ready)
     val currentEnded by rememberUpdatedState(ended)
-    var playbackActive by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf("") }
-    var attempt by remember { mutableIntStateOf(0) }
+    var playbackActive by remember(item.id) { mutableStateOf(false) }
+    var error by remember(item.id) { mutableStateOf("") }
+    val retry = liveRetry ?: rememberLiveRetry(item.id, preview)
+    val attempt = retry.generation
+    val currentFailure by rememberUpdatedState(failure)
+    LaunchedEffect(error) { currentFailure(error.isNotEmpty()) }
     var player by remember { mutableStateOf<ExoPlayer?>(null) }
     var resume by remember { mutableLongStateOf(initial) }
     val size by remember { model.prefs.text("size", "Orta") }.collectAsStateWithLifecycle("Orta")
@@ -81,6 +87,7 @@ internal fun Video(
                         !multi,
                         model.prefs.text("buffer", "Dengeli").first(),
                         subtitle?.uri,
+                        automaticRetries = item.kind != "LIVE",
                     )
                 val language = model.prefs.text("sub", "Kapalı").first()
                 engine.trackSelectionParameters =
@@ -100,6 +107,7 @@ internal fun Video(
                     object : Player.Listener {
                         override fun onIsPlayingChanged(isPlaying: Boolean) {
                             playbackActive = isPlaying
+                            if (isPlaying) { retry.playing(); error = "" }
                             if (isPlaying && !preview && !recorded) {
                                 recorded = true
                                 model.started(item)
@@ -107,10 +115,20 @@ internal fun Video(
                         }
 
                         override fun onPlayerError(cause: PlaybackException) {
-                            error = playbackMessage(cause)
                             model.diagnostic("Media3 ${cause.errorCode}")
-                            if (cause.errorCode in 4001..4006)
-                                decoderFailure(engine.currentPosition)
+                            when {
+                                cause.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW -> {
+                                    engine.seekToDefaultPosition()
+                                    engine.prepare()
+                                }
+                                cause.errorCode in 4000..4999 -> {
+                                    retry.playing()
+                                    error = playbackMessage(cause)
+                                    decoderFailure(engine.currentPosition)
+                                }
+                                item.kind == "LIVE" && cause.errorCode in 2000..3999 && retry.failed() -> Unit
+                                else -> { retry.stop(); error = playbackMessage(cause) }
+                            }
                         }
 
                         override fun onPlaybackStateChanged(state: Int) {
@@ -136,7 +154,8 @@ internal fun Video(
                         }
                     android.util.Log.w("LumenaraPlayback", "${e.javaClass.simpleName} · $frames")
                 }
-                error = "Yayın adresi açılamadı. Kaynağı yenileyin."
+                if (item.kind != "LIVE" || !retry.failed())
+                    error = "Yayın adresi açılamadı. Kaynağı yenileyin."
             }
         }
     }
@@ -167,10 +186,15 @@ internal fun Video(
                 PlayerView(it).apply {
                     useController = false
                     isFocusable = false
+                    isFocusableInTouchMode = false
+                    descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS
                     keepScreenOn = true
                 }
             },
             update = {
+                it.isFocusable = false
+                it.isFocusableInTouchMode = false
+                it.descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS
                 it.player = player
                 it.subtitleView?.setFractionalTextSize(
                     when (size) {
@@ -194,11 +218,16 @@ internal fun Video(
             },
             modifier = Modifier.fillMaxSize(),
         )
-        if (error.isNotEmpty())
+        if (!preview) Reconnecting(retry)
+        if (error.isNotEmpty()) {
+            val retryFocus = remember { FocusRequester() }
+            if (!preview) LaunchedEffect(error) { retryFocus.requestFocus() }
             Column(Modifier.align(Alignment.Center).background(Ink.secondary).padding(12.dp)) {
                 Text(error, maxLines = 3)
-                if (!preview) Button(onClick = { attempt++ }) { Text("Yeniden dene") }
+                if (!preview) Button(onClick = { error = ""; retry.manual() },
+                    modifier = Modifier.focusRequester(retryFocus)) { Text("Yeniden dene") }
             }
+        }
     }
 }
 
@@ -232,8 +261,10 @@ internal fun Playback(
         )
         return
     }
+    var failed by remember(item.id) { mutableStateOf(false) }
     var engine by remember { mutableStateOf<ExoPlayer?>(null) }
     val focus = remember { FocusRequester() }
+    val composeView = LocalView.current
     val live = item.kind == "LIVE"
     val fullscreen = rememberFullscreenState(item)
     var subtitle by remember { mutableStateOf<MediaItem.SubtitleConfiguration?>(null) }
@@ -271,9 +302,19 @@ internal fun Playback(
         }
         return
     }
+    val numbers = if (live) rememberLiveNumberControl(model, item.source, item.id) { channel, rows ->
+        changeGroup(rows); select(channel)
+    } else null
+    val retry = rememberLiveRetry(item.id)
     BackHandler { if (panel) panel = false else if (!fullscreen.dismiss()) back() }
-    LaunchedEffect(panel, fullscreen.guide, fullscreen.finished) {
-        if (!panel && !fullscreen.guide && !fullscreen.finished) focus.requestFocus()
+    LaunchedEffect(panel, fullscreen.guide, fullscreen.finished, failed, engine, retry.generation, retry.reconnecting) {
+        if (!panel && !fullscreen.guide && !fullscreen.finished && !failed) {
+            // PlayerView updates and reconnect badge removal must finish before reclaiming focus.
+            withFrameNanos { }
+            if (!composeView.hasFocus()) composeView.requestFocus()
+            val granted = focus.requestFocus()
+            android.util.Log.d("LumenaraFocus", "Media3 trigger=engine/retry/fullscreen granted=$granted viewHasFocus=${composeView.hasFocus()}")
+        }
     }
     Box(
         Modifier.fillMaxSize()
@@ -283,9 +324,10 @@ internal fun Playback(
             .onPreviewKeyEvent {
                 val key = it.nativeKeyEvent
                 val code = key.keyCode
-                if (!panel && fullscreen.key(key, live, ::move,
+                if (!panel && !failed && fullscreen.key(key, live, ::move,
                         { panel = true },
-                        { delta -> engine?.let { p -> p.seekTo((p.currentPosition + delta).coerceAtLeast(0)) } })) {
+                        { delta -> engine?.let { p -> p.seekTo((p.currentPosition + delta).coerceAtLeast(0)) } },
+                        { event -> numbers?.key(event) == true })) {
                     true
                 } else if (
                     code in
@@ -314,6 +356,8 @@ internal fun Playback(
             item,
             Modifier.fillMaxSize(),
             ready = { engine = it },
+            failure = { failed = it },
+            liveRetry = retry,
             initial = transferred,
             subtitle = subtitle,
             decoderFailure = { pos ->
@@ -334,6 +378,7 @@ internal fun Playback(
             { engine?.currentPosition ?: 0 }, { engine?.duration ?: 0 },
             if (item.kind == "EPISODE" && group.getOrNull(group.indexOfFirst { it.id == item.id } + 1) != null)
                 ({ move(1) }) else null)
+        numbers?.let { NumberEntry(it) }
         if (panel) {
             val candidates by
                 remember(item.source, category, channelQuery, limit) {

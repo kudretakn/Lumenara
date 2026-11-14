@@ -32,6 +32,7 @@ data class Listing(
     val introStartMs: Long = -1,
     val introEndMs: Long = -1,
     val backdrop: String = "",
+    val tvgChno: String = "",
 )
 
 fun canSkipIntro(start: Long, end: Long, position: Long, duration: Long) =
@@ -104,6 +105,7 @@ object Playlist {
                             fields["tvg-id"].orEmpty(),
                             kind,
                             fields["tvg-logo"].orEmpty(),
+                            tvgChno = fields["tvg-chno"].orEmpty(),
                             language = fields["tvg-language"].orEmpty(),
                             archive = fields["catchup-source"].orEmpty(),
                             days = fields["catchup-days"]?.toIntOrNull()?.coerceIn(0, 365) ?: 0,

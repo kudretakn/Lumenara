@@ -23,12 +23,9 @@ import okio.Buffer
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
-import org.junit.rules.RuleChain
 
 class FullscreenTest {
-    private val composeRule = createAndroidComposeRule<MainActivity>()
-    @get:Rule val rules: RuleChain = RuleChain.outerRule(RetryRule()).around(composeRule)
-    private val screen get() = composeRule
+    @get:Rule val screen = createAndroidComposeRule<MainActivity>()
 
     @Test fun media3MiniGuideChangesChannelWithoutLeavingFullscreen() = journey("Media3", 10_000)
     @Test fun vlcMiniGuideUsesTheSameRemoteContract() = journey("VLC", 2)
@@ -54,7 +51,8 @@ class FullscreenTest {
                 }
             } catch (e: ComposeTimeoutException) {
                 throw AssertionError(
-                    "Beklenen: $matcher, present=$present\n" + screen.onRoot().printToString(), e
+                    "Beklenen: $matcher, present=$present\n" + screen.onRoot().printToString() +
+                        "\ncurrentFocus=${screen.activity.currentFocus?.javaClass?.name}", e
                 )
             }
         }
