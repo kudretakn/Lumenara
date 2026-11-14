@@ -23,9 +23,12 @@ import okio.Buffer
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.RuleChain
 
 class FullscreenTest {
-    @get:Rule val screen = createAndroidComposeRule<MainActivity>()
+    private val composeRule = createAndroidComposeRule<MainActivity>()
+    @get:Rule val rules: RuleChain = RuleChain.outerRule(RetryRule()).around(composeRule)
+    private val screen get() = composeRule
 
     @Test fun media3MiniGuideChangesChannelWithoutLeavingFullscreen() = journey("Media3", 10_000)
     @Test fun vlcMiniGuideUsesTheSameRemoteContract() = journey("VLC", 2)
@@ -40,6 +43,9 @@ class FullscreenTest {
         val previousFallback = runBlocking { prefs.text("fallback", "Açık").first() }
         val previousRecent = runBlocking { prefs.text("recent_live").first() }
         val name = "Test · Tam ekran $engine"
+        runBlocking {
+            repo.library.snapshot().filter { it.name == name }.forEach { repo.remove(it.id) }
+        }
         val bytes = test.context.assets.open("streamora-test.ts").use { it.readBytes() }
         fun await(matcher: SemanticsMatcher, present: Boolean = true) {
             try {

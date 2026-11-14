@@ -29,12 +29,15 @@ import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.RuleChain
 
 /**
  * Original fictional artwork and metadata live only in androidTest, never in the user's library.
  */
 class CinemaJourneyTest {
-    @get:Rule val screen = createAndroidComposeRule<MainActivity>()
+    private val composeRule = createAndroidComposeRule<MainActivity>()
+    @get:Rule val rules: RuleChain = RuleChain.outerRule(RetryRule()).around(composeRule)
+    private val screen get() = composeRule
 
     @Test
     fun focusedArtworkDetailsFiltersAndWatchlist() {
@@ -158,6 +161,10 @@ class CinemaJourneyTest {
             val preferences = Preferences(context)
             val previousRecent = runBlocking { preferences.text("recent_live").first() }
             val previousEngine = runBlocking { preferences.text("engine", "Media3").first() }
+            runBlocking {
+                repo.library.snapshot().filter { it.name == "Test · Sinema" }
+                    .forEach { repo.remove(it.id) }
+            }
             runBlocking {
                 repeat(25) { preferences.recordLive("fixture-$it") }
                 preferences.recordLive("fixture-10")

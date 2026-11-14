@@ -27,6 +27,7 @@ awk -F= '
   /INSTRUMENTATION_STATUS_CODE: -2/ { print "FAIL  " cls "." name }
   /INSTRUMENTATION_STATUS_CODE: -3/ { print "SKIP  " cls "." name }
 ' "$out/instrument.txt" | tee "$out/summary.txt"
+grep 'StreamoraRetry' "$out/logcat.txt" | sed -n 's/.*RETRY \([^ ]*\).*/RETRIED  \1/p' | sort -u | tee -a "$out/summary.txt"
 grep -A4 'INSTRUMENTATION_STATUS: stack=' "$out/instrument.txt" | head -80
 
 if [ "$code" -eq 124 ]; then echo "Instrumentation timed out (last test above was still running)"; exit 1; fi

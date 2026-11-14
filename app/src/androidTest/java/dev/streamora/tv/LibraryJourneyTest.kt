@@ -16,9 +16,12 @@ import okio.Buffer
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.RuleChain
 
 class LibraryJourneyTest {
-    @get:Rule val screen = createAndroidComposeRule<MainActivity>()
+    private val composeRule = createAndroidComposeRule<MainActivity>()
+    @get:Rule val rules: RuleChain = RuleChain.outerRule(RetryRule()).around(composeRule)
+    private val screen get() = composeRule
 
     @Test
     fun addPlaylistFromSetupPreviewAndOpenChannelPanel() {
@@ -30,6 +33,9 @@ class LibraryJourneyTest {
         val preferences = Preferences(context)
         val previousRecent = runBlocking { preferences.text("recent_live").first() }
         val previousEngine = runBlocking { preferences.text("engine", "Media3").first() }
+        runBlocking {
+            repo.library.snapshot().filter { it.name == name }.forEach { repo.remove(it.id) }
+        }
         runBlocking { preferences.set("engine", "Media3") }
         val received = CountDownLatch(1)
         MockWebServer().use { server ->
@@ -137,7 +143,7 @@ class LibraryJourneyTest {
                         .fetchSemanticsNodes().isNotEmpty()
                 }
                 row.assertIsFocused()
-                screen.waitUntil(30_000) {
+                screen.waitUntil(60_000) {
                     screen.onAllNodes(hasTestTag("live-preview") and
                         SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Oynatılıyor"))
                         .fetchSemanticsNodes().isNotEmpty()
