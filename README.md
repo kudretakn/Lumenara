@@ -1,20 +1,22 @@
-# Streamora
+# Lumenara
 
-Streamora, kendi IPTV kaynağınızı Android TV veya Google TV kumandasıyla izlemeniz için hazırlanmış Türkçe bir uygulamadır. Android 8.0 ve üzerini destekler. İlk açılışta kaynak ekleme ekranı, katalog oluşturulduktan sonraki açılışlarda Ana Sayfa gösterilir.
+Lumenara, kendi IPTV kaynağınızı Android TV veya Google TV kumandasıyla izlemeniz için hazırlanmış Türkçe bir uygulamadır. Android 8.0 ve üzerini destekler. İlk açılışta kaynak ekleme ekranı, katalog oluşturulduktan sonraki açılışlarda Ana Sayfa gösterilir.
 
 ## TV’ye kurulum
 
-Kişisel kullanım için imzalı **Streamora-0.2.1-release.apk** dosyasını kullanın. Dosya proje klasöründeki `dist` dizinindedir. TV’de dosya yöneticisiyle açıp sistemin kurulum adımlarını izleyin. TV kurulum izni isterse kullandığınız dosya yöneticisi için izin verin.
+Kişisel kullanım için imzalı **Lumenara-0.2.1-release.apk** dosyasını kullanın. Dosya proje klasöründeki `dist` dizinindedir. TV’de dosya yöneticisiyle açıp sistemin kurulum adımlarını izleyin. TV kurulum izni isterse kullandığınız dosya yöneticisi için izin verin.
 
 ADB ile kurmak için TV’nin geliştirici seçeneklerinde hata ayıklamayı açın, bilgisayarın bağlantısını TV’de onaylayın ve proje klasöründe çalıştırın.
 
 ```powershell
 adb devices -l
-adb -s TV_SERI_NUMARASI install -r .\dist\Streamora-0.2.1-release.apk
-adb -s TV_SERI_NUMARASI shell am start -n dev.streamora.tv/.MainActivity
+adb -s TV_SERI_NUMARASI install -r .\dist\Lumenara-0.2.1-release.apk
+adb -s TV_SERI_NUMARASI shell am start -n dev.lumenara.tv/.MainActivity
 ```
 
-Debug sürümünün uygulama kimliği `dev.streamora.tv.debug` olarak ayrılmıştır. İki sürümün katalogları bağımsızdır.
+Uygulamanın 0.3.0 öncesi adı Streamora idi. 0.3.0 ile uygulama kimliği `dev.lumenara.tv` oldu; Streamora kurulumları bu sürümle güncellenmez, ayrı bir uygulama olarak kurulur.
+
+Debug sürümünün uygulama kimliği `dev.lumenara.tv.debug` olarak ayrılmıştır. İki sürümün katalogları bağımsızdır.
 
 ## Sinematik arayüz
 
@@ -35,7 +37,7 @@ Xtream kaynağının HTTPS `backdrop_path` görselleri saklanır. TMDB ayarlanı
 - **Canlı TV** ekranında kanal seçmek önizlemeyi başlatır. **Tam ekran** ile yayına geçin. OK paneli, uzun OK kanal işlemlerini açar. Yukarı/aşağı kanal değiştirir. Back önce paneli kapatır. Multi-view içinde odağı alan kanal seslidir, OK ile tam ekrana dönülür.
 - **Ayarlar** üzerinden varsayılan motoru, Media3 ses/altyazı dilini, tampon profilini, otomatik yenileme aralığını ve tanılamayı yönetebilirsiniz. Kaynak bağlantı sınırını sağlayıcınızın izin verdiği değere göre ayarlayın.
 - Xtream sağlayıcısı bölüm bilgilerinde açıkça `intro_start_ms` ve `intro_end_ms` alanlarını verirse, oynatıcı paneli yalnızca o aralıkta **İntroyu atla** seçeneğini gösterir. Her iki zamanın da gerçek bölüm süresine uyması gerekir.
-- TMDB bilgileri için kendi API Read Access Token değerinizi Ayarlar’da girin. Eşleştirme başlık, tür ve doğrulanabilir yıl ister. GitHub sürüm kontrolü için kendi herkese açık yayın deponuzu `sahip/depo` biçiminde girin.
+- TMDB bilgileri için kendi API Read Access Token değerinizi Ayarlar’da girin. Eşleştirme başlık, tür ve doğrulanabilir yıl ister. GitHub sürüm kontrolü için Ayarlar → GitHub deposu alanına `kudretakn/Lumenara-releases` girin (`sahip/depo` biçimi).
 
 ## Projeyi derleme
 
@@ -49,11 +51,11 @@ Android Studio’da `settings.gradle.kts` dosyasının bulunduğu klasörü aç�
 
 GitHub Actions, `main` dalına gönderimlerde ve pull request’lerde birim testlerini, lint’i ve debug derlemesini çalıştırır. Ardından Android TV API 36 emülatöründe cihaz testlerini yürütür; APK, test raporları ve ekran görüntüleri iş akışı artifact’ları olarak saklanır.
 
-Cihaz testleri bağlı bir Android TV veya Android TV AVD gerektirir. Varsayılan debug çıktısı `app/build/outputs/apk/debug/app-debug.apk`, imzalanacak release çıktısı `app/build/outputs/apk/release/app-release-unsigned.apk` konumundadır. Test APK’sında yerel sahte sağlayıcı ve Streamora ekranından oluşturulan iki saniyelik MP4 vardır.
+Cihaz testleri bağlı bir Android TV veya Android TV AVD gerektirir. Varsayılan debug çıktısı `app/build/outputs/apk/debug/app-debug.apk`, imzalanacak release çıktısı `app/build/outputs/apk/release/app-release-unsigned.apk` konumundadır. Test APK’sında yerel sahte sağlayıcı ve Lumenara ekranından oluşturulan iki saniyelik MP4 vardır.
 
 ## Kişisel imza ve sonraki sürümler
 
-Bu bilgisayarda oluşturulan PKCS#12 anahtarı ve DPAPI ile korunan parola, Windows kullanıcı profilinizin `.streamora\signing` klasöründedir. Sonraki release’i aynı Windows hesabında oluşturmak için:
+Bu bilgisayarda oluşturulan PKCS#12 anahtarı ve DPAPI ile korunan parola, Windows kullanıcı profilinizin `.lumenara\signing` klasöründedir. Sonraki release’i aynı Windows hesabında oluşturmak için:
 
 ```powershell
 .\gradlew.bat :app:assembleRelease
@@ -65,14 +67,14 @@ Betik mevcut anahtarı kullanır, APK v2/v3 imzasını denetler ve sonucu `dist`
 **Anahtarı yedekleyin.** DPAPI parolayı bu Windows hesabına bağlar. Taşınabilir yedek için aynı hesapta aşağıdaki komutlarla kişisel anahtarın ayrı bir kopyasını alın. `keytool` yeni yedek için sizden ayrı bir parola ister. Hedefi kendi güvenli yedekleme ortamınız olarak seçin. Bu parolayı parola yöneticinizde saklayın.
 
 ```powershell
-$keyDir = Join-Path $env:USERPROFILE '.streamora\signing'
+$keyDir = Join-Path $env:USERPROFILE '.lumenara\signing'
 $secure = (Get-Content -Raw (Join-Path $keyDir 'password.dpapi')) | ConvertTo-SecureString
 $credential = [System.Net.NetworkCredential]::new('', $secure)
-$env:STREAMORA_BACKUP_SOURCE = $credential.Password
+$env:LUMENARA_BACKUP_SOURCE = $credential.Password
 try {
-    keytool -importkeystore -srckeystore (Join-Path $keyDir 'streamora-personal.p12') -srcstoretype PKCS12 -srcstorepass:env STREAMORA_BACKUP_SOURCE -destkeystore 'X:\GuvenliYedek\streamora-yedek.p12' -deststoretype PKCS12
+    keytool -importkeystore -srckeystore (Join-Path $keyDir 'lumenara-personal.p12') -srcstoretype PKCS12 -srcstorepass:env LUMENARA_BACKUP_SOURCE -destkeystore 'X:\GuvenliYedek\lumenara-yedek.p12' -deststoretype PKCS12
 } finally {
-    Remove-Item Env:\STREAMORA_BACKUP_SOURCE
+    Remove-Item Env:\LUMENARA_BACKUP_SOURCE
     $secure.Dispose()
 }
 ```

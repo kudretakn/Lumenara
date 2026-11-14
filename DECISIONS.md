@@ -1,4 +1,4 @@
-# Teknik kararlar
+# Lumenara teknik kararları
 - Minimum API 26, derleme ve hedef API 36. Yerel JDK 17, SDK 36.0.0 ve Gradle 9.3.1 mevcut. AGP 9.1.0 yerleşik Kotlin desteği ile kullanılır.
 - TV Material 1.1.0 kumanda odağını ve seçili durumlarını sağlar. İlk sürüm uyumluluğu Gradle derlemesiyle kontrol edilir.
 - İlk açılış hızlı kuruluma, katalog oluşunca sonraki açılışlar ana sayfaya gider.

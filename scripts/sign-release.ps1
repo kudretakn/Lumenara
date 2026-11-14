@@ -3,8 +3,16 @@ param([switch]$CreateKey)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $project = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$keyDirectory = Join-Path $env:USERPROFILE '.streamora\signing'
-$keyFile = Join-Path $keyDirectory 'streamora-personal.p12'
+# Lumenara was called Streamora before 0.3.0. The personal key may still live in the old folder;
+# its alias inside the PKCS#12 file stays 'streamora' so every release keeps the same certificate.
+$keyDirectory = Join-Path $env:USERPROFILE '.lumenara\signing'
+$keyFile = Join-Path $keyDirectory 'lumenara-personal.p12'
+$legacyDirectory = Join-Path $env:USERPROFILE '.streamora\signing'
+if (-not (Test-Path $keyFile) -and (Test-Path (Join-Path $legacyDirectory 'streamora-personal.p12'))) {
+    $keyDirectory = $legacyDirectory
+    $keyFile = Join-Path $keyDirectory 'streamora-personal.p12'
+}
+$keyAlias = 'streamora'
 $passwordFile = Join-Path $keyDirectory 'password.dpapi'
 $unsigned = Join-Path $project 'app\build\outputs\apk\release\app-release-unsigned.apk'
 $dist = Join-Path $project 'dist'
@@ -35,25 +43,25 @@ if (-not (Test-Path -LiteralPath $passwordFile)) {
 $protected = (Get-Content -Raw -LiteralPath $passwordFile) | ConvertTo-SecureString
 $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($protected)
 try {
-    $env:STREAMORA_SIGN_PASS = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)
+    $env:LUMENARA_SIGN_PASS = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)
     if (-not (Test-Path -LiteralPath $keyFile)) {
         if (-not $CreateKey) { throw 'İmzalama anahtarı bulunamadı. Güncelleme için özgün anahtarı geri yükleyin.' }
-        & $keyTool -genkeypair -alias streamora -keystore $keyFile -storetype PKCS12 -keyalg RSA -keysize 3072 -validity 10000 -dname 'CN=Streamora Personal Release' -storepass:env STREAMORA_SIGN_PASS -keypass:env STREAMORA_SIGN_PASS
+        & $keyTool -genkeypair -alias $keyAlias -keystore $keyFile -storetype PKCS12 -keyalg RSA -keysize 3072 -validity 10000 -dname 'CN=Lumenara Personal Release' -storepass:env LUMENARA_SIGN_PASS -keypass:env LUMENARA_SIGN_PASS
         if ($LASTEXITCODE -ne 0) { throw 'Kişisel anahtar oluşturulamadı.' }
     }
     New-Item -ItemType Directory -Force -Path $dist | Out-Null
     $metadata = Get-Content -Raw -LiteralPath (Join-Path (Split-Path $unsigned) 'output-metadata.json') | ConvertFrom-Json
     $version = $metadata.elements[0].versionName
-    $outputFile = Join-Path $dist "Streamora-$version-release.apk"
-    $staging = Join-Path $dist "Streamora-$version-pending.apk"
-    & $signTool sign --v4-signing-enabled false --ks $keyFile --ks-key-alias streamora --ks-pass env:STREAMORA_SIGN_PASS --out $staging $unsigned
+    $outputFile = Join-Path $dist "Lumenara-$version-release.apk"
+    $staging = Join-Path $dist "Lumenara-$version-pending.apk"
+    & $signTool sign --v4-signing-enabled false --ks $keyFile --ks-key-alias $keyAlias --ks-pass env:LUMENARA_SIGN_PASS --out $staging $unsigned
     if ($LASTEXITCODE -ne 0) { throw 'APK imzalanamadı.' }
     & $signTool verify --verbose --print-certs $staging
     if ($LASTEXITCODE -ne 0) { throw 'İmza doğrulanamadı.' }
     Move-Item -Force -LiteralPath $staging -Destination $outputFile
     Get-FileHash -Algorithm SHA256 -LiteralPath $outputFile
 } finally {
-    Remove-Item Env:\STREAMORA_SIGN_PASS -ErrorAction SilentlyContinue
+    Remove-Item Env:\LUMENARA_SIGN_PASS -ErrorAction SilentlyContinue
     [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer)
     $protected.Dispose()
 }

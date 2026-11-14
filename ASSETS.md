@@ -1,8 +1,16 @@
-# Streamora görsel kaynakları
+# Lumenara görsel kaynakları
+
+## Başlatıcı bannerı ve simgesi
+
+Logo: design/logo/concept-1-*.svg, Lumenara için üretildi; uygulama içi ad yazılı logo `concept-1-banner.svg`, yalnız sahne ışığı sembolü içeren Android TV bannerı `concept-1-banner-mark.svg`.
+
+`app/src/main/res/drawable-xhdpi/banner.png` (320×180) ve `app/src/main/res/drawable-xxhdpi/banner.png` (480×270), `concept-1-banner-mark.svg` kaynağından `rsvg-convert -w 320 -h 180` ve `rsvg-convert -w 480 -h 270` ile üretildi.
+
+`app/src/main/res/drawable/mark.xml`, `concept-1-mark.svg` kaynağının 48dp×48dp, 512×512 viewport kullanan Android VectorDrawable karşılığıdır: yuvarlatılmış koyu zemin, altın rengi gradyanlı sahne ışığı ve sahne çizgisi.
 
 ## Uygulamadaki ortam görseli
 
-`app/src/main/res/drawable-nodpi/streamora_coast.jpg`, bu görevde yerleşik ImageGen aracıyla oluşturuldu. Kurulum, boş kitaplık ve görsel bulunamayan arka planlarda kullanılır. Bir filme ait afiş veya gerçek yapım bilgisi değildir. Sağlayıcının HTTPS arka planı, ardından eşleşmiş TMDB arka planı önceliklidir.
+`app/src/main/res/drawable-nodpi/lumenara_coast.jpg`, bu görevde yerleşik ImageGen aracıyla oluşturuldu. Kurulum, boş kitaplık ve görsel bulunamayan arka planlarda kullanılır. Bir filme ait afiş veya gerçek yapım bilgisi değildir. Sağlayıcının HTTPS arka planı, ardından eşleşmiş TMDB arka planı önceliklidir.
 
 Üretim istemi:
 

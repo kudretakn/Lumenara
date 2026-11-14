@@ -1,4 +1,4 @@
-# Arayüz yenileme (0.3.0)
+# Lumenara arayüz yenileme (0.3.0)
 
 Hedef: Apple TV / Netflix kalitesinde, kumandayla hızlı ve kullanışlı bir TV arayüzü. Kullanıcı kararları (14 Kasım 2026):
 
@@ -35,7 +35,7 @@ Gerçek cihaz yok. Kabul, CI'daki Android TV emülatöründe alınan ekran gör�
   - Listem, Favoriler ile İzleme Listem'i iki sekmede birleştirir.
   - IPTV Kaynakları, Ayarlar altında ilk satır olur. Kaynak yoksa ilk açılış doğrudan kurulum ekranına gider (mevcut davranış).
 - Seçili bölümde soluk vurgu ve sol kenarda ince çizgi gösterilir. İçerikte en sola basınca menü açılır, sağa basınca içerikteki son odağa dönülür.
-- Üstteki "STREAMORA + bölüm adı" satırı kaldırılır. Güncelleme bildirimi menüde Ayarlar simgesinde nokta olarak görünür.
+- Üstteki "LUMENARA + bölüm adı" satırı kaldırılır. Güncelleme bildirimi menüde Ayarlar simgesinde nokta olarak görünür.
 - Birden fazla kaynak varsa kaynak seçimi içerik üstünde `Pill` satırı olarak kalır.
 
 ## 3. Ana Sayfa — Canlı TV öncelikli

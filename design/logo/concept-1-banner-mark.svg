@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 320 180" role="img" aria-label="Lumenara sahne ışığı sembolü bannerı">
+<title>Lumenara sahne ışığı sembolü bannerı</title>
+<defs><linearGradient id="beam" x1="256" y1="140" x2="256" y2="350" gradientUnits="userSpaceOnUse"><stop stop-color="#F4C77B"/><stop offset="1" stop-color="#F4C77B" stop-opacity=".12"/></linearGradient></defs>
+<rect width="320" height="180" fill="#0B0E13"/>
+<g transform="translate(104 28.5) scale(.21875)"><path d="M230 142 H282 L354 344 Q256 374 158 344 Z" fill="url(#beam)"/>
+  <rect x="226" y="126" width="60" height="22" rx="11" fill="#F8DBA8"/>
+  <path d="M150 381 H362" fill="none" stroke="#F4C77B" stroke-width="18" stroke-linecap="round"/></g>
+</svg>

@@ -4,7 +4,7 @@ plugins {
     id("androidx.room") version "2.8.4"
 }
 android {
-    namespace = "dev.streamora.data"
+    namespace = "dev.lumenara.data"
     compileSdk = 36
     defaultConfig { minSdk = 26 }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
