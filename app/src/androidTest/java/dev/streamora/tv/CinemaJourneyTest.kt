@@ -240,7 +240,15 @@ class CinemaJourneyTest {
                     runBlocking { preferences.recentLive.first().isNotEmpty() }
                 }
                 screen.onNodeWithContentDescription("Tam ekran oynatıcı").assertExists()
+                // Let the opening banner expire: while visible, Back only dismisses the banner.
+                // FullscreenTest separately verifies that two-step Back contract.
+                screen.waitUntil(30_000) {
+                    screen.onAllNodesWithTag("fullscreen-banner").fetchSemanticsNodes().isEmpty()
+                }
                 device.pressBack()
+                screen.waitUntil(30_000) {
+                    screen.onAllNodesWithContentDescription("Tam ekran oynatıcı").fetchSemanticsNodes().isEmpty()
+                }
                 node("Son izlenen kanallar").assertExists()
                 screen.onNodeWithTag("home-shelves")
                     .performScrollToNode(hasText("Son izlenen kanallar"))

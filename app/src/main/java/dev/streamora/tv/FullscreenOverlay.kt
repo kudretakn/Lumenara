@@ -150,31 +150,37 @@ private fun MiniGuide(model: LibraryModel, playing: Item, state: FullscreenState
     LaunchedEffect(rows, category) {
         if (rows.isNotEmpty() && !positioned) { list.scrollToItem(target); positioned = true }
     }
-    GlassPanel(Modifier.padding(start = 48.dp, top = 27.dp, bottom = 27.dp).width(660.dp)
+    GlassPanel(Modifier.fillMaxWidth(.42f).padding(start = 12.dp, top = 12.dp, bottom = 12.dp)
         .fillMaxHeight().testTag("mini-guide").onPreviewKeyEvent {
             state.activity = System.currentTimeMillis(); false
         }) {
-        Row(Modifier.fillMaxSize().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Column(Modifier.width(190.dp)) {
-                Text("Mini rehber", Modifier.padding(8.dp), fontSize = 20.sp)
-                LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(8.dp)) {
-                    items((listOf("") + categories).distinct(), key = { it }) { name ->
-                        Pill(name.ifEmpty { "Tümü" }, category == name, { category = name }, Modifier.fillMaxWidth())
-                    }
-                }
-                Pill("Seçenekler", false, { state.guide = false; options() }, Modifier.fillMaxWidth())
+        Column(Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Mini rehber", fontSize = 18.sp)
+                Pill("Seçenekler", false, { state.guide = false; options() })
             }
-            LazyColumn(Modifier.weight(1f).testTag("mini-guide-channels"), state = list,
-                verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(14.dp)) {
-                itemsIndexed(rows, key = { _, row -> row.id }) { index, row ->
-                    val isTarget = index == target
-                    if (isTarget && positioned) LaunchedEffect(category, positioned) { currentFocus.requestFocus() }
-                    LiveChannelRow(model, row, index + 1, state.now / 30_000 * 30_000,
-                        { state.guide = false; state.showBanner(); select(row, rows) },
-                        { state.guide = false; options() },
-                        { state.activity = System.currentTimeMillis() },
-                        if (isTarget) Modifier.focusRequester(currentFocus) else Modifier,
-                        selected = row.id == playing.id)
+            LazyRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(horizontal = 4.dp)) {
+                items((listOf("") + categories).distinct(), key = { it }) { name ->
+                    Pill(name.ifEmpty { "Tümü" }, category == name, { category = name })
+                }
+            }
+            BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                // TV commonly exposes 540 dp vertically: shrink below 80 dp to keep eight rows visible.
+                val rowHeight = minOf(80.dp, (maxHeight - 16.dp - 4.dp * 7) / 8)
+                LazyColumn(Modifier.fillMaxSize().testTag("mini-guide-channels"), state = list,
+                    verticalArrangement = Arrangement.spacedBy(4.dp), contentPadding = PaddingValues(8.dp)) {
+                    itemsIndexed(rows, key = { _, row -> row.id }) { index, row ->
+                        val isTarget = index == target
+                        if (isTarget && positioned) LaunchedEffect(category, positioned) { currentFocus.requestFocus() }
+                        LiveChannelRow(model, row, index + 1, state.now / 30_000 * 30_000,
+                            { state.guide = false; state.showBanner(); select(row, rows) },
+                            { state.guide = false; options() },
+                            { state.activity = System.currentTimeMillis() },
+                            if (isTarget) Modifier.focusRequester(currentFocus) else Modifier,
+                            selected = row.id == playing.id, compactHeight = rowHeight)
+                    }
                 }
             }
         }

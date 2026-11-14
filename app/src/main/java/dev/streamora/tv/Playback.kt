@@ -100,7 +100,7 @@ internal fun Video(
                     object : Player.Listener {
                         override fun onIsPlayingChanged(isPlaying: Boolean) {
                             playbackActive = isPlaying
-                            if (isPlaying && !recorded) {
+                            if (isPlaying && !preview && !recorded) {
                                 recorded = true
                                 model.started(item)
                             }
@@ -277,6 +277,7 @@ internal fun Playback(
     }
     Box(
         Modifier.fillMaxSize()
+            .background(androidx.compose.ui.graphics.Color.Black)
             .focusRequester(focus)
             .semantics { contentDescription = "Tam ekran oynatıcı" }
             .onPreviewKeyEvent {

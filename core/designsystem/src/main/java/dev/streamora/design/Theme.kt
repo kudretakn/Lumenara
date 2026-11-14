@@ -14,7 +14,7 @@ object Ink {
     val text = Color(0xFFF5F6F8)
     val muted = Color(0xFFA7ADB8)
     val glass = Color.White.copy(alpha = .10f)
-    val glassStrong = Color(0xB8080B0F)
+    val glassStrong = Color(0xE0080B0F)
     val stroke = Color.White.copy(alpha = .14f)
     val focusRing = Color.White
     val accent = Color(0xFFC9D6DD)

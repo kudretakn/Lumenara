@@ -100,6 +100,20 @@ class FullscreenTest {
                 device.pressDPadLeft()
                 await(hasTestTag("mini-guide"))
                 await(hasTestTag("live-channel-${channels[0].id}") and isFocused())
+                val guideBounds = screen.onNodeWithTag("mini-guide").fetchSemanticsNode().boundsInRoot
+                val hostBounds = screen.onNodeWithTag("fullscreen-test-host").fetchSemanticsNode().boundsInRoot
+                assertTrue("Mini guide must use about 42% of the screen", guideBounds.width <= hostBounds.width * .43f)
+                screen.onAllNodes(hasText("Sonra:", substring = true) and
+                    hasAnyAncestor(hasTestTag("mini-guide"))).assertCountEquals(0)
+                if (count >= 8) {
+                    val viewport = screen.onNodeWithTag("mini-guide-channels").fetchSemanticsNode().boundsInRoot
+                    channels.take(8).forEach { channel ->
+                        val row = screen.onNodeWithTag("live-channel-${channel.id}")
+                        row.assertIsDisplayed()
+                        val bounds = row.fetchSemanticsNode().boundsInRoot
+                        assertTrue("Eight complete channel rows must fit", bounds.top >= viewport.top && bounds.bottom <= viewport.bottom)
+                    }
+                }
                 // LazyColumn composes only visible rows, even with the full 10,000-channel catalog.
                 if (count > 100) assertTrue(screen.onAllNodes(hasTestTag("live-channel-${channels.last().id}"))
                     .fetchSemanticsNodes().isEmpty())

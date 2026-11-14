@@ -52,7 +52,7 @@ internal fun VlcScreen(
     var player by remember { mutableStateOf<MediaPlayer?>(null) }
     var message by remember { mutableStateOf("") }
     var delayMs by remember { mutableLongStateOf(0) }
-    LaunchedEffect(panel, fullscreen.guide, fullscreen.finished) {
+    LaunchedEffect(layout, panel, fullscreen.guide, fullscreen.finished) {
         if (!panel && !fullscreen.guide && !fullscreen.finished) focus.requestFocus()
     }
     LaunchedEffect(layout, item.id) {
@@ -124,7 +124,7 @@ internal fun VlcScreen(
     }
     Box(
         Modifier.fillMaxSize()
-            .background(Ink.background)
+            .background(androidx.compose.ui.graphics.Color.Black)
             .focusRequester(focus)
             .semantics { contentDescription = "Tam ekran oynatıcı" }
             .onPreviewKeyEvent {
@@ -142,7 +142,14 @@ internal fun VlcScreen(
             .focusable()
     ) {
         AndroidView(
-            factory = { VLCVideoLayout(it).also { view -> layout = view } },
+            factory = {
+                VLCVideoLayout(it).apply {
+                    // VLC adds native SurfaceViews after attachViews; keep remote focus in Compose.
+                    descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS
+                    isFocusable = false
+                    isFocusableInTouchMode = false
+                }.also { view -> layout = view }
+            },
             modifier = Modifier.fillMaxSize(),
         )
         if (!panel) FullscreenOverlay(model, item, group, fullscreen, select, { panel = true },
