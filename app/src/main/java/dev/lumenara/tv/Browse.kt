@@ -127,7 +127,17 @@ internal fun Home(
     val focused = (recent + onAir + shelves.flatMap { it.third } + candidates)
         .firstOrNull { it.id == focusedId }
     val rotating = candidates.getOrNull(page % candidates.size.coerceAtLeast(1))
-    val hero = if (shelvesFocused) focused ?: rotating else rotating
+    val hero = (if (shelvesFocused) focused ?: rotating else rotating) ?: recent.firstOrNull()
+    val lastChannelFocus = remember { FocusRequester() }
+    var initialFocusDone by rememberSaveable(source) { mutableStateOf(false) }
+    LaunchedEffect(recent.firstOrNull()?.id) {
+        if (!initialFocusDone && recent.isNotEmpty()) {
+            withFrameNanos { }
+            withFrameNanos { }
+            lastChannelFocus.requestFocus()
+            initialFocusDone = true
+        }
+    }
     LaunchedEffect(source, candidates, shelvesFocused, interaction) {
         if (!shelvesFocused && candidates.size > 1) {
             wallClockTicks(9_000).drop(1).collect {
@@ -147,7 +157,15 @@ internal fun Home(
                 .focusRestorer()
                 .focusGroup()) {
                 hero?.let {
-                    Hero(model, it, info, open, play, Modifier.padding(top = 12.dp))
+                    Hero(model, it, info, open, play, Modifier.padding(top = 12.dp)) {
+                        recent.firstOrNull()?.let { channel ->
+                            Button(onClick = { play(channel, recent) },
+                                modifier = Modifier.focusRequester(lastChannelFocus).testTag("home-last-channel")) {
+                                Text("▶ Son kanal: ${channel.title}", Modifier.widthIn(max = 220.dp),
+                                    maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                            }
+                        }
+                    }
                 }
                 if (candidates.isNotEmpty())
                     Row(Modifier.align(Alignment.BottomStart).padding(bottom = 4.dp),

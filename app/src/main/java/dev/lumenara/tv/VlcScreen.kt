@@ -48,6 +48,8 @@ internal fun VlcScreen(
     fun move(delta: Int) { group.getOrNull(group.indexOfFirst { it.id == item.id } + delta)?.let { select(it, group) } }
     BackHandler { if (panel) panel = false else if (!fullscreen.dismiss()) back() }
     if (!life.isAtLeast(Lifecycle.State.STARTED)) return
+    val numbers = if (item.kind == "LIVE") rememberLiveNumberControl(model, item.source, select) else null
+    val retry = rememberLiveRetry(item.id)
     val context = LocalContext.current
     val focus = remember { FocusRequester() }
     var layout by remember { mutableStateOf<VLCVideoLayout?>(null) }
@@ -65,8 +67,9 @@ internal fun VlcScreen(
             }
         }
     }
-    LaunchedEffect(layout, item.id) {
+    LaunchedEffect(layout, item.id, retry.generation) {
         val surface = layout ?: return@LaunchedEffect
+        message = ""
         val playbackScope = this
         playbackMutex.withLock {
             var input: VlcInput? = null
@@ -104,13 +107,19 @@ internal fun VlcScreen(
                     p.setEventListener { event ->
                         playbackScope.launch(Dispatchers.Main.immediate) {
                             when (event.type) {
-                                MediaPlayer.Event.Playing -> if (!recorded) {
-                                    recorded = true
-                                    model.started(item)
+                                MediaPlayer.Event.Playing -> {
+                                    retry.playing()
+                                    message = ""
+                                    if (!recorded) {
+                                        recorded = true
+                                        model.started(item)
+                                    }
                                 }
                                 MediaPlayer.Event.EncounteredError -> {
-                                    message = "VLC bu yayını oynatamadı."
-                                    panel = true
+                                    if (item.kind != "LIVE" || !retry.failed()) {
+                                        message = "VLC bu yayını oynatamadı."
+                                        panel = true
+                                    }
                                 }
                                 MediaPlayer.Event.EndReached -> {
                                     model.progress(item, p.length, p.length)
@@ -129,8 +138,10 @@ internal fun VlcScreen(
                 throw e
             } catch (e: Exception) {
                 android.util.Log.w("LumenaraVlc", "VLC playback failed", e)
-                message = "VLC bu kaynakta TS, MKV veya konumlandırılabilir MP4 dosyası gerektirir."
-                panel = true
+                if (item.kind != "LIVE" || e !is java.io.IOException || !retry.failed()) {
+                    message = "VLC bu kaynakta TS, MKV veya konumlandırılabilir MP4 dosyası gerektirir."
+                    panel = true
+                }
             } finally {
                 withContext(NonCancellable) {
                     val p = engine
@@ -171,7 +182,7 @@ internal fun VlcScreen(
                 val key = it.nativeKeyEvent
                 val code = key.keyCode
                 if (!panel && fullscreen.key(key, item.kind == "LIVE", ::move, { panel = true },
-                        { delta -> player?.let { p -> p.setTime((p.time + delta).coerceAtLeast(0)) } })) true
+                        { delta -> player?.let { p -> p.setTime((p.time + delta).coerceAtLeast(0)) } }, { event -> numbers?.key(event) == true })) true
                 else if (code in listOf(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PAUSE)) {
                     if (key.action == KeyEvent.ACTION_UP) player?.let { p ->
                         if (code == KeyEvent.KEYCODE_MEDIA_PLAY || code == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE && !p.isPlaying) p.play() else p.pause()
@@ -195,6 +206,8 @@ internal fun VlcScreen(
         if (!panel) FullscreenOverlay(model, item, group, fullscreen, select, { panel = true },
             { player?.time ?: 0 }, { player?.length ?: 0 },
             if (item.kind == "EPISODE" && group.getOrNull(group.indexOfFirst { it.id == item.id } + 1) != null) next else null)
+        Reconnecting(retry)
+        numbers?.let { NumberEntry(it) }
         if (panel) {
             val first = remember { FocusRequester() }
             LaunchedEffect(Unit) { first.requestFocus() }
@@ -211,6 +224,9 @@ internal fun VlcScreen(
                     Button(modifier = Modifier.focusRequester(first), onClick = { panel = false }) {
                         Text("Yayına dön")
                     }
+                }
+                if (message.isNotEmpty()) item {
+                    Button(onClick = { message = ""; panel = false; retry.manual() }) { Text("Yeniden dene") }
                 }
                 item {
                     Button(onClick = { exo(player?.time ?: position) }) { Text("Media3 ile aç") }

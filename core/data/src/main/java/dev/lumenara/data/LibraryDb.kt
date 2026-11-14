@@ -90,8 +90,15 @@ data class Member(@PrimaryKey val id: String, val name: String)
 
 data class LiveCategoryCount(val category: String, val count: Int)
 
+/** Lightweight projection; this is not a persisted entity or schema change. */
+data class LiveChannelId(val id: String, val source: String)
+
 @Dao
 interface LibraryDao {
+    @Query("""SELECT id,source FROM items WHERE kind='LIVE' AND (:source='' OR source=:source)
+        ORDER BY source,title,id""")
+    fun liveChannelOrder(source: String): Flow<List<LiveChannelId>>
+
     @Query("""SELECT * FROM items WHERE id IN (:ids) AND kind='LIVE'
         AND (:source='' OR source=:source) LIMIT 20""")
     fun liveByIds(source: String, ids: List<String>): Flow<List<Item>>

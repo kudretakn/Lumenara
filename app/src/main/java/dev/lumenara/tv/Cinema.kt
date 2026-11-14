@@ -144,11 +144,12 @@ internal fun Hero(
     open: (Item) -> Unit,
     play: (Item, List<Item>) -> Unit,
     modifier: Modifier = Modifier,
+    leadingAction: @Composable () -> Unit = {},
 ) {
     val mark by
         remember(item.id) { model.repo.library.observeMark(item.id) }
             .collectAsStateWithLifecycle(null)
-    Column(modifier.widthIn(max = 500.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(modifier.widthIn(max = 780.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
             when (item.kind) {
                 "SERIES" -> "DİZİLERİ KEŞFET"
@@ -164,6 +165,7 @@ internal fun Hero(
         Crossfade(item.title, animationSpec = tween(600), label = "Vitrin başlığı") { title ->
             Text(
                 title,
+                Modifier.widthIn(max = 500.dp),
                 fontSize = 38.sp,
                 lineHeight = 41.sp,
                 fontWeight = FontWeight.Bold,
@@ -183,6 +185,7 @@ internal fun Hero(
                 overflow = TextOverflow.Ellipsis,
             )
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            leadingAction()
             Button(
                 onClick = { if (item.kind == "SERIES") open(item) else play(item, listOf(item)) },
                 colors =

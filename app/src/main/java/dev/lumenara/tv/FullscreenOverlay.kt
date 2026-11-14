@@ -39,7 +39,8 @@ internal class FullscreenState {
         else -> false
     }
     fun key(key: KeyEvent, live: Boolean, move: (Int) -> Unit, options: () -> Unit,
-            seek: (Long) -> Unit): Boolean {
+            seek: (Long) -> Unit, liveKey: (KeyEvent) -> Boolean = { false }): Boolean {
+        if (live && liveKey(key)) return true
         if (guide) { activity = System.currentTimeMillis(); return false }
         val code = key.keyCode
         if (code in listOf(KeyEvent.KEYCODE_MEDIA_NEXT, KeyEvent.KEYCODE_MEDIA_PREVIOUS,
@@ -91,6 +92,7 @@ internal fun BoxScope.FullscreenOverlay(
     select: (Item, List<Item>) -> Unit, options: () -> Unit,
     position: () -> Long, duration: () -> Long, next: (() -> Unit)?,
 ) {
+    val numbers = if (item.kind == "LIVE") liveChannelNumbers(model, item.source) else emptyMap()
     if (state.guide && item.kind == "LIVE") {
         MiniGuide(model, item, state, select, options)
     } else if (state.finished && next != null) {
@@ -119,7 +121,7 @@ internal fun BoxScope.FullscreenOverlay(
                     val following = slots.firstOrNull { it.start >= (current?.end ?: state.now) }
                     val logo by produceState<String?>(null, item.id) { value = model.repo.poster(item) }
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text("${(group.indexOfFirst { it.id == item.id } + 1).coerceAtLeast(1)}", color = Ink.muted)
+                        Text("${numbers[item.id] ?: 1}", color = Ink.muted)
                         Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
                             Text(item.title.take(1), color = Ink.accent)
                             if (logo != null) AsyncImage(logo, null, Modifier.fillMaxSize())
@@ -150,6 +152,7 @@ private fun playbackTime(ms: Long): String = "%d:%02d".format(ms / 60_000, ms / 
 @Composable
 private fun MiniGuide(model: LibraryModel, playing: Item, state: FullscreenState,
                       select: (Item, List<Item>) -> Unit, options: () -> Unit) {
+    val numbers = liveChannelNumbers(model, playing.source)
     var category by remember { mutableStateOf("") }
     val categories by remember(playing.source) { model.repo.library.categories("LIVE", playing.source) }
         .collectAsStateWithLifecycle(emptyList())
@@ -189,7 +192,7 @@ private fun MiniGuide(model: LibraryModel, playing: Item, state: FullscreenState
                     itemsIndexed(rows, key = { _, row -> row.id }) { index, row ->
                         val isTarget = index == target
                         if (isTarget && positioned) LaunchedEffect(category, positioned) { currentFocus.requestFocus() }
-                        LiveChannelRow(model, row, index + 1, state.now / 30_000 * 30_000,
+                        LiveChannelRow(model, row, numbers[row.id] ?: 1, state.now / 30_000 * 30_000,
                             { state.guide = false; state.showBanner(); select(row, rows) },
                             { state.guide = false; options() },
                             { state.activity = System.currentTimeMillis() },
