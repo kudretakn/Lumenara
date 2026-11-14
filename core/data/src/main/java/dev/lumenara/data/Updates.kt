@@ -64,7 +64,11 @@ object Updates {
         }
 
     @Suppress("DEPRECATION")
-    suspend fun verifiedFile(context: Context, update: Update): File =
+    suspend fun verifiedFile(
+        context: Context,
+        update: Update,
+        onVerifying: () -> Unit = {},
+    ): File =
         withContext(Dispatchers.IO) {
             val file = File.createTempFile("release-", ".apk", context.cacheDir)
             try {
@@ -79,6 +83,7 @@ object Updates {
                             file.outputStream().use { out -> stream.copyTo(out) }
                         }
                     }
+                onVerifying()
                 if (hash.digest().joinToString("") { "%02x".format(it) } != update.sha256)
                     throw SourceFailure("İndirilen APK bütünlük denetiminden geçmedi.")
                 val pm = context.packageManager
