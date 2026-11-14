@@ -41,7 +41,11 @@ internal class Metadata(private val context: Context, private val vault: Vault) 
         check(edit.commit())
     }
 
-    fun configured() = prefs.contains("access")
+    fun userConfigured() = prefs.contains("access")
+
+    fun configured() = userConfigured() || BuildConfig.TMDB_READ_TOKEN.isNotBlank()
+
+    val hasBuiltInToken get() = BuildConfig.TMDB_READ_TOKEN.isNotBlank()
 
     suspend fun details(item: Item): MovieInfo =
         withContext(Dispatchers.IO) {
@@ -58,10 +62,9 @@ internal class Metadata(private val context: Context, private val vault: Vault) 
                     previous
                 else
                     try {
-                        val token =
-                            vault.decrypt(
-                                prefs.getString("access", null) ?: return@withContext local
-                            )
+                        val token = prefs.getString("access", null)?.let(vault::decrypt)
+                            ?: BuildConfig.TMDB_READ_TOKEN
+                        if (token.isBlank()) return@withContext local
                         val type = if (item.kind == "MOVIE") "movie" else "tv"
                         val yearSuffix =
                             Regex("""\s*[\[(]((?:19|20)\d\d)[\])]\s*$""").find(item.title)
