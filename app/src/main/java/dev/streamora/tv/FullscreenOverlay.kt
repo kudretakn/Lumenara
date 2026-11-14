@@ -24,7 +24,14 @@ internal class FullscreenState {
     var activity by mutableLongStateOf(0)
     var now by mutableLongStateOf(System.currentTimeMillis())
     var finished by mutableStateOf(false)
-    fun showBanner() { now = System.currentTimeMillis(); bannerUntil = now + 4000 }
+    var bannerRequest by mutableLongStateOf(0)
+        private set
+    fun showBanner() {
+        now = System.currentTimeMillis()
+        // Keep it visible without expiring until the overlay has rendered.
+        bannerUntil = Long.MAX_VALUE
+        bannerRequest++
+    }
     fun openGuide() { guide = true; activity = System.currentTimeMillis(); bannerUntil = 0 }
     fun dismiss(): Boolean = when {
         guide -> { guide = false; true }
@@ -95,6 +102,14 @@ internal fun BoxScope.FullscreenOverlay(
             }
         }
     } else if (state.bannerUntil > state.now) {
+        LaunchedEffect(item.id, state.bannerRequest) {
+            // The first callback precedes drawing; the next frame confirms that
+            // the banner had a chance to draw, even after a stalled UI thread.
+            withFrameNanos { }
+            withFrameNanos { }
+            state.now = System.currentTimeMillis()
+            state.bannerUntil = state.now + 4000
+        }
         GlassPanel(Modifier.align(Alignment.BottomCenter).padding(horizontal = 48.dp, vertical = 27.dp)
             .fillMaxWidth().testTag(if (item.kind == "LIVE") "fullscreen-banner" else "vod-timeline")) {
             Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

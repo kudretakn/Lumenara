@@ -130,7 +130,13 @@ class LibraryJourneyTest {
                     screen.onAllNodesWithTag("live-channel-${channel.id}").fetchSemanticsNodes().isNotEmpty()
                 }
                 val row = screen.onNodeWithTag("live-channel-${channel.id}")
-                row.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus)
+                // Enter the channel column through the same remote path as the user.
+                screen.dpad(Key.DirectionRight)
+                screen.waitUntil(30_000) {
+                    screen.onAllNodes(hasTestTag("live-channel-${channel.id}") and isFocused())
+                        .fetchSemanticsNodes().isNotEmpty()
+                }
+                row.assertIsFocused()
                 screen.waitUntil(30_000) {
                     screen.onAllNodes(hasTestTag("live-preview") and
                         SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Oynatılıyor"))

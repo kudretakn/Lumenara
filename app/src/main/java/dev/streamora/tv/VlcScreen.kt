@@ -23,6 +23,8 @@ import androidx.compose.ui.semantics.semantics
 import kotlinx.coroutines.flow.collect
 import dev.streamora.vlc.VlcInput
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer
@@ -50,6 +52,7 @@ internal fun VlcScreen(
     val focus = remember { FocusRequester() }
     var layout by remember { mutableStateOf<VLCVideoLayout?>(null) }
     var player by remember { mutableStateOf<MediaPlayer?>(null) }
+    val playbackMutex = remember { Mutex() }
     var message by remember { mutableStateOf("") }
     var delayMs by remember { mutableLongStateOf(0) }
     LaunchedEffect(layout, panel, fullscreen.guide, fullscreen.finished) {
@@ -64,73 +67,98 @@ internal fun VlcScreen(
     }
     LaunchedEffect(layout, item.id) {
         val surface = layout ?: return@LaunchedEffect
-        var input: VlcInput? = null
-        var library: LibVLC? = null
-        var engine: MediaPlayer? = null
-        try {
-            val source = model.repo.library.source(item.source) ?: error("Kaynak kaldırıldı")
-            val address = model.repo.address(item)
-            val mark = model.repo.library.mark(item.id)
-            val start =
-                if (position >= 0) position
-                else mark?.position?.takeIf { mark.duration <= 0 || it < mark.duration * 0.95 } ?: 0
-            withContext(Dispatchers.IO) {
-                input = VlcInput.open(context, address, source.allowHttp)
-            }
-            withContext(Dispatchers.Main.immediate) {
-                val lib = LibVLC(context, arrayListOf("--quiet", "--no-video-title-show"))
-                library = lib
-                val p = MediaPlayer(lib)
-                engine = p
-                player = p
-                p.attachViews(surface, null, true, false)
-                val media = Media(lib, input!!.descriptor.fileDescriptor)
-                media.addOption(":demux=" + input!!.demux)
-                if (start > 0 && item.kind != "LIVE") media.addOption(":start-time=${start/1000.0}")
-                p.media = media
-                media.release()
+        val playbackScope = this
+        playbackMutex.withLock {
+            var input: VlcInput? = null
+            var library: LibVLC? = null
+            var engine: MediaPlayer? = null
+            try {
+                val source = model.repo.library.source(item.source) ?: error("Kaynak kaldırıldı")
+                val address = model.repo.address(item)
+                val mark = model.repo.library.mark(item.id)
+                val start =
+                    if (position >= 0) position
+                    else mark?.position?.takeIf { mark.duration <= 0 || it < mark.duration * 0.95 } ?: 0
+                withContext(Dispatchers.IO) {
+                    input = VlcInput.open(context, address, source.allowHttp)
+                    // Native initialization and media setup can block for seconds.
+                    val lib = LibVLC(context, arrayListOf("--quiet", "--no-video-title-show"))
+                    library = lib
+                    val p = MediaPlayer(lib)
+                    engine = p
+                    val media = Media(lib, input!!.descriptor.fileDescriptor)
+                    try {
+                        media.addOption(":demux=" + input!!.demux)
+                        if (start > 0 && item.kind != "LIVE") media.addOption(":start-time=${start/1000.0}")
+                        p.media = media
+                    } finally {
+                        media.release()
+                    }
+                }
+                val p = checkNotNull(engine)
                 var recorded = false
-                p.setEventListener {
-                    when (it.type) {
-                        MediaPlayer.Event.Playing -> if (!recorded) {
-                            recorded = true
-                            model.started(item)
-                        }
-                        MediaPlayer.Event.EncounteredError -> {
-                            message = "VLC bu yayını oynatamadı."
-                            panel = true
-                        }
-                        MediaPlayer.Event.EndReached -> {
-                            model.progress(item, p.length, p.length)
-                            if (item.kind == "EPISODE")
-                                fullscreen.finished = group.getOrNull(group.indexOfFirst { row -> row.id == item.id } + 1) != null
+                withContext(Dispatchers.Main.immediate) {
+                    player = p
+                    p.attachViews(surface, null, true, false)
+                    // Listener registration creates a Handler; UI writes stay on Main.
+                    p.setEventListener { event ->
+                        playbackScope.launch(Dispatchers.Main.immediate) {
+                            when (event.type) {
+                                MediaPlayer.Event.Playing -> if (!recorded) {
+                                    recorded = true
+                                    model.started(item)
+                                }
+                                MediaPlayer.Event.EncounteredError -> {
+                                    message = "VLC bu yayını oynatamadı."
+                                    panel = true
+                                }
+                                MediaPlayer.Event.EndReached -> {
+                                    model.progress(item, p.length, p.length)
+                                    if (item.kind == "EPISODE")
+                                        fullscreen.finished = group.getOrNull(group.indexOfFirst { row -> row.id == item.id } + 1) != null
+                                }
+                            }
                         }
                     }
                 }
-                p.play()
+                withContext(Dispatchers.IO) { p.play() }
                 wallClockTicks(5000).collect {
                     if (p.isPlaying) model.progress(item, p.time, p.length)
                 }
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            android.util.Log.w("StreamoraVlc", "VLC playback failed", e)
-            message = "VLC bu kaynakta TS, MKV veya konumlandırılabilir MP4 dosyası gerektirir."
-            panel = true
-        } finally {
-            withContext(NonCancellable + Dispatchers.Main.immediate) {
-                player = null
-                engine?.let {
-                    position = it.time
-                    model.progress(item, position, it.length)
-                    it.setEventListener(null)
-                    withContext(NonCancellable + Dispatchers.IO) { input?.close() }
-                    it.stop()
-                    it.detachViews()
-                    it.release()
-                } ?: withContext(NonCancellable + Dispatchers.IO) { input?.close() }
-                library?.release()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                android.util.Log.w("StreamoraVlc", "VLC playback failed", e)
+                message = "VLC bu kaynakta TS, MKV veya konumlandırılabilir MP4 dosyası gerektirir."
+                panel = true
+            } finally {
+                withContext(NonCancellable) {
+                    val p = engine
+                    withContext(Dispatchers.Main.immediate) {
+                        player = null
+                        p?.setEventListener(null)
+                        p?.detachViews()
+                    }
+                    withContext(Dispatchers.IO) {
+                        try {
+                            p?.let {
+                                val lastPosition = it.time
+                                val length = it.length
+                                withContext(Dispatchers.Main.immediate) {
+                                    position = lastPosition
+                                    model.progress(item, lastPosition, length)
+                                }
+                            }
+                        } finally {
+                            // Close the input before stop to unblock native reads.
+                            try { input?.close() } finally {
+                                try { p?.stop() } finally {
+                                    try { p?.release() } finally { library?.release() }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

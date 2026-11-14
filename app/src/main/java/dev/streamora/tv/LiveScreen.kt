@@ -47,7 +47,9 @@ internal fun LiveScreen(
     var category by rememberSaveable(source) { mutableStateOf("all") }
     var query by rememberSaveable { mutableStateOf("") }
     var limit by rememberSaveable(source, category, query) { mutableIntStateOf(80) }
-    var focusedId by rememberSaveable(source, category, query) { mutableStateOf<String?>(null) }
+    // Filters can reuse an already focused lazy row without another focus event.
+    // Keep its identity so resetting the debounce does not lose that focus.
+    var focusedId by remember(source) { mutableStateOf<String?>(null) }
     var previewId by remember { mutableStateOf<String?>(null) }
     val listState = rememberSaveable(source, category, query, saver = LazyListState.Saver) { LazyListState() }
     val categoryState = rememberLazyListState()
@@ -96,8 +98,9 @@ internal fun LiveScreen(
     LaunchedEffect(focusedId, source, category, query, timeline) {
         previewId = null
         if (!timeline && focusedId != null) {
+            val target = focusedId
             delay(600)
-            previewId = focusedId
+            previewId = target
         }
     }
     if (timeline) {
