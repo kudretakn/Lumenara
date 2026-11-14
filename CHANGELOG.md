@@ -1,5 +1,10 @@
 # Lumenara sürüm kaydı
 
+## 0.3.2 · 15 Kasım 2026
+
+- Büyük kataloglarda (~40.000 içerik) Ana Sayfa, Filmler ve Diziler boş kalıyor, uygulama donuyordu. Film/dizi sorguları sürüm birleştirmeden önce bütün tabloyu okuyordu. Sonuç 2 MB'lık CursorWindow'a sığmayınca sorgu defalarca yeniden çalışıyor, Mi Box 4'te işlemcinin %340'ı harcanıyordu. Raflar, vitrin, öneriler ve listeler artık veritabanı düzeyinde sınırlanıyor; dublaj/altyazılı sürümleri birleştirmek için yeterli pay bırakılıyor.
+- 30.000 filmlik yeni cihaz testi eklendi. Mi Box 4'te ölçülen süreler: vitrin 1,4 sn, son eklenenler 2,9 sn, yüksek puanlılar 0,7 sn, 120 kartlık film listesi 5,4 sn.
+
 ## 0.3.1 · 15 Kasım 2026
 
 - Yerleşik OpenSubtitles anahtarı ve TMDB erişimi: release APK, GitHub secret'larından gelen anahtarlarla derlenir. Ayarlar'da anahtar girilmemişse internetten altyazı araması ve film/dizi bilgileri bunlarla kendiliğinden çalışır; Ayarlar'da girilen anahtar her zaman önce gelir. Ayarlar ekranı yerleşik erişim olduğunu kısa bir notla gösterir.

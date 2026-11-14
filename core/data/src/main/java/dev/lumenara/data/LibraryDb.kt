@@ -4,6 +4,8 @@ import androidx.room.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
+private const val VERSION_HEADROOM = 4
+
 @Entity(tableName = "sources")
 data class Source(
     @PrimaryKey val id: String,
@@ -106,7 +108,7 @@ interface LibraryDao {
 
     @Query("""SELECT * FROM items WHERE (:source='' OR source=:source)
         AND kind IN ('MOVIE','SERIES') AND (backdrop!='' OR logo!='')
-        ORDER BY items.rowid DESC""")
+        ORDER BY items.rowid DESC LIMIT 60""")
     fun homeFeaturesRows(source: String): Flow<List<Item>>
 
     fun homeFeatures(source: String): Flow<List<Item>> = homeFeaturesRows(source).map { it.mergeVersions().take(6) }
@@ -131,7 +133,7 @@ interface LibraryDao {
 
     @Query(
         """SELECT items.* FROM items JOIN collections USING(id) WHERE name=:name AND (:source='' OR source=:source)
-        ORDER BY year,title"""
+        ORDER BY year,title LIMIT 240"""
     )
     fun membersRows(source: String, name: String): Flow<List<Item>>
 
@@ -140,7 +142,7 @@ interface LibraryDao {
     @Query(
         """SELECT i.* FROM items i WHERE (:source='' OR i.source=:source) AND i.kind IN ('MOVIE','SERIES')
         AND i.category IN (SELECT j.category FROM items j JOIN marks m ON m.id=j.id WHERE m.favorite=1 OR m.position>0)
-        AND i.id NOT IN (SELECT id FROM marks WHERE position>0 OR favorite=1) ORDER BY CAST(i.rating AS REAL) DESC,i.title"""
+        AND i.id NOT IN (SELECT id FROM marks WHERE position>0 OR favorite=1) ORDER BY CAST(i.rating AS REAL) DESC,i.title LIMIT 96"""
     )
     fun suggestionsRows(source: String): Flow<List<Item>>
 
@@ -185,7 +187,7 @@ interface LibraryDao {
         WHERE (:source='' OR i.source=:source) AND i.kind IN ('MOVIE','SERIES')
         AND (i.kind!='SERIES' OR EXISTS(SELECT 1 FROM items ep LEFT JOIN marks m ON m.id=ep.id
             WHERE ep.parent=i.id AND (m.id IS NULL OR m.duration<=0 OR m.position<m.duration*0.90)))
-        ORDER BY history.activity DESC,i.id""")
+        ORDER BY history.activity DESC,i.id LIMIT 96""")
     fun continueWatchingRows(source: String): Flow<List<Item>>
 
     fun continueWatching(source: String): Flow<List<Item>> = continueWatchingRows(source).map { it.mergeVersions().take(24) }
@@ -238,7 +240,10 @@ interface LibraryDao {
 
     fun browse(source: String, kind: String, category: String, query: String, shelf: String, limit: Int,
                year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0): Flow<List<Item>> =
-        browseRows(source, kind, category, query, shelf, if (kind == "LIVE") limit else -1, year, genre, language, minRating)
+        browseRows(source, kind, category, query, shelf,
+            if (kind == "LIVE") limit else if (limit == Int.MAX_VALUE) -1
+            else (limit.toLong() * VERSION_HEADROOM).coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+            year, genre, language, minRating)
             .map { it.mergeVersions().take(limit) }
 
     @Query("SELECT * FROM items WHERE id=:id")
