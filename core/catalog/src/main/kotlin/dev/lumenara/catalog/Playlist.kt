@@ -35,6 +35,7 @@ data class Listing(
     val tvgChno: String = "",
     val parentUrl: String = "",
     val durationMs: Long = 0,
+    val tmdbId: String = "",
 )
 
 fun canSkipIntro(start: Long, end: Long, position: Long, duration: Long) =

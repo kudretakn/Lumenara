@@ -20,6 +20,7 @@ fun createPlayer(
     profile: String = "Dengeli",
     subtitleUri: android.net.Uri? = null,
     automaticRetries: Boolean = true,
+    subtitleDelayUs: java.util.concurrent.atomic.AtomicLong = java.util.concurrent.atomic.AtomicLong(),
 ): ExoPlayer {
     val control = DefaultLoadControl.Builder()
     when (profile) {
@@ -35,13 +36,28 @@ fun createPlayer(
         ) { spec ->
             if (
                 spec.uri.scheme !in listOf("http", "https") &&
-                    !(spec.uri.scheme == "content" && spec.uri == subtitleUri)
+                    !(spec.uri.scheme in listOf("content", "file") && spec.uri == subtitleUri)
             ) {
                 throw java.io.IOException("Yayın konumu desteklenmiyor.")
             }
             spec
         }
-    return ExoPlayer.Builder(context)
+    val defaultRenderers = androidx.media3.exoplayer.DefaultRenderersFactory(context)
+    val renderers = androidx.media3.exoplayer.RenderersFactory { handler, video, audio, text, metadata ->
+        defaultRenderers.createRenderers(handler, video, audio, text, metadata).map { renderer ->
+            if (renderer.trackType == androidx.media3.common.C.TRACK_TYPE_TEXT)
+                object : androidx.media3.exoplayer.ForwardingRenderer(renderer) {
+                    override fun getDurationToProgressUs(positionUs: Long, elapsedRealtimeUs: Long): Long =
+                        super.getDurationToProgressUs(positionUs - subtitleDelayUs.get(), elapsedRealtimeUs)
+
+                    override fun render(positionUs: Long, elapsedRealtimeUs: Long) {
+                        super.render(positionUs - subtitleDelayUs.get(), elapsedRealtimeUs)
+                    }
+                }
+            else renderer
+        }.toTypedArray()
+    }
+    return ExoPlayer.Builder(context, renderers)
         .setLoadControl(control.build())
         .setMediaSourceFactory(DefaultMediaSourceFactory(requests).apply {
             if (!automaticRetries) setLoadErrorHandlingPolicy(

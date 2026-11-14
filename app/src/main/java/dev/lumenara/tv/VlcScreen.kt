@@ -11,6 +11,7 @@ import androidx.compose.ui.focus.*
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.*
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.*
@@ -21,9 +22,12 @@ import dev.lumenara.data.nextItem
 import dev.lumenara.data.seriesOrder
 import dev.lumenara.design.Ink
 import dev.lumenara.design.glass
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
+import dev.lumenara.catalog.*
 import dev.lumenara.vlc.VlcInput
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
@@ -41,6 +45,8 @@ internal fun VlcScreen(
     exo: (Long) -> Unit,
     back: () -> Unit,
     group: List<Item>,
+    subtitle: androidx.media3.common.MediaItem.SubtitleConfiguration?,
+    attachSubtitle: (androidx.media3.common.MediaItem.SubtitleConfiguration?) -> Unit,
     select: (Item, List<Item>) -> Unit,
     next: () -> Unit,
 ) {
@@ -65,7 +71,71 @@ internal fun VlcScreen(
     var player by remember { mutableStateOf<MediaPlayer?>(null) }
     val playbackMutex = remember { Mutex() }
     var message by remember { mutableStateOf("") }
-    var delayMs by remember { mutableLongStateOf(0) }
+    var subtitleNotice by remember(item.id) { mutableStateOf("") }
+    var delayMs by remember(item.id) { mutableLongStateOf(0) }
+    var preferenceKey by remember(item.id) { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
+    var audioTracks by remember(item.id) { mutableStateOf(emptyList<MediaPlayer.TrackDescription>()) }
+    var textTracks by remember(item.id) { mutableStateOf(emptyList<MediaPlayer.TrackDescription>()) }
+    var languages by remember(item.id) { mutableStateOf(emptyMap<Int, String>()) }
+    LaunchedEffect(item.id) {
+        preferenceKey = model.repo.preferenceKey(item)
+        delayMs = model.prefs.text("delay_$preferenceKey", "0").first().toLongOrNull() ?: 0
+    }
+    var nativePlaying by remember(item.id) { mutableStateOf(false) }
+    val currentSubtitle by rememberUpdatedState(subtitle)
+    var activeSubtitle by remember(player) { mutableStateOf(false) }
+    var attached by remember(player) { mutableStateOf<android.net.Uri?>(null) }
+    LaunchedEffect(player, subtitle, nativePlaying) {
+        val p = player ?: return@LaunchedEffect
+        if (subtitle != null && nativePlaying && attached != subtitle.uri) {
+            if (p.addSlave(org.videolan.libvlc.interfaces.IMedia.Slave.Type.Subtitle, subtitle.uri, true)) attached = subtitle.uri
+        } else if (subtitle == null && attached != null) {
+            p.setSpuTrack(-1)
+            attached = null
+        }
+    }
+    LaunchedEffect(player) {
+        val p = player ?: return@LaunchedEffect
+        val key = model.repo.preferenceKey(item)
+        var signature = ""
+        wallClockTicks(500).collect {
+            val audio = p.audioTracks?.toList().orEmpty()
+            val text = p.spuTracks?.toList().orEmpty()
+            val current = audio.joinToString { "${it.id}:${it.name}" } + text.joinToString { "${it.id}:${it.name}" }
+            if (current != signature) {
+                signature = current
+                audioTracks = audio
+                textTracks = text
+                val media = p.media
+                try {
+                    languages = (0 until (media?.trackCount ?: 0)).mapNotNull { index ->
+                        media?.getTrack(index)?.let { track -> track.id to track.language.orEmpty() }
+                    }.toMap()
+                } finally { media?.release() }
+                val savedAudio = model.prefs.playbackChoice("audio", key)
+                val savedText = model.prefs.playbackChoice("text", key)
+                val chosenAudio = audio.filter { trackPreferenceRank(savedAudio, languages[it.id], it.id.toString()) < 2 }
+                    .minByOrNull { trackPreferenceRank(savedAudio, languages[it.id], it.id.toString()) }
+                    ?: audio.firstOrNull { isTurkish(languages[it.id]) || it.name.contains("Turkish", true) || it.name.contains("Türkçe", true) }
+                    ?: audio.firstOrNull { it.id >= 0 }
+                chosenAudio?.let { p.setAudioTrack(it.id) }
+                val dubbed = productionName(item.title, item.year).version == AudioVersion.DUBBED ||
+                    chosenAudio?.let { isTurkish(languages[it.id]) || it.name.contains("Turkish", true) || it.name.contains("Türkçe", true) } == true
+                if (subtitlesDisabled(savedText, turkishAudio = dubbed, dubbed = false)) p.setSpuTrack(-1)
+                else {
+                    val chosenText = text.lastOrNull { savedText == "downloaded" && it.id >= 0 && currentSubtitle != null }
+                        ?: text.filter { trackPreferenceRank(savedText, languages[it.id], it.id.toString()) < 2 }
+                            .minByOrNull { trackPreferenceRank(savedText, languages[it.id], it.id.toString()) }
+                        ?: text.firstOrNull { isTurkish(languages[it.id]) || it.name.contains("Türkçe", true) || it.name.contains("Turkish", true) }
+                        ?: text.lastOrNull { it.id >= 0 && currentSubtitle != null }
+                    p.setSpuTrack(chosenText?.id ?: -1)
+                }
+            }
+            activeSubtitle = attached != null && p.spuTrack >= 0
+            p.setSpuDelay(delayMs * 1000)
+        }
+    }
     LaunchedEffect(layout, panel, fullscreen.guide, fullscreen.finished, player, retry.generation, retry.reconnecting) {
         if (!panel && !fullscreen.guide && !fullscreen.finished) {
             if (!composeView.hasFocus()) composeView.requestFocus()
@@ -82,6 +152,7 @@ internal fun VlcScreen(
     }
     LaunchedEffect(layout, item.id, retry.generation) {
         val surface = layout ?: return@LaunchedEffect
+        nativePlaying = false
         message = ""
         val playbackScope = this
         playbackMutex.withLock {
@@ -125,6 +196,7 @@ internal fun VlcScreen(
                         playbackScope.launch(Dispatchers.Main.immediate) {
                             when (event.type) {
                                 MediaPlayer.Event.Playing -> {
+                                    nativePlaying = true
                                     retry.playing()
                                     message = ""
                                     if (!recorded) {
@@ -155,7 +227,7 @@ internal fun VlcScreen(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                android.util.Log.w("LumenaraVlc", "VLC playback failed", e)
+                android.util.Log.w("LumenaraVlc", "VLC playback failed: ${e.javaClass.simpleName}")
                 if (item.kind != "LIVE" || e !is java.io.IOException || !retry.failed()) {
                     message = "VLC bu kaynakta TS, MKV veya konumlandırılabilir MP4 dosyası gerektirir."
                     panel = true
@@ -165,6 +237,7 @@ internal fun VlcScreen(
                     val p = engine
                     withContext(Dispatchers.Main.immediate) {
                         player = null
+                        nativePlaying = false
                         p?.setEventListener(null)
                         p?.detachViews()
                     }
@@ -195,7 +268,10 @@ internal fun VlcScreen(
         Modifier.fillMaxSize()
             .background(androidx.compose.ui.graphics.Color.Black)
             .focusRequester(focus)
-            .semantics { contentDescription = "Tam ekran oynatıcı" }
+            .semantics {
+                contentDescription = "Tam ekran oynatıcı"
+                if (activeSubtitle) stateDescription = "İndirilen altyazı etkin"
+            }
             .onPreviewKeyEvent {
                 val key = it.nativeKeyEvent
                 val code = key.keyCode
@@ -231,11 +307,12 @@ internal fun VlcScreen(
             if (item.kind == "EPISODE" && group.nextItem(item) != null) next else null)
         Reconnecting(retry)
         numbers?.let { NumberEntry(it) }
+        SubtitleNotice(subtitleNotice) { subtitleNotice = "" }
         if (panel) {
             val first = remember { FocusRequester() }
             LaunchedEffect(Unit) { first.requestFocus() }
             LazyColumn(
-                Modifier.width(330.dp).fillMaxHeight().padding(12.dp).glass().padding(16.dp),
+                Modifier.width(420.dp).fillMaxHeight().testTag("player-options").padding(start = 48.dp, top = 27.dp, bottom = 27.dp).glass().padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 item {
@@ -254,6 +331,19 @@ internal fun VlcScreen(
                 item {
                     Button(onClick = { exo(player?.time ?: position) }) { Text("Media3 ile aç") }
                 }
+                item { VersionChoice(model, item) { version ->
+                    scope.launch {
+                        val p = player
+                        if (p != null) model.repo.updateMark(item.id) { it.copy(position = p.time.coerceAtLeast(0), duration = p.length.coerceAtLeast(0)) }
+                        val rows = if (version.kind == "EPISODE") model.repo.library.episodeSnapshot(version.parent).seriesOrder() else group
+                        select(version, rows)
+                    }
+                } }
+                item { SubtitleSearch(model, item, status = { subtitleNotice = it }) { attachSubtitle(it); panel = false } }
+                item { Subtitles { configuration -> scope.launch {
+                    model.prefs.set("text_$preferenceKey", if (configuration == null) "off" else "tr")
+                    attachSubtitle(configuration)
+                } } }
                 player?.let { p ->
                     if (item.introStartMs >= 0)
                         item {
@@ -276,26 +366,33 @@ internal fun VlcScreen(
                                 Button(onClick = { p.setTime(p.time + 10000) }) { Text("+10 sn") }
                             }
                         }
-                    items(p.audioTracks?.toList().orEmpty()) { track ->
-                        Button(onClick = { p.setAudioTrack(track.id) }) {
-                            Text("Ses · ${track.name}")
+                    items(audioTracks) { track ->
+                        Button(onClick = {
+                            p.setAudioTrack(track.id)
+                            scope.launch { model.prefs.set("audio_$preferenceKey", trackChoice(languages[track.id], track.id.toString())) }
+                        }) {
+                            Text("Ses · ${languageName(languages[track.id])} · ${track.name}")
                         }
                     }
-                    items(p.spuTracks?.toList().orEmpty()) { track ->
-                        Button(onClick = { p.setSpuTrack(track.id) }) {
-                            Text("Altyazı · ${track.name}")
+                    items(textTracks) { track ->
+                        Button(onClick = {
+                            p.setSpuTrack(track.id)
+                            scope.launch { model.prefs.set("text_$preferenceKey", if (track.id < 0) "off" else trackChoice(languages[track.id], track.id.toString())) }
+                        }) {
+                            Text(if (track.id < 0) "Altyazıyı kapat" else "Altyazı · ${languageName(languages[track.id])} · ${track.name}")
                         }
                     }
                     item {
                         Text("Altyazı gecikmesi · $delayMs ms")
                         Row {
-                            for (step in listOf(-100L, 100L)) Button(
+                            for (step in listOf(-500L, 500L)) Button(
                                 onClick = {
-                                    delayMs += step
+                                    delayMs = (delayMs + step).coerceIn(-60_000, 60_000)
+                                    scope.launch { model.prefs.set("delay_$preferenceKey", delayMs.toString()) }
                                     p.setSpuDelay(delayMs * 1000)
                                 }
                             ) {
-                                Text(if (step < 0) "−100 ms" else "+100 ms")
+                                Text(if (step < 0) "−0,5 sn" else "+0,5 sn")
                             }
                         }
                     }

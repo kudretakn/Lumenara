@@ -22,6 +22,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.*
 import dev.lumenara.data.*
 import dev.lumenara.design.Ink
+import kotlinx.coroutines.launch
 
 private val sections =
     listOf(
@@ -58,9 +59,18 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
         }
     }
     val open: (Item) -> Unit = { detail = it }
+    val playbackScope = rememberCoroutineScope()
     val play: (Item, List<Item>) -> Unit = { item, group ->
-        siblings = if (item.kind == "EPISODE") group.seriesOrder() else group
-        playing = item
+        playbackScope.launch {
+            try {
+                val chosen = model.repo.selectedVersion(item)
+                siblings = if (chosen.kind == "EPISODE" && chosen.parent != item.parent)
+                    model.repo.library.episodeSnapshot(chosen.parent).seriesOrder()
+                    else if (item.kind == "EPISODE") group.seriesOrder() else group
+                playing = chosen
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (_: Exception) { model.notice.value = "Seçilen sürüm açılamadı." }
+        }
     }
     val item = playing
     if (item != null) {
