@@ -1,12 +1,14 @@
 package dev.streamora.tv
 
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.*
-import dev.streamora.data.Repository
+import dev.streamora.data.*
+import java.io.File
+import kotlinx.coroutines.flow.first
 import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.*
 import okio.Buffer
@@ -24,6 +26,10 @@ class LibraryJourneyTest {
         val device = UiDevice.getInstance(test)
         val repo = Repository.get(context)
         val name = "Test · Kullanım"
+        val preferences = Preferences(context)
+        val previousRecent = runBlocking { preferences.text("recent_live").first() }
+        val previousEngine = runBlocking { preferences.text("engine", "Media3").first() }
+        runBlocking { preferences.set("engine", "Media3") }
         val received = CountDownLatch(1)
         MockWebServer().use { server ->
             server.start()
@@ -70,6 +76,20 @@ class LibraryJourneyTest {
                 button("HTTP uyumluluğu · Açık").assertExists()
                 select("Bağlantıyı sına ve ekle")
                 button("Şu an yayında — favori kanallar").assertExists()
+                val channel = runBlocking {
+                    val source = repo.library.snapshot().single { it.name == name }
+                    val item = repo.library.browse(source.id, "LIVE", "", "", "", 1).first().single()
+                    val now = System.currentTimeMillis()
+                    repo.guide.put(Feed("live-journey", source.id, ""))
+                    repo.guide.slots(listOf(
+                        Slot("live-journey", "sport", now - 1_800_000, now + 1_800_000,
+                            "Canlı Maç", "Günün karşılaşması ve saha içinden gelişmeler.", "canli mac"),
+                        Slot("live-journey", "sport", now + 1_800_000, now + 3_600_000,
+                            "Maç Sonu", "Karşılaşmanın değerlendirmesi.", "mac sonu"),
+                    ))
+                    repo.guide.map(Mapping(item.id, "live-journey", "sport"))
+                    item
+                }
                 screen.onNodeWithContentDescription("Canlı TV")
                     .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus)
                 screen.waitForIdle()
@@ -79,10 +99,34 @@ class LibraryJourneyTest {
                 device.pressDPadRight()
                 screen.waitForIdle()
                 screen.onNodeWithTag("nav-closed").assertExists()
-                select("Test Kanalı")
-                button("Tam ekran").assertExists()
-                screen.waitUntil(15000) { received.count == 0L }
-                select("Tam ekran")
+                screen.waitUntil(10000) {
+                    screen.onAllNodesWithTag("live-category-Spor").fetchSemanticsNodes().isNotEmpty()
+                }
+                screen.onNodeWithTag("live-category-Spor")
+                    .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus)
+                screen.waitForIdle()
+                device.pressDPadCenter()
+                screen.waitForIdle()
+                screen.onNodeWithTag("live-category-Spor").assertIsSelected()
+                screen.waitUntil(10000) {
+                    screen.onAllNodesWithTag("live-channel-${channel.id}").fetchSemanticsNodes().isNotEmpty()
+                }
+                val row = screen.onNodeWithTag("live-channel-${channel.id}")
+                row.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus)
+                screen.waitUntil(15000) {
+                    screen.onAllNodes(hasTestTag("live-preview") and
+                        SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Oynatılıyor"))
+                        .fetchSemanticsNodes().isNotEmpty()
+                }
+                assertEquals(0L, received.count)
+                button("Sonra: Maç Sonu").assertExists()
+                button("Tam ekran için OK").assertExists()
+                row.assertIsFocused()
+                screen.onNode(hasTestTag("live-preview-panel") and isFocusable()).assertDoesNotExist()
+                val image = File(context.getExternalFilesDir(null), "screens/live.png")
+                checkNotNull(image.parentFile).mkdirs()
+                assertTrue("Canlı TV ekran görüntüsü", device.takeScreenshot(image))
+                device.pressDPadCenter()
                 screen.waitUntil(10000) {
                     screen.onAllNodes(hasContentDescription("Tam ekran oynatıcı") and isFocused())
                         .fetchSemanticsNodes().isNotEmpty()
@@ -92,8 +136,19 @@ class LibraryJourneyTest {
                 device.pressBack()
                 device.pressBack()
                 button("Yayın çizelgesi")
+                // Long OK keeps the existing favorite/EPG operations reachable.
+                screen.onNodeWithTag("live-channel-${channel.id}")
+                    .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnLongClick)
+                button("Favoriye ekle").assertExists()
+                device.pressBack()
+                select("Yayın çizelgesi")
+                button("Kanallar").assertExists()
+                device.pressBack()
+                button("Yayın çizelgesi").assertExists()
             } finally {
                 runBlocking {
+                    preferences.set("recent_live", previousRecent)
+                    preferences.set("engine", previousEngine)
                     repo.library
                         .snapshot()
                         .filter { it.name == name }

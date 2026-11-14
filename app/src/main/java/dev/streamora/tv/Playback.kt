@@ -10,6 +10,7 @@ import androidx.compose.ui.*
 import androidx.compose.ui.focus.*
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.*
 import androidx.compose.ui.viewinterop.AndroidView
@@ -49,6 +50,7 @@ internal fun Video(
     if (!lifecycle.isAtLeast(Lifecycle.State.STARTED)) return
     val currentReady by rememberUpdatedState(ready)
     val currentEnded by rememberUpdatedState(ended)
+    var playbackActive by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var attempt by remember { mutableIntStateOf(0) }
     var player by remember { mutableStateOf<ExoPlayer?>(null) }
@@ -96,6 +98,7 @@ internal fun Video(
                 engine.addListener(
                     object : Player.Listener {
                         override fun onIsPlayingChanged(isPlaying: Boolean) {
+                            playbackActive = isPlaying
                             if (isPlaying && !recorded) {
                                 recorded = true
                                 model.started(item)
@@ -156,7 +159,9 @@ internal fun Video(
             }
         }
     }
-    Box(modifier.background(androidx.compose.ui.graphics.Color.Black)) {
+    Box(modifier.background(androidx.compose.ui.graphics.Color.Black).semantics {
+        if (preview) stateDescription = if (playbackActive) "Oynatılıyor" else "Yükleniyor"
+    }) {
         AndroidView(
             factory = {
                 PlayerView(it).apply {
@@ -192,7 +197,7 @@ internal fun Video(
         if (error.isNotEmpty())
             Column(Modifier.align(Alignment.Center).background(Ink.secondary).padding(12.dp)) {
                 Text(error, maxLines = 3)
-                Button(onClick = { attempt++ }) { Text("Yeniden dene") }
+                if (!preview) Button(onClick = { attempt++ }) { Text("Yeniden dene") }
             }
     }
 }

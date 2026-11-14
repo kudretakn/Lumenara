@@ -88,6 +88,8 @@ data class Mark(
 )
 data class Member(@PrimaryKey val id: String, val name: String)
 
+data class LiveCategoryCount(val category: String, val count: Int)
+
 @Dao
 interface LibraryDao {
     @Query("""SELECT * FROM items WHERE id IN (:ids) AND kind='LIVE'
@@ -104,6 +106,10 @@ interface LibraryDao {
             AND (:source='' OR source=:source) ORDER BY category,title,id LIMIT 1)
         ORDER BY title,id LIMIT 20""")
     fun firstLiveCategory(source: String): Flow<List<Item>>
+
+    @Query("""SELECT category, COUNT(*) AS count FROM items
+        WHERE kind='LIVE' AND (:source='' OR source=:source) GROUP BY category ORDER BY category""")
+    fun liveCategoryCounts(source: String): Flow<List<LiveCategoryCount>>
 
     @Upsert suspend fun collection(member: Member)
 

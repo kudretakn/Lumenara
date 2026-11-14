@@ -194,13 +194,9 @@ internal fun Browse(
             "Diziler" -> "SERIES"
             else -> ""
         }
-    var timeline by rememberSaveable { mutableStateOf(false) }
     if (kind == "LIVE") {
-        if (timeline) {
-            Timeline(model, source, open, play) { timeline = false }
-            return
-        }
-        Button(onClick = { timeline = true }) { Text("Yayın çizelgesi") }
+        LiveScreen(model, source, open, play)
+        return
     }
     var listTab by rememberSaveable { mutableStateOf("Favoriler") }
     if (section == "Listem") {
@@ -219,7 +215,6 @@ internal fun Browse(
     var query by rememberSaveable { mutableStateOf("") }
     var category by rememberSaveable(source) { mutableStateOf("") }
     var limit by rememberSaveable(source, query, category) { mutableIntStateOf(80) }
-    var previewId by rememberSaveable(source, category) { mutableStateOf<String?>(null) }
     var advanced by rememberSaveable { mutableStateOf(false) }
     BackHandler(advanced) { advanced = false }
     var year by rememberSaveable { mutableStateOf("") }
@@ -254,7 +249,6 @@ internal fun Browse(
             )
     }
     val rows by model.results.collectAsStateWithLifecycle()
-    val preview = rows.firstOrNull { it.id == previewId }
     val groups by
         remember(kind, source) { model.repo.library.categories(kind, source) }
             .collectAsStateWithLifecycle(emptyList())
@@ -318,58 +312,25 @@ internal fun Browse(
                     }
                 }
             }
-        if (section != "Canlı TV") {
-            androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
-                columns = androidx.compose.foundation.lazy.grid.GridCells.Adaptive(116.dp),
-                modifier = Modifier.weight(1f).focusRestorer().focusGroup(),
-                contentPadding = PaddingValues(6.dp),
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                verticalArrangement = Arrangement.spacedBy(18.dp),
-            ) {
-                if (rows.isEmpty()) item { Text("Eşleşen içerik yok.", color = Ink.muted) }
-                items(rows.size, key = { rows[it].id }) { index ->
-                    MovieCard(
-                        model,
-                        rows[index],
-                        rows[index].kind != "LIVE",
-                        open,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-                if (rows.size >= limit)
-                    item { Button(onClick = { limit += 80 }) { Text("Devamını göster") } }
+        androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+            columns = androidx.compose.foundation.lazy.grid.GridCells.Adaptive(116.dp),
+            modifier = Modifier.weight(1f).focusRestorer().focusGroup(),
+            contentPadding = PaddingValues(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp),
+        ) {
+            if (rows.isEmpty()) item { Text("Eşleşen içerik yok.", color = Ink.muted) }
+            items(rows.size, key = { rows[it].id }) { index ->
+                MovieCard(
+                    model,
+                    rows[index],
+                    rows[index].kind != "LIVE",
+                    open,
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
-        } else
-            LazyColumn(Modifier.weight(1f).focusRestorer().focusGroup(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                if (rows.isEmpty()) item { Text("Eşleşen içerik yok.", color = Ink.muted) }
-                items(rows, key = { it.id }) { item ->
-                    Surface(
-                        onClick = { if (section == "Canlı TV") previewId = item.id else open(item) }
-                    ) {
-                        Column(Modifier.fillMaxWidth().padding(8.dp)) {
-                            Text(item.title, maxLines = 2)
-                            Text(item.category, color = Ink.accent, fontSize = 12.sp)
-                        }
-                    }
-                }
-                if (rows.size >= limit)
-                    item { Button(onClick = { limit += 80 }) { Text("Devamını göster") } }
-            }
-        if (section == "Canlı TV")
-            Column(Modifier.weight(1f)) {
-                preview?.let { item ->
-                    key(item.id) {
-                        Video(
-                            model,
-                            item,
-                            Modifier.fillMaxWidth().aspectRatio(16f / 9f),
-                            preview = true,
-                        )
-                    }
-                    Text(item.title, fontSize = 19.sp)
-                    Button(onClick = { play(item, rows) }) { Text("Tam ekran") }
-                    Button(onClick = { open(item) }) { Text("Kanal işlemleri") }
-                } ?: Text("Önizleme için bir kanal seçin.", color = Ink.muted)
-            }
+            if (rows.size >= limit)
+                item { Button(onClick = { limit += 80 }) { Text("Devamını göster") } }
+        }
     }
 }

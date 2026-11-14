@@ -17,11 +17,13 @@ import androidx.tv.material3.*
 fun FocusCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    onLongClick: (() -> Unit)? = null,
     content: @Composable BoxScope.() -> Unit,
 ) {
     val shape = RoundedCornerShape(8.dp)
     Surface(
         onClick = onClick,
+        onLongClick = onLongClick,
         modifier = modifier,
         shape = ClickableSurfaceDefaults.shape(shape),
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.08f),

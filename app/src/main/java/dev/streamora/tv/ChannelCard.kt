@@ -25,6 +25,25 @@ import dev.streamora.design.Ink
 import dev.streamora.design.ProgressLine
 import kotlinx.coroutines.delay
 
+/** Collected only by composed channel cards/rows, never for the whole catalog. */
+@Composable
+internal fun liveProgrammes(
+    model: LibraryModel,
+    item: Item,
+    now: Long,
+    horizon: Long = 1,
+): List<dev.streamora.data.Slot> {
+    val mapping by remember(item.id) { model.repo.guide.mapping(item.id) }
+        .collectAsStateWithLifecycle(null)
+    val slots by remember(item, mapping, now, horizon) {
+        model.repo.guide.guide(
+            item.source, mapping?.channel ?: item.tvgId, searchable(item.title),
+            now, now + horizon, "", mapping?.feed.orEmpty(),
+        )
+    }.collectAsStateWithLifecycle(emptyList())
+    return slots
+}
+
 @Composable
 internal fun ChannelCard(
     model: LibraryModel,
@@ -33,14 +52,7 @@ internal fun ChannelCard(
     play: () -> Unit,
     focus: (Item) -> Unit,
 ) {
-    val mapping by remember(item.id) { model.repo.guide.mapping(item.id) }
-        .collectAsStateWithLifecycle(null)
-    val slots by remember(item, mapping, now) {
-        model.repo.guide.guide(
-            item.source, mapping?.channel ?: item.tvgId, searchable(item.title),
-            now, now + 1, "", mapping?.feed.orEmpty(),
-        )
-    }.collectAsStateWithLifecycle(emptyList())
+    val slots = liveProgrammes(model, item, now)
     val current = slots.firstOrNull { now >= it.start && now < it.end }
     val logo by produceState<String?>(null, item.logo) { value = model.repo.poster(item) }
     FocusCard(

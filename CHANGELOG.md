@@ -2,6 +2,8 @@
 
 ## 0.3.0 (geliştiriliyor)
 
+- Canlı TV üç sütuna ayrıldı: son izlenenler/favoriler ve sayılı kategoriler, görünür satırlarda EPG/sonraki program bilgili kanal listesi ve 600 ms odak beklemesiyle sesli önizleme. OK doğrudan tam ekran, uzun OK kanal işlemlerini açar; arama, sayfalama ve yayın çizelgesi korunur. Sahte sağlayıcı yolculuğu ve `screens/live.png` ekran görüntüsü adımı güncellendi.
+
 - Canlı TV öncelikli ana sayfa, EPG ilerlemeli kanal rafları, DataStore’da son 20 kanal ve 9 saniyede dönen vitrin eklendi; ana sayfa yolculuk ve ekran görüntüsü adımları güncellendi.
 
 - Cam tasarım sistemi, 72/240 dp açılır sol menü ve iki sekmeli Listem eklendi; IPTV Kaynakları Ayarlar’a taşındı. Kumanda testleri ve açık/kapalı menü ekran görüntüsü adımları güncellendi.
