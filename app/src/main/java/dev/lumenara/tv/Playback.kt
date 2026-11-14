@@ -482,12 +482,12 @@ internal fun Playback(
                 item { VersionChoice(model, item) { version ->
                     scope.launch {
                         // Read ExoPlayer on the main thread; updateMark runs its transform inside a DB transaction.
-                        val p = engine
-                        if (p != null) {
-                            val position = p.currentPosition.coerceAtLeast(0)
-                            val duration = p.duration.coerceAtLeast(0)
-                            model.repo.updateMark(item.id) { it.copy(position = position, duration = duration) }
+                        // ExoPlayer must be read on the main thread; this callback may resume elsewhere.
+                        val snapshot = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main.immediate) {
+                            engine?.let { it.currentPosition.coerceAtLeast(0) to it.duration.coerceAtLeast(0) }
                         }
+                        if (snapshot != null)
+                            model.repo.updateMark(item.id) { it.copy(position = snapshot.first, duration = snapshot.second) }
                         if (version.kind == "EPISODE") changeGroup(model.repo.library.episodeSnapshot(version.parent).seriesOrder())
                         select(version)
                     }

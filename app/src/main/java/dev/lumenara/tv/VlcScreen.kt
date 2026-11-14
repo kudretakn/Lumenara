@@ -333,12 +333,11 @@ internal fun VlcScreen(
                 }
                 item { VersionChoice(model, item) { version ->
                     scope.launch {
-                        val p = player
-                        if (p != null) {
-                            val position = p.time.coerceAtLeast(0)
-                            val duration = p.length.coerceAtLeast(0)
-                            model.repo.updateMark(item.id) { it.copy(position = position, duration = duration) }
+                        val snapshot = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main.immediate) {
+                            player?.let { it.time.coerceAtLeast(0) to it.length.coerceAtLeast(0) }
                         }
+                        if (snapshot != null)
+                            model.repo.updateMark(item.id) { it.copy(position = snapshot.first, duration = snapshot.second) }
                         val rows = if (version.kind == "EPISODE") model.repo.library.episodeSnapshot(version.parent).seriesOrder() else group
                         select(version, rows)
                     }
