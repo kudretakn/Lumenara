@@ -4,13 +4,16 @@ Lumenara, kendi IPTV kaynağınızı Android TV veya Google TV kumandasıyla izl
 
 ## TV’ye kurulum
 
-Kişisel kullanım için imzalı **Lumenara-0.2.1-release.apk** dosyasını kullanın. Dosya proje klasöründeki `dist` dizinindedir. TV’de dosya yöneticisiyle açıp sistemin kurulum adımlarını izleyin. TV kurulum izni isterse kullandığınız dosya yöneticisi için izin verin.
+İmzalı sürümler herkese açık **[kudretakn/Lumenara-releases](https://github.com/kudretakn/Lumenara-releases/releases)** deposunda yayımlanır.
 
-ADB ile kurmak için TV’nin geliştirici seçeneklerinde hata ayıklamayı açın, bilgisayarın bağlantısını TV’de onaylayın ve proje klasöründe çalıştırın.
+1. **İlk kurulum:** Son sürümün `Lumenara-X.Y.Z.apk` dosyasını TV’ye indirin (ör. TV tarayıcısı, “Downloader” uygulaması veya USB bellek) ve dosya yöneticisiyle açın. TV kurulum izni isterse ilgili uygulamaya izin verin.
+2. **Güncellemeler:** Lumenara’da **Ayarlar → GitHub deposu** alanına `kudretakn/Lumenara-releases` yazın. Yeni sürüm çıktığında menüdeki Ayarlar simgesinde nokta görünür; **Güncelle** düğmesi APK’yı indirir, imzasını ve SHA-256 özetini doğrular ve Android kurulum onayını açar. İlk güncellemede Android, Lumenara için “bilinmeyen uygulamaları yükleme” izni ister.
+
+ADB ile kurmak için TV’nin geliştirici seçeneklerinde hata ayıklamayı açın ve bilgisayardan çalıştırın:
 
 ```powershell
 adb devices -l
-adb -s TV_SERI_NUMARASI install -r .\dist\Lumenara-0.2.1-release.apk
+adb -s TV_SERI_NUMARASI install -r .\Lumenara-0.3.0.apk
 adb -s TV_SERI_NUMARASI shell am start -n dev.lumenara.tv/.MainActivity
 ```
 
@@ -55,7 +58,9 @@ Cihaz testleri bağlı bir Android TV veya Android TV AVD gerektirir. Varsayıla
 
 ## Kişisel imza ve sonraki sürümler
 
-Bu bilgisayarda oluşturulan PKCS#12 anahtarı ve DPAPI ile korunan parola, Windows kullanıcı profilinizin `.lumenara\signing` klasöründedir. Sonraki release’i aynı Windows hesabında oluşturmak için:
+**Otomatik yayın (önerilen):** `main` üzerinde `versionName` artırılıp `vX.Y.Z` etiketi gönderildiğinde `.github/workflows/release.yml` testleri çalıştırır, release APK’yı GitHub secret’larındaki kişisel anahtarla imzalar, sertifika SHA-256 değerini (`2a4804f0…`) denetler ve APK’yı CHANGELOG notlarıyla `kudretakn/Lumenara-releases` deposuna yayımlar. Gerekli secret’lar: `LUMENARA_KEYSTORE_B64`, `LUMENARA_KEYSTORE_PASSWORD`, `LUMENARA_RELEASES_TOKEN` (yalnızca Lumenara-releases için Contents yazma izinli ince ayarlı token).
+
+**Elle imzalama:** PKCS#12 anahtarı ve DPAPI ile korunan parola Windows kullanıcı profilinizin `.lumenara\signing` klasöründedir (0.3.0 öncesinden kalan `.streamora\signing` klasörü de tanınır; anahtar içindeki takma ad `streamora` olarak kalır). Release’i aynı Windows hesabında elle oluşturmak için:
 
 ```powershell
 .\gradlew.bat :app:assembleRelease

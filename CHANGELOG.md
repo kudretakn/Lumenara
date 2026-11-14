@@ -1,6 +1,6 @@
 # Lumenara sürüm kaydı
 
-## 0.3.0 (geliştiriliyor)
+## 0.3.0 · 14 Kasım 2026
 
 - Uygulamanın adı Streamora'dan Lumenara'ya değişti: uygulama kimliği `dev.lumenara.tv`, paketler, veritabanı ve anahtar adları dahil. Streamora kurulumlarının üzerine güncellenmez (taşınacak kurulum yoktu). Yeni logo: sahne ışığı.
 
