@@ -2,6 +2,8 @@
 
 ## 0.3.0 (geliştiriliyor)
 
+- Media3 ve VLC tam ekranda ortak 4 saniyelik cam bilgi bandı ve 8 saniye işlemsizlikte kapanan, kategori seçicili sanallaştırılmış mini rehber eklendi. Sol / bant açıkken OK rehberi, uzun OK / Menü seçenekleri açar; VOD zaman çubuğu, ±10 saniye sarma ve sonraki bölüm kartı yenilendi. İki motor ve 10.000 kanallı sahte sağlayıcı için tam ekran yolculukları ve ekran görüntüsü adımları eklendi.
+
 - Canlı TV üç sütuna ayrıldı: son izlenenler/favoriler ve sayılı kategoriler, görünür satırlarda EPG/sonraki program bilgili kanal listesi ve 600 ms odak beklemesiyle sesli önizleme. OK doğrudan tam ekran, uzun OK kanal işlemlerini açar; arama, sayfalama ve yayın çizelgesi korunur. Sahte sağlayıcı yolculuğu ve `screens/live.png` ekran görüntüsü adımı güncellendi.
 
 - Canlı TV öncelikli ana sayfa, EPG ilerlemeli kanal rafları, DataStore’da son 20 kanal ve 9 saniyede dönen vitrin eklendi; ana sayfa yolculuk ve ekran görüntüsü adımları güncellendi.

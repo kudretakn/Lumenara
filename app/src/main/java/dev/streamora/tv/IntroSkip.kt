@@ -5,7 +5,7 @@ import androidx.tv.material3.Button
 import androidx.tv.material3.Text
 import dev.streamora.catalog.canSkipIntro
 import dev.streamora.data.Item
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 
 @Composable
 internal fun IntroSkip(item: Item, position: () -> Long, duration: () -> Long, skip: () -> Unit) {
@@ -13,7 +13,7 @@ internal fun IntroSkip(item: Item, position: () -> Long, duration: () -> Long, s
     val currentDuration by rememberUpdatedState(duration)
     val visible by
         produceState(false, item.id) {
-            while (true) {
+            wallClockTicks(400).collect {
                 value =
                     canSkipIntro(
                         item.introStartMs,
@@ -21,7 +21,6 @@ internal fun IntroSkip(item: Item, position: () -> Long, duration: () -> Long, s
                         currentPosition(),
                         currentDuration(),
                     )
-                delay(400)
             }
         }
     if (visible)

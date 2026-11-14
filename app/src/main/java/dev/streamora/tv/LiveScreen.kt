@@ -12,6 +12,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -150,21 +151,22 @@ internal fun LiveScreen(
 }
 
 @Composable
-private fun LiveChannelRow(
+internal fun LiveChannelRow(
     model: LibraryModel, item: Item, number: Int, now: Long,
     play: () -> Unit, operations: () -> Unit, focus: () -> Unit,
+    modifier: Modifier = Modifier, selected: Boolean = false,
 ) {
     // LazyColumn bounds subscriptions to composed rows (including its small prefetch window).
     val slots = liveProgrammes(model, item, now, 86_400_000L)
     val current = slots.firstOrNull { now >= it.start && now < it.end }
     val next = slots.firstOrNull { it.start >= (current?.end ?: now) }
     val logo by produceState<String?>(null, item.id, item.logo) { value = model.repo.poster(item) }
-    FocusCard(play, Modifier.fillMaxWidth().height(128.dp)
-        .testTag("live-channel-${item.id}").semantics { contentDescription = item.title }
+    FocusCard(play, modifier.fillMaxWidth().height(128.dp)
+        .testTag("live-channel-${item.id}").semantics { contentDescription = item.title; this.selected = selected }
         .onFocusChanged { if (it.isFocused) focus() }, onLongClick = operations) {
         Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(number.toString(), color = Ink.muted, fontSize = 12.sp)
+                Text(if (selected) "▶ $number" else number.toString(), color = Ink.muted, fontSize = 12.sp)
                 Box(Modifier.size(28.dp), contentAlignment = Alignment.Center) {
                     Text(item.title.take(1), color = Ink.accent, fontSize = 15.sp)
                     if (logo != null) AsyncImage(logo, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)

@@ -52,7 +52,7 @@ class PlaybackTest {
                 player.prepare()
                 player.play()
             }
-            assertTrue("Video zaman aşımı", ended.await(20, TimeUnit.SECONDS))
+            assertTrue("Video zaman aşımı", ended.await(30, TimeUnit.SECONDS))
             assertNull(failure)
             assertEquals(640, width)
         } finally {

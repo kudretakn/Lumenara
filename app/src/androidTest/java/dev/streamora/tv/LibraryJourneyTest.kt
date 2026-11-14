@@ -152,7 +152,15 @@ class LibraryJourneyTest {
                     screen.onAllNodes(hasContentDescription("Tam ekran oynatıcı") and isFocused())
                         .fetchSemanticsNodes().isNotEmpty()
                 }
-                device.pressDPadCenter()
+                device.pressDPadLeft()
+                screen.waitUntil(30_000) {
+                    screen.onAllNodesWithTag("mini-guide").fetchSemanticsNodes().isNotEmpty()
+                }
+                device.pressBack()
+                screen.waitUntil(30_000) {
+                    screen.onAllNodesWithTag("mini-guide").fetchSemanticsNodes().isEmpty()
+                }
+                device.pressMenu()
                 button("Yayına dön")
                 device.pressBack()
                 screen.waitUntil(30_000) {

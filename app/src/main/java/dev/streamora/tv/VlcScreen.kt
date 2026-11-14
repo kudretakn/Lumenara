@@ -17,6 +17,10 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.tv.material3.*
 import dev.streamora.data.Item
 import dev.streamora.design.Ink
+import dev.streamora.design.glass
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import kotlinx.coroutines.flow.collect
 import dev.streamora.vlc.VlcInput
 import kotlinx.coroutines.*
 import org.videolan.libvlc.LibVLC
@@ -31,12 +35,16 @@ internal fun VlcScreen(
     initial: Long,
     exo: (Long) -> Unit,
     back: () -> Unit,
+    group: List<Item>,
+    select: (Item, List<Item>) -> Unit,
     next: () -> Unit,
 ) {
     val life by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
     var panel by remember { mutableStateOf(false) }
-    var position by remember { mutableLongStateOf(initial) }
-    BackHandler { if (panel) panel = false else back() }
+    var position by remember(item.id) { mutableLongStateOf(initial) }
+    val fullscreen = rememberFullscreenState(item)
+    fun move(delta: Int) { group.getOrNull(group.indexOfFirst { it.id == item.id } + delta)?.let { select(it, group) } }
+    BackHandler { if (panel) panel = false else if (!fullscreen.dismiss()) back() }
     if (!life.isAtLeast(Lifecycle.State.STARTED)) return
     val context = LocalContext.current
     val focus = remember { FocusRequester() }
@@ -44,8 +52,10 @@ internal fun VlcScreen(
     var player by remember { mutableStateOf<MediaPlayer?>(null) }
     var message by remember { mutableStateOf("") }
     var delayMs by remember { mutableLongStateOf(0) }
-    LaunchedEffect(panel) { if (!panel) focus.requestFocus() }
-    LaunchedEffect(layout) {
+    LaunchedEffect(panel, fullscreen.guide, fullscreen.finished) {
+        if (!panel && !fullscreen.guide && !fullscreen.finished) focus.requestFocus()
+    }
+    LaunchedEffect(layout, item.id) {
         val surface = layout ?: return@LaunchedEffect
         var input: VlcInput? = null
         var library: LibVLC? = null
@@ -84,13 +94,13 @@ internal fun VlcScreen(
                     }
                     MediaPlayer.Event.EndReached -> {
                         model.progress(item, p.length, p.length)
-                        next()
+                        if (item.kind == "EPISODE")
+                            fullscreen.finished = group.getOrNull(group.indexOfFirst { row -> row.id == item.id } + 1) != null
                     }
                 }
             }
             p.play()
-            while (true) {
-                delay(5000)
+            wallClockTicks(5000).collect {
                 if (p.isPlaying) model.progress(item, p.time, p.length)
             }
         } catch (e: CancellationException) {
@@ -116,22 +126,16 @@ internal fun VlcScreen(
         Modifier.fillMaxSize()
             .background(Ink.background)
             .focusRequester(focus)
+            .semantics { contentDescription = "Tam ekran oynatıcı" }
             .onPreviewKeyEvent {
                 val key = it.nativeKeyEvent
-                if (
-                    !panel &&
-                        key.keyCode in
-                            listOf(
-                                KeyEvent.KEYCODE_DPAD_CENTER,
-                                KeyEvent.KEYCODE_ENTER,
-                                KeyEvent.KEYCODE_MENU,
-                            )
-                ) {
-                    if (key.action == KeyEvent.ACTION_UP) panel = true
-                    true
-                } else if (key.keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) {
-                    if (key.action == KeyEvent.ACTION_UP)
-                        player?.let { p -> if (p.isPlaying) p.pause() else p.play() }
+                val code = key.keyCode
+                if (!panel && fullscreen.key(key, item.kind == "LIVE", ::move, { panel = true },
+                        { delta -> player?.let { p -> p.setTime((p.time + delta).coerceAtLeast(0)) } })) true
+                else if (code in listOf(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PAUSE)) {
+                    if (key.action == KeyEvent.ACTION_UP) player?.let { p ->
+                        if (code == KeyEvent.KEYCODE_MEDIA_PLAY || code == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE && !p.isPlaying) p.play() else p.pause()
+                    }
                     true
                 } else false
             }
@@ -141,14 +145,18 @@ internal fun VlcScreen(
             factory = { VLCVideoLayout(it).also { view -> layout = view } },
             modifier = Modifier.fillMaxSize(),
         )
+        if (!panel) FullscreenOverlay(model, item, group, fullscreen, select, { panel = true },
+            { player?.time ?: 0 }, { player?.length ?: 0 },
+            if (item.kind == "EPISODE" && group.getOrNull(group.indexOfFirst { it.id == item.id } + 1) != null) next else null)
         if (panel) {
             val first = remember { FocusRequester() }
             LaunchedEffect(Unit) { first.requestFocus() }
             LazyColumn(
-                Modifier.width(330.dp).fillMaxHeight().background(Ink.secondary).padding(16.dp),
+                Modifier.width(330.dp).fillMaxHeight().padding(12.dp).glass().padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 item {
+                    Text("Seçenekler", fontSize = 20.sp)
                     Text(item.title)
                     if (message.isNotEmpty()) Text(message, color = Ink.accent)
                 }
