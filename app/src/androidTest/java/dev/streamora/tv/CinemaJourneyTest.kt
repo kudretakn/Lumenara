@@ -95,8 +95,7 @@ class CinemaJourneyTest {
         }
         fun section(name: String) {
             focus(screen.onNodeWithContentDescription(name))
-            // Dispatch through the Compose root so native input delivery cannot race the next query.
-            screen.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
+            screen.ok()
             screen.waitUntil(30_000) {
                 screen.onAllNodesWithTag("section-$name").fetchSemanticsNodes().isNotEmpty()
             }
@@ -112,7 +111,7 @@ class CinemaJourneyTest {
         }
         fun select(text: String) {
             focus(node(text))
-            device.pressDPadCenter()
+            screen.ok()
         }
         fun capture(name: String) {
             // A real device screenshot includes GPU-composited image transitions and TV focus
@@ -217,25 +216,25 @@ class CinemaJourneyTest {
                 capture("screens/home")
                 screen.onNodeWithText("Canlı TV’ye git").assertDoesNotExist()
                 capture("screens/nav-closed")
-                device.pressDPadLeft()
+                screen.dpad(Key.DirectionLeft)
                 waitFor(hasTestTag("nav-open"))
                 screen.onNodeWithTag("nav-open").assertExists()
                 listOf("Ara", "Ana Sayfa", "Canlı TV", "Filmler", "Diziler", "Listem", "Ayarlar")
                     .forEach { screen.onNodeWithContentDescription(it).assertExists() }
                 capture("screens/nav-open")
-                device.pressDPadRight()
+                screen.dpad(Key.DirectionRight)
                 waitFor(hasText("Oynat") and isFocused())
                 screen.onNodeWithTag("nav-closed").assertExists()
                 node("Oynat").assertIsFocused()
-                device.pressDPadLeft()
+                screen.dpad(Key.DirectionLeft)
                 waitFor(hasTestTag("nav-open"))
-                device.pressBack()
+                screen.back()
                 waitFor(hasText("Oynat") and isFocused())
                 screen.onNodeWithTag("nav-closed").assertExists()
                 node("Oynat").assertIsFocused()
                 // OK on a home channel card must open fullscreen without a detail step.
                 focus(screen.onNodeWithContentDescription("Test Haber"))
-                device.pressDPadCenter()
+                screen.ok()
                 screen.waitUntil(30_000) {
                     runBlocking { preferences.recentLive.first().isNotEmpty() }
                 }
@@ -245,15 +244,27 @@ class CinemaJourneyTest {
                 screen.waitUntil(30_000) {
                     screen.onAllNodesWithTag("fullscreen-banner").fetchSemanticsNodes().isEmpty()
                 }
-                device.pressBack()
+                screen.back()
                 screen.waitUntil(30_000) {
                     screen.onAllNodesWithContentDescription("Tam ekran oynatıcı").fetchSemanticsNodes().isEmpty()
                 }
                 node("Son izlenen kanallar").assertExists()
-                screen.onNodeWithTag("home-shelves")
-                    .performScrollToNode(hasText("Son izlenen kanallar"))
-                focus(screen.onNode(hasContentDescription("Test Haber") and
-                    hasAnyAncestor(hasTestTag("channel-shelf-Son izlenen kanallar"))))
+                // Let Home's entry focus settle on the hero before entering the shelves.
+                // RequestFocus on a card can race the enclosing focus restorers.
+                focus(node("Oynat"))
+                val recentCard = hasContentDescription("Test Haber") and
+                    hasAnyAncestor(hasTestTag("channel-shelf-Son izlenen kanallar"))
+                screen.onNodeWithTag("home-shelves").performScrollToNode(recentCard)
+                screen.onNode(recentCard).assertIsDisplayed()
+                screen.dpad(Key.DirectionDown)
+                // A shelf restorer may re-enter the previously visited on-air row.
+                // Move upward through the shelves instead of requesting card focus again.
+                for (step in 0 until 6) {
+                    if (screen.onAllNodes(recentCard and isFocused())
+                            .fetchSemanticsNodes().isNotEmpty()) break
+                    screen.dpad(Key.DirectionUp)
+                }
+                screen.onNode(recentCard).assertIsFocused()
                 node("Günün Haberleri").assertExists()
                 capture("screens/home-shelves")
                 // The card in the recent shelf is the channel that actually started playback.
@@ -278,16 +289,16 @@ class CinemaJourneyTest {
                     screen.onAllNodesWithText("Kadife Gece").fetchSemanticsNodes().size >= 2
                 }
                 capture("cinema-focus")
-                device.pressDPadCenter()
+                screen.ok()
                 node("İzleme listeme ekle").assertExists()
                 capture("cinema-details")
                 select("İzleme listeme ekle")
                 node("Listeden çıkar").assertExists()
-                device.pressBack()
+                screen.back()
                 section("Filmler")
                 focus(node("İçerik filtreleri"))
                 capture("cinema-movies")
-                device.pressDPadCenter()
+                screen.ok()
                 node("Yıl").assertExists()
                 waitFor(hasContentDescription("Açık Deniz"))
                 screen.onAllNodes(hasSetTextAction())[0].performTextReplacement("1999")
@@ -311,7 +322,7 @@ class CinemaJourneyTest {
                 waitFor(hasContentDescription("Favoriler") and isSelected())
                 screen.onNodeWithContentDescription("Favoriler").assertIsSelected()
                 focus(screen.onNodeWithContentDescription("İzleme Listem"))
-                device.pressDPadCenter()
+                screen.ok()
                 waitFor(hasContentDescription("İzleme Listem") and isSelected())
                 screen.onNodeWithContentDescription("İzleme Listem").assertIsSelected()
                 screen.waitUntil(30_000) {
@@ -326,12 +337,12 @@ class CinemaJourneyTest {
                 screen.onAllNodes(hasSetTextAction())[0].assertTextEquals("2025")
                 section("Ayarlar")
                 node("IPTV Kaynakları").assertExists()
-                device.pressDPadRight()
+                screen.dpad(Key.DirectionRight)
                 waitFor(hasText("IPTV Kaynakları") and isFocused())
                 node("IPTV Kaynakları").assertIsFocused()
-                device.pressDPadCenter()
+                screen.ok()
                 node("✓ M3U").assertExists()
-                device.pressBack()
+                screen.back()
                 node("Varsayılan motor · Media3").assertExists()
             } finally {
                 runBlocking {

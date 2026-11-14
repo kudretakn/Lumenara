@@ -68,6 +68,8 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       - name: Run Android TV device tests
+        id: attempt1
+        continue-on-error: true
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -80,6 +82,26 @@ jobs:
           disable-animations: true
           emulator-options: '-no-window -no-snapshot -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none'
           script: ./scripts/ci-device-tests.sh apks screens
+      - name: Retry once if the emulator never ran the tests
+        id: retry
+        if: steps.attempt1.outcome == 'failure' && hashFiles('screens/summary.txt') == ''
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          target: android-tv
+          arch: x86_64
+          profile: tv_1080p
+          ram-size: 3072M
+          disk-size: 2048M
+          emulator-boot-timeout: 900
+          disable-animations: true
+          emulator-options: '-no-window -no-snapshot -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none'
+          script: ./scripts/ci-device-tests.sh apks screens
+      - name: Fail if tests failed
+        if: steps.attempt1.outcome == 'failure' && steps.retry.outcome == 'skipped'
+        run: |
+          cat screens/summary.txt
+          exit 1
       - name: Upload device test artifacts
         if: always()
         uses: actions/upload-artifact@v4

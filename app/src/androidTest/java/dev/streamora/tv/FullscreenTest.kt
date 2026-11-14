@@ -1,5 +1,6 @@
 package dev.streamora.tv
 
+import androidx.compose.ui.input.key.Key
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -57,7 +58,7 @@ class FullscreenTest {
                         appendLine("#EXTM3U")
                         repeat(count) {
                             appendLine("#EXTINF:-1 group-title=\"Test\",Kanal %05d".format(it))
-                            appendLine(server.url("/live/$it"))
+                            appendLine(server.url("/live/$it.mp4"))
                         }
                     })
                     val start = request.getHeader("Range")?.substringAfter("bytes=")
@@ -97,7 +98,7 @@ class FullscreenTest {
                     }
                 }
                 await(hasContentDescription("Tam ekran oynatıcı") and isFocused())
-                device.pressDPadLeft()
+                screen.dpad(Key.DirectionLeft)
                 await(hasTestTag("mini-guide"))
                 await(hasTestTag("live-channel-${channels[0].id}") and isFocused())
                 val guideBounds = screen.onNodeWithTag("mini-guide").fetchSemanticsNode().boundsInRoot
@@ -118,36 +119,36 @@ class FullscreenTest {
                 if (count > 100) assertTrue(screen.onAllNodes(hasTestTag("live-channel-${channels.last().id}"))
                     .fetchSemanticsNodes().isEmpty())
                 shot(if (engine == "Media3") "mini-guide" else "mini-guide-vlc")
-                device.pressDPadDown()
+                screen.dpad(Key.DirectionDown)
                 await(hasTestTag("live-channel-${channels[1].id}") and isFocused())
-                device.pressDPadCenter()
+                screen.ok()
                 await(hasTestTag("mini-guide"), false)
                 await(hasTestTag("fullscreen-test-host") and
                     SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, channels[1].id))
                 await(hasTestTag("fullscreen-banner"))
                 shot(if (engine == "Media3") "fullscreen-banner" else "fullscreen-banner-vlc")
-                device.pressBack()
+                screen.back()
                 await(hasTestTag("fullscreen-banner"), false)
                 // A second OK while the banner is visible opens the guide; Back dismisses it.
-                device.pressDPadCenter()
+                screen.ok()
                 await(hasTestTag("fullscreen-banner"))
-                device.pressDPadCenter()
+                screen.ok()
                 await(hasTestTag("mini-guide"))
-                device.pressBack()
+                screen.back()
                 await(hasTestTag("mini-guide"), false)
                 // Deadlines use wall time and remain observable while Compose is idle.
-                device.pressDPadCenter()
+                screen.ok()
                 await(hasTestTag("fullscreen-banner"))
                 await(hasTestTag("fullscreen-banner"), false)
-                device.pressDPadLeft()
+                screen.dpad(Key.DirectionLeft)
                 await(hasTestTag("mini-guide"))
                 await(hasTestTag("mini-guide"), false)
                 await(hasContentDescription("Tam ekran oynatıcı") and isFocused())
-                device.pressMenu()
+                screen.dpad(Key.Menu)
                 await(hasText("Yayına dön"))
-                device.pressBack()
+                screen.back()
                 await(hasText("Yayına dön"), false)
-                device.pressBack()
+                screen.back()
                 await(hasTestTag("fullscreen-test-host") and
                     SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Kapandı"))
             } finally {

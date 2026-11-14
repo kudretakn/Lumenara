@@ -1,5 +1,6 @@
 package dev.streamora.tv
 
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -71,11 +72,7 @@ class LibraryJourneyTest {
                 screen.waitUntil(30_000) {
                     screen.onAllNodes(hasText(label) and isFocused()).fetchSemanticsNodes().isNotEmpty()
                 }
-                // Keep the synthetic focus change and its key event on the same Compose
-                // input path; native injection can race the text field's input connection.
-                screen.onRoot().performKeyInput {
-                    pressKey(androidx.compose.ui.input.key.Key.DirectionCenter)
-                }
+                screen.ok()
             }
             try {
                 button("✓ M3U")
@@ -107,9 +104,9 @@ class LibraryJourneyTest {
                         .fetchSemanticsNodes().isNotEmpty()
                 }
                 screen.onNodeWithTag("nav-open").assertExists()
-                device.pressDPadCenter()
+                screen.ok()
                 button("Yayın çizelgesi").assertExists()
-                device.pressDPadRight()
+                screen.dpad(Key.DirectionRight)
                 screen.waitUntil(30_000) {
                     screen.onAllNodesWithTag("nav-closed").fetchSemanticsNodes().isNotEmpty()
                 }
@@ -123,7 +120,7 @@ class LibraryJourneyTest {
                     screen.onAllNodes(hasTestTag("live-category-Spor") and isFocused())
                         .fetchSemanticsNodes().isNotEmpty()
                 }
-                device.pressDPadCenter()
+                screen.ok()
                 screen.waitUntil(30_000) {
                     screen.onAllNodes(hasTestTag("live-category-Spor") and isSelected())
                         .fetchSemanticsNodes().isNotEmpty()
@@ -147,35 +144,35 @@ class LibraryJourneyTest {
                 val image = File(context.getExternalFilesDir(null), "screens/live.png")
                 checkNotNull(image.parentFile).mkdirs()
                 assertTrue("Canlı TV ekran görüntüsü", device.takeScreenshot(image))
-                device.pressDPadCenter()
+                screen.ok()
                 screen.waitUntil(30_000) {
                     screen.onAllNodes(hasContentDescription("Tam ekran oynatıcı") and isFocused())
                         .fetchSemanticsNodes().isNotEmpty()
                 }
-                device.pressDPadLeft()
+                screen.dpad(Key.DirectionLeft)
                 screen.waitUntil(30_000) {
                     screen.onAllNodesWithTag("mini-guide").fetchSemanticsNodes().isNotEmpty()
                 }
-                device.pressBack()
+                screen.back()
                 screen.waitUntil(30_000) {
                     screen.onAllNodesWithTag("mini-guide").fetchSemanticsNodes().isEmpty()
                 }
-                device.pressMenu()
+                screen.dpad(Key.Menu)
                 button("Yayına dön")
-                device.pressBack()
+                screen.back()
                 screen.waitUntil(30_000) {
                     screen.onAllNodesWithText("Yayına dön").fetchSemanticsNodes().isEmpty()
                 }
-                device.pressBack()
+                screen.back()
                 button("Yayın çizelgesi")
                 // Long OK keeps the existing favorite/EPG operations reachable.
-                screen.onNodeWithTag("live-channel-${channel.id}")
-                    .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnLongClick)
+                screen.onNodeWithTag("live-channel-${channel.id}").assertIsFocused()
+                screen.longOk()
                 button("Favoriye ekle").assertExists()
-                device.pressBack()
+                screen.back()
                 select("Yayın çizelgesi")
                 button("Kanallar").assertExists()
-                device.pressBack()
+                screen.back()
                 button("Yayın çizelgesi").assertExists()
             } finally {
                 runBlocking {
