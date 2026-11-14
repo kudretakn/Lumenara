@@ -99,7 +99,8 @@ class LiveComfortTest {
                     }
                 }
                 await(hasTestTag("live-reconnecting"))
-                await(hasText("Yeniden bağlanıyor… (2/5)"))
+                // The counter text is short-lived on a fast reconnect; its format is covered by JVM tests.
+                await(hasText("Yeniden bağlanıyor…", substring = true))
                 shot("u1-reconnecting-$engine")
                 screen.waitUntil(30_000) { runBlocking { prefs.recentLive.first().firstOrNull() == channels[0].id } }
                 await(hasTestTag("live-reconnecting"), false)

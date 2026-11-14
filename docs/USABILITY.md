@@ -1,6 +1,6 @@
 # Kullanım kolaylığı (0.4.x)
 
-Kullanıcının önceliği Canlı TV. Bu belge, 0.3.0 arayüz yenilemesinden sonraki kullanım iyileştirmelerini tanımlar. Genel kurallar `docs/UI-REDESIGN.md` ile aynıdır. Yeni bağımlılık eklenmez. Periyodik işler için `wallClockTicks` kullanılır. Room şeması yalnız U3'te değişir.
+Kullanıcının önceliği Canlı TV; kaynağı Xtream. Bu belge, 0.3.0 arayüz yenilemesinden sonraki kullanım iyileştirmelerini tanımlar. Genel kurallar `docs/UI-REDESIGN.md` ile aynıdır. Yeni bağımlılık eklenmez. Periyodik işler için `wallClockTicks` kullanılır. Room şeması yalnız U3'te değişir.
 
 ## U1 — Canlı yayın konforu
 
@@ -24,6 +24,19 @@ Kullanıcının önceliği Canlı TV. Bu belge, 0.3.0 arayüz yenilemesinden son
 Kabul ölçütleri:
 - JVM testleri: yeniden deneme zamanlama politikası (saf fonksiyon), numara çözümleme (`tvg-chno` ve konum), numara giriş durum makinesi.
 - Cihaz testi: MockWebServer ilk iki isteğe 503 döner, sonra yayını verir. Oynatma başlar, rozet görünür ve sonra kaybolur. Rakam tuşlarıyla `2` girilince 2. kanala geçilir. `0` tuşu önceki kanala döner.
+
+## S — Dizi deneyimi (U1'den sonra, U2'den önce)
+
+Kullanıcının kaynağı Xtream; diziler API'den dizi, sezon ve bölüm olarak geliyor (`Xtream.kt`, Kind.SERIES ve Kind.EPISODE, `parent`). M3U kaynakları da aynı deneyimi almalı.
+
+1. **Dizi kartı:** Diziler bölümünde, Ana Sayfa'da ve aramada her dizi tek kart olarak görünür. Bölümler hiçbir listede tek başına kart olmaz; `LibraryDb.browse` içindeki `kind='EPISODE' AND parent=''` istisnası kalkar.
+2. **Sezonlar ekranı:** Dizi kartına OK basılınca dizi ekranı açılır. Üstte arka plan, başlık, meta, özet ve "Devam et: S2 B5" ya da "Oynat (S1 B1)" düğmesi, altta sezon kartları bulunur. Sezon kartında "Sezon N", bölüm sayısı ve izlenme durumu ("3/10 izlendi" + ProgressLine) gösterilir; tümü izlendiyse ✓ konur.
+3. **Bölümler ekranı:** Sezon kartına OK basılınca o sezonun bölümleri dikey liste olarak açılır. Her bölümde küçük resim (varsa), "B5 · Başlık", süre ve ProgressLine bulunur; izlendiyse ✓ konur. OK, yarım bölümü kaldığı yerden, bitmiş bölümü baştan oynatır. Uzun OK menüsünde "İzlendi olarak işaretle" ve "İzlenmedi olarak işaretle" seçenekleri vardır. Back bir önceki ekrana döner ve odak geri yüklenir.
+4. **İzlenme kuralı:** `position >= duration * 0.90` olduğunda ya da kullanıcı işaretlediğinde bölüm izlenmiş sayılır. Sezonun tüm bölümleri izlendiyse sezon izlenmiş sayılır. Mevcut ilerleme kayıtları (`marks`) kullanılır. Elle işaretleme için şema değişikliği gerekirse U3'teki 7→8 geçişiyle birleştirilir; o zamana kadar işaretleme, ilerlemeyi süreye eşitleyerek ya da sıfırlayarak yapılır.
+5. **Devam et:** Dizi düzeyinde son izlenen ya da yarım kalan bölüm bulunur. Yarım bölüm varsa o, kaldığı saniyeden açılır; yoksa sıradaki izlenmemiş bölüm açılır. Sezon bittiğinde sonraki sezonun ilk bölümüne geçilir. Ana Sayfa'daki "Kaldığın yerden devam et" rafında bölüm yerine dizi kartı ve "S2 B5" etiketi görünür. Bölüm sonunda gösterilen sonraki bölüm kartı sezon sınırını da aşar.
+6. **M3U gruplama:** `/series/` yolundaki ya da başlığında SxxEyy geçen bölümler, başlıktan çıkarılan dizi adı ve sezon numarasıyla sanal bir diziye bağlanır. İçe aktarma sırasında SERIES satırı ve `parent` doldurulur; şema değişmez.
+7. **Tür ipuçları:** M3U `group-title` içinde "VOD", "Film", "Movie", "Sinema" geçen kayıtlar MOVIE, "Dizi", "Series", "Sezon" geçenler EPISODE ya da SERIES sayılır. Uzantısız ya da `.ts` uzantılı film adresleri grup ipucuyla film olarak sınıflanır. Canlı kanal varsayılan olarak kalır.
+8. **Testler:** Gerçek sağlayıcı biçimlerinden türetilmiş anonim M3U ve Xtream örnekleriyle JVM testleri yazılır (ayrıştırma, gruplama, sezon ve bölüm sıralama, devam et seçimi, izlenme kuralı). Cihaz testinde dizi kartı → sezon → bölüm → oynat → geri → ✓ ve "Devam et" akışı denenir.
 
 ## U2 — Program bulma
 
