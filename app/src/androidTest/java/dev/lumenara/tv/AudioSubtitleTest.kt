@@ -66,15 +66,17 @@ class AudioSubtitleTest {
                     val url = checkNotNull(request.requestUrl)
                     if (url.encodedPath.startsWith("/movie/")) {
                         videoRequested.set(url.encodedPath.substringAfterLast('/'))
-                        // VLC's seekable MP4 input reads with Range requests, like real providers allow.
-                        val start = request.getHeader("Range")?.substringAfter("bytes=")
-                            ?.substringBefore("-")?.toIntOrNull() ?: 0
-                        if (start >= video.size) return MockResponse().setResponseCode(416)
-                        return MockResponse().setResponseCode(if (start > 0) 206 else 200)
+                        // VLC's seekable MP4 input reads with Range requests (206 required), like real providers.
+                        val range = request.getHeader("Range")?.substringAfter("bytes=")
+                        val start = range?.substringBefore("-")?.toIntOrNull() ?: 0
+                        val end = (range?.substringAfter("-")?.toIntOrNull() ?: video.lastIndex)
+                            .coerceAtMost(video.lastIndex)
+                        if (start >= video.size || end < start) return MockResponse().setResponseCode(416)
+                        return MockResponse().setResponseCode(if (range != null) 206 else 200)
                             .setHeader("Content-Type", "video/mp4")
                             .setHeader("Accept-Ranges", "bytes")
-                            .setHeader("Content-Range", "bytes $start-${video.lastIndex}/${video.size}")
-                            .setBody(Buffer().write(video, start, video.size - start))
+                            .apply { if (range != null) setHeader("Content-Range", "bytes $start-$end/${video.size}") }
+                            .setBody(Buffer().write(video, start, end - start + 1))
                     }
                     if (url.encodedPath == "/api/v1/subtitles") {
                         searches.incrementAndGet()
