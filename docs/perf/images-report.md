@@ -1,0 +1,8 @@
+- `LumenaraApp.kt`, yeni `Artwork.kt`, `Transport.kt`: kaynak bazlı HTTP izni, yönlendirme denetimi ve kimlik başlıksız görsel istemcisi.
+- Kart/detay dosyaları: piksel boyutlandırma, uygun TMDB çözünürlükleri, RGB565 ve sonraki satırı ön yükleme.
+- Önbellek: `cacheDir/images`, 256 MB disk, %15 bellek, 7 gün saklama; 512 kayıtlık negatif önbellek.
+- `Settings.kt`: boyutlandırılmış logo; mevcut önbellek ölçümü korundu.
+- Diğer ajanın alanındaki `FullscreenOverlay.kt` değişikliği yalnız görsel çağrısıyla sınırlı.
+- `ImageTransportTest.kt` ve `ArtworkTest.kt` eklendi; `CinemaJourneyTest` değiştirilmedi.
+- Beklenen kazanç: daha az ağ trafiği, çözme maliyeti ve kaydırma yükü.
+- `git diff --check` temiz; Gradle/testler çalıştırılmadı. Cihaz performansı ve derleme doğrulaması bekliyor; commit/push yapılmadı.
