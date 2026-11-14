@@ -4,7 +4,7 @@
 set -u
 apks="${1:-apks}"
 out="${2:-screens}"
-runner="dev.streamora.tv.debug.test/androidx.test.runner.AndroidJUnitRunner"
+runner="dev.lumenara.tv.debug.test/androidx.test.runner.AndroidJUnitRunner"
 mkdir -p "$out"
 
 adb logcat -c || true
@@ -16,8 +16,8 @@ timeout 2400 adb shell am instrument -w -r "$runner" > "$out/instrument.txt" 2>&
 code=$?
 
 adb logcat -d -v time > "$out/logcat.txt" 2>&1 || true
-adb pull /sdcard/Android/data/dev.streamora.tv.debug/files/ "$out/" > /dev/null 2>&1 || true
-adb pull /sdcard/Download/streamora-ui "$out/" > /dev/null 2>&1 || true
+adb pull /sdcard/Android/data/dev.lumenara.tv.debug/files/ "$out/" > /dev/null 2>&1 || true
+adb pull /sdcard/Download/lumenara-ui "$out/" > /dev/null 2>&1 || true
 
 # Summarise: one line per finished test with its result, then failure stacks.
 awk -F= '
@@ -27,7 +27,7 @@ awk -F= '
   /INSTRUMENTATION_STATUS_CODE: -2/ { print "FAIL  " cls "." name }
   /INSTRUMENTATION_STATUS_CODE: -3/ { print "SKIP  " cls "." name }
 ' "$out/instrument.txt" | tee "$out/summary.txt"
-grep 'StreamoraRetry' "$out/logcat.txt" | sed -n 's/.*RETRY \([^ ]*\).*/RETRIED  \1/p' | sort -u | tee -a "$out/summary.txt"
+grep 'LumenaraRetry' "$out/logcat.txt" | sed -n 's/.*RETRY \([^ ]*\).*/RETRIED  \1/p' | sort -u | tee -a "$out/summary.txt"
 grep -A4 'INSTRUMENTATION_STATUS: stack=' "$out/instrument.txt" | head -80
 
 if [ "$code" -eq 124 ]; then echo "Instrumentation timed out (last test above was still running)"; exit 1; fi

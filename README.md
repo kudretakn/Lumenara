@@ -11,12 +11,12 @@ ADB ile kurmak için TV’nin geliştirici seçeneklerinde hata ayıklamayı aç
 ```powershell
 adb devices -l
 adb -s TV_SERI_NUMARASI install -r .\dist\Lumenara-0.2.1-release.apk
-adb -s TV_SERI_NUMARASI shell am start -n dev.streamora.tv/.MainActivity
+adb -s TV_SERI_NUMARASI shell am start -n dev.lumenara.tv/.MainActivity
 ```
 
-Mevcut kurulumların aynı uygulama olarak güncellenmesi ve verilerinin korunması için uygulama kimliği `dev.streamora.tv` olarak kalır.
+Uygulamanın 0.3.0 öncesi adı Streamora idi. 0.3.0 ile uygulama kimliği `dev.lumenara.tv` oldu; Streamora kurulumları bu sürümle güncellenmez, ayrı bir uygulama olarak kurulur.
 
-Debug sürümünün uygulama kimliği `dev.streamora.tv.debug` olarak ayrılmıştır. İki sürümün katalogları bağımsızdır.
+Debug sürümünün uygulama kimliği `dev.lumenara.tv.debug` olarak ayrılmıştır. İki sürümün katalogları bağımsızdır.
 
 ## Sinematik arayüz
 
@@ -55,7 +55,7 @@ Cihaz testleri bağlı bir Android TV veya Android TV AVD gerektirir. Varsayıla
 
 ## Kişisel imza ve sonraki sürümler
 
-Bu bilgisayarda oluşturulan PKCS#12 anahtarı ve DPAPI ile korunan parola, Windows kullanıcı profilinizin `.streamora\signing` klasöründedir. Sonraki release’i aynı Windows hesabında oluşturmak için:
+Bu bilgisayarda oluşturulan PKCS#12 anahtarı ve DPAPI ile korunan parola, Windows kullanıcı profilinizin `.lumenara\signing` klasöründedir. Sonraki release’i aynı Windows hesabında oluşturmak için:
 
 ```powershell
 .\gradlew.bat :app:assembleRelease
@@ -67,14 +67,14 @@ Betik mevcut anahtarı kullanır, APK v2/v3 imzasını denetler ve sonucu `dist`
 **Anahtarı yedekleyin.** DPAPI parolayı bu Windows hesabına bağlar. Taşınabilir yedek için aynı hesapta aşağıdaki komutlarla kişisel anahtarın ayrı bir kopyasını alın. `keytool` yeni yedek için sizden ayrı bir parola ister. Hedefi kendi güvenli yedekleme ortamınız olarak seçin. Bu parolayı parola yöneticinizde saklayın.
 
 ```powershell
-$keyDir = Join-Path $env:USERPROFILE '.streamora\signing'
+$keyDir = Join-Path $env:USERPROFILE '.lumenara\signing'
 $secure = (Get-Content -Raw (Join-Path $keyDir 'password.dpapi')) | ConvertTo-SecureString
 $credential = [System.Net.NetworkCredential]::new('', $secure)
-$env:STREAMORA_BACKUP_SOURCE = $credential.Password
+$env:LUMENARA_BACKUP_SOURCE = $credential.Password
 try {
-    keytool -importkeystore -srckeystore (Join-Path $keyDir 'streamora-personal.p12') -srcstoretype PKCS12 -srcstorepass:env STREAMORA_BACKUP_SOURCE -destkeystore 'X:\GuvenliYedek\streamora-yedek.p12' -deststoretype PKCS12
+    keytool -importkeystore -srckeystore (Join-Path $keyDir 'lumenara-personal.p12') -srcstoretype PKCS12 -srcstorepass:env LUMENARA_BACKUP_SOURCE -destkeystore 'X:\GuvenliYedek\lumenara-yedek.p12' -deststoretype PKCS12
 } finally {
-    Remove-Item Env:\STREAMORA_BACKUP_SOURCE
+    Remove-Item Env:\LUMENARA_BACKUP_SOURCE
     $secure.Dispose()
 }
 ```

@@ -10,7 +10,7 @@ Logo: design/logo/concept-1-*.svg, Lumenara için üretildi; uygulama içi ad ya
 
 ## Uygulamadaki ortam görseli
 
-`app/src/main/res/drawable-nodpi/streamora_coast.jpg`, bu görevde yerleşik ImageGen aracıyla oluşturuldu. Kurulum, boş kitaplık ve görsel bulunamayan arka planlarda kullanılır. Bir filme ait afiş veya gerçek yapım bilgisi değildir. Sağlayıcının HTTPS arka planı, ardından eşleşmiş TMDB arka planı önceliklidir.
+`app/src/main/res/drawable-nodpi/lumenara_coast.jpg`, bu görevde yerleşik ImageGen aracıyla oluşturuldu. Kurulum, boş kitaplık ve görsel bulunamayan arka planlarda kullanılır. Bir filme ait afiş veya gerçek yapım bilgisi değildir. Sağlayıcının HTTPS arka planı, ardından eşleşmiş TMDB arka planı önceliklidir.
 
 Üretim istemi:
 
