@@ -121,6 +121,10 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
         )
         Column(Modifier.fillMaxSize().padding(start = 96.dp, end = 48.dp, top = 27.dp, bottom = 27.dp)) {
             if (section != "Ana Sayfa") {
+                if (section == "IPTV Kaynakları") {
+                    LumenaraLogo(showName = true)
+                    Spacer(Modifier.height(8.dp))
+                }
                 Text(
                     if (section == "IPTV Kaynakları" && available.isEmpty())
                         "Her hikâye burada başlar."
@@ -147,9 +151,10 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
                         else ->
                             if (available.isEmpty()) {
                                 Column(
-                                    Modifier.fillMaxWidth(.60f).padding(top = 100.dp),
+                                    Modifier.fillMaxWidth(.60f).padding(top = 64.dp),
                                     verticalArrangement = Arrangement.spacedBy(18.dp),
                                 ) {
+                                    LumenaraLogo(showName = true)
                                     Text(
                                         "Kendi sinemanıza\nhoş geldiniz.",
                                         fontSize = 42.sp,
@@ -206,51 +211,58 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
             shape = RoundedCornerShape(topEnd = 20.dp, bottomEnd = 20.dp),
             backdrop = if (railFocus) ({ CinemaBackdrop(model, featured, info, dim = true) }) else null,
         ) {
-            Column(
-                Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 27.dp),
-                verticalArrangement = Arrangement.Center,
-            ) {
-                sections.forEachIndexed { index, name ->
-                    val selected = name == section || (name == "Ayarlar" && section == "IPTV Kaynakları")
-                    Surface(
-                        onClick = {
-                            section = name
-                            model.notice.value = ""
-                        },
-                        modifier = Modifier.fillMaxWidth().height(48.dp)
-                            .then(if (selected) Modifier.focusRequester(rail) else Modifier)
-                            .semantics {
-                                contentDescription = name
-                                if (name == "Ayarlar" && availableUpdate != null)
-                                    stateDescription = "Güncelleme hazır"
+            Box(Modifier.fillMaxSize()) {
+                LumenaraLogo(
+                    showName = railFocus,
+                    modifier = Modifier.align(Alignment.TopStart)
+                        .padding(start = 12.dp, top = 27.dp),
+                )
+                Column(
+                    Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 27.dp),
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    sections.forEachIndexed { index, name ->
+                        val selected = name == section || (name == "Ayarlar" && section == "IPTV Kaynakları")
+                        Surface(
+                            onClick = {
+                                section = name
+                                model.notice.value = ""
                             },
-                        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(10.dp)),
-                        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.08f),
-                        border = ClickableSurfaceDefaults.border(
-                            focusedBorder = Border(BorderStroke(2.dp, Ink.focusRing), shape = RoundedCornerShape(10.dp))
-                        ),
-                        colors = ClickableSurfaceDefaults.colors(
-                            containerColor = if (selected) Ink.glass else Color.Transparent,
-                            contentColor = if (selected) Ink.text else Ink.muted,
-                            focusedContainerColor = Ink.focus,
-                            focusedContentColor = Ink.background,
-                        ),
-                    ) {
-                        if (selected)
-                            Box(Modifier.align(Alignment.CenterStart).width(2.dp).height(24.dp).background(Ink.accent))
-                        Row(Modifier.fillMaxSize().padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Box {
-                                NavIcon(index, Modifier.size(20.dp))
-                                if (name == "Ayarlar" && availableUpdate != null)
-                                    Box(Modifier.align(Alignment.TopEnd).size(6.dp).background(Ink.focusRing, RoundedCornerShape(50)))
-                            }
-                            if (railFocus) {
-                                Spacer(Modifier.width(12.dp))
-                                Text(name, fontSize = 15.sp, maxLines = 1)
+                            modifier = Modifier.fillMaxWidth().height(48.dp)
+                                .then(if (selected) Modifier.focusRequester(rail) else Modifier)
+                                .semantics {
+                                    contentDescription = name
+                                    if (name == "Ayarlar" && availableUpdate != null)
+                                        stateDescription = "Güncelleme hazır"
+                                },
+                            shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(10.dp)),
+                            scale = ClickableSurfaceDefaults.scale(focusedScale = 1.08f),
+                            border = ClickableSurfaceDefaults.border(
+                                focusedBorder = Border(BorderStroke(2.dp, Ink.focusRing), shape = RoundedCornerShape(10.dp))
+                            ),
+                            colors = ClickableSurfaceDefaults.colors(
+                                containerColor = if (selected) Ink.glass else Color.Transparent,
+                                contentColor = if (selected) Ink.text else Ink.muted,
+                                focusedContainerColor = Ink.focus,
+                                focusedContentColor = Ink.background,
+                            ),
+                        ) {
+                            if (selected)
+                                Box(Modifier.align(Alignment.CenterStart).width(2.dp).height(24.dp).background(Ink.accent))
+                            Row(Modifier.fillMaxSize().padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Box {
+                                    NavIcon(index, Modifier.size(20.dp))
+                                    if (name == "Ayarlar" && availableUpdate != null)
+                                        Box(Modifier.align(Alignment.TopEnd).size(6.dp).background(Ink.focusRing, RoundedCornerShape(50)))
+                                }
+                                if (railFocus) {
+                                    Spacer(Modifier.width(12.dp))
+                                    Text(name, fontSize = 15.sp, maxLines = 1)
+                                }
                             }
                         }
+                        Spacer(Modifier.height(6.dp))
                     }
-                    Spacer(Modifier.height(6.dp))
                 }
             }
         }

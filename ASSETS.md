@@ -2,9 +2,11 @@
 
 ## Başlatıcı bannerı ve simgesi
 
-`app/src/main/res/drawable-xhdpi/banner.png`, FFmpeg ve sistemdeki DejaVu Sans Bold yazı tipiyle 320×180 PNG olarak çizildi: `#14171C` koyu zemin, solda beyaz kalın Lumenara yazısı ve altında `#8299C8` vurgu çizgisi.
+Logo: design/logo/concept-1-*.svg, Lumenara için üretildi
 
-`app/src/main/res/drawable/mark.xml`, 48×48 vektör olarak çizildi: koyu zemin üzerinde sıcak ışık kaynağı, mavi ışık huzmesi ve sahne çizgisi.
+`app/src/main/res/drawable-xhdpi/banner.png` (320×180) ve `app/src/main/res/drawable-xxhdpi/banner.png` (480×270), `concept-1-banner.svg` kaynağından `rsvg-convert -w 320 -h 180` ve `rsvg-convert -w 480 -h 270` ile, Inter Display yazı tipi kullanılarak üretildi.
+
+`app/src/main/res/drawable/mark.xml`, `concept-1-mark.svg` kaynağının 48dp×48dp, 512×512 viewport kullanan Android VectorDrawable karşılığıdır: yuvarlatılmış koyu zemin, altın rengi gradyanlı sahne ışığı ve sahne çizgisi.
 
 ## Uygulamadaki ortam görseli
 
