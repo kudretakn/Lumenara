@@ -45,6 +45,7 @@ internal fun Video(
     decoderFailure: (Long) -> Unit = {},
     subtitle: MediaItem.SubtitleConfiguration? = null,
     failure: (Boolean) -> Unit = {},
+    liveRetry: LiveRetry? = null,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val owner = LocalLifecycleOwner.current
@@ -54,7 +55,7 @@ internal fun Video(
     val currentEnded by rememberUpdatedState(ended)
     var playbackActive by remember(item.id) { mutableStateOf(false) }
     var error by remember(item.id) { mutableStateOf("") }
-    val retry = rememberLiveRetry(item.id, preview)
+    val retry = liveRetry ?: rememberLiveRetry(item.id, preview)
     val attempt = retry.generation
     val currentFailure by rememberUpdatedState(failure)
     LaunchedEffect(error) { currentFailure(error.isNotEmpty()) }
@@ -297,9 +298,14 @@ internal fun Playback(
     val numbers = if (live) rememberLiveNumberControl(model, item.source) { channel, rows ->
         changeGroup(rows); select(channel)
     } else null
+    val retry = rememberLiveRetry(item.id)
     BackHandler { if (panel) panel = false else if (!fullscreen.dismiss()) back() }
-    LaunchedEffect(panel, fullscreen.guide, fullscreen.finished, failed) {
-        if (!panel && !fullscreen.guide && !fullscreen.finished && !failed) focus.requestFocus()
+    LaunchedEffect(panel, fullscreen.guide, fullscreen.finished, failed, engine, retry.generation, retry.reconnecting) {
+        if (!panel && !fullscreen.guide && !fullscreen.finished && !failed) {
+            // PlayerView updates and reconnect badge removal must finish before reclaiming focus.
+            withFrameNanos { }
+            focus.requestFocus()
+        }
     }
     Box(
         Modifier.fillMaxSize()
@@ -342,6 +348,7 @@ internal fun Playback(
             Modifier.fillMaxSize(),
             ready = { engine = it },
             failure = { failed = it },
+            liveRetry = retry,
             initial = transferred,
             subtitle = subtitle,
             decoderFailure = { pos ->

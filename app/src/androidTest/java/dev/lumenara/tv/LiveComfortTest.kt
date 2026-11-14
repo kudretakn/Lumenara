@@ -23,11 +23,9 @@ import okio.Buffer
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
-import org.junit.rules.RuleChain
 
 class LiveComfortTest {
-    private val screen = createAndroidComposeRule<MainActivity>()
-    @get:Rule val rules: RuleChain = RuleChain.outerRule(RetryRule()).around(screen)
+    @get:Rule val screen = createAndroidComposeRule<MainActivity>()
 
     @Test fun media3ReconnectsAndSupportsNumberAndPreviousChannel() = journey("Media3")
     @Test fun vlcReconnectsAndSupportsNumberAndPreviousChannel() = journey("VLC")

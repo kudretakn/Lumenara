@@ -57,11 +57,11 @@ internal fun VlcScreen(
     val playbackMutex = remember { Mutex() }
     var message by remember { mutableStateOf("") }
     var delayMs by remember { mutableLongStateOf(0) }
-    LaunchedEffect(layout, panel, fullscreen.guide, fullscreen.finished) {
+    LaunchedEffect(layout, panel, fullscreen.guide, fullscreen.finished, player, retry.generation, retry.reconnecting) {
         if (!panel && !fullscreen.guide && !fullscreen.finished) {
             focus.requestFocus()
             if (layout != null) {
-                // Reclaim Compose focus after the native video layout has been attached.
+                // Reclaim Compose focus after native reattachment and reconnect badge removal.
                 withFrameNanos { }
                 focus.requestFocus()
             }

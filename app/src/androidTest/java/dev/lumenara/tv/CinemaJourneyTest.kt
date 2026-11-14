@@ -29,15 +29,12 @@ import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
-import org.junit.rules.RuleChain
 
 /**
  * Original fictional artwork and metadata live only in androidTest, never in the user's library.
  */
 class CinemaJourneyTest {
-    private val composeRule = createAndroidComposeRule<MainActivity>()
-    @get:Rule val rules: RuleChain = RuleChain.outerRule(RetryRule()).around(composeRule)
-    private val screen get() = composeRule
+    @get:Rule val screen = createAndroidComposeRule<MainActivity>()
 
     @Test
     fun focusedArtworkDetailsFiltersAndWatchlist() {

@@ -16,12 +16,9 @@ import okio.Buffer
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
-import org.junit.rules.RuleChain
 
 class LibraryJourneyTest {
-    private val composeRule = createAndroidComposeRule<MainActivity>()
-    @get:Rule val rules: RuleChain = RuleChain.outerRule(RetryRule()).around(composeRule)
-    private val screen get() = composeRule
+    @get:Rule val screen = createAndroidComposeRule<MainActivity>()
 
     @Test
     fun addPlaylistFromSetupPreviewAndOpenChannelPanel() {
