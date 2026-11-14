@@ -91,8 +91,6 @@ class SeriesJourneyTest {
         val previousEngine = runBlocking { prefs.text("engine", "Media3").first() }
         val name = "Test · Dizi Yolculuğu"
         val requestedEpisode = AtomicReference("")
-        fun navigation(label: String) = hasContentDescription(label) and
-            hasAnyAncestor(hasTestTag("nav-open") or hasTestTag("nav-closed"))
         fun capture(name: String) {
             screen.waitForIdle()
             val file = File(context.getExternalFilesDir(null), "screens/$name.png")
@@ -129,7 +127,8 @@ class SeriesJourneyTest {
                     val source = repo.library.snapshot().single { it.name == name }
                     repo.library.browse(source.id, "SERIES", "", "", "", 10).first().single()
                 }
-                select(navigation("Diziler"))
+                screen.openHubCard("Diziler")
+                screen.openCategory("Tümü")
                 val card = hasContentDescription(series.title) and hasAnyAncestor(hasTestTag("poster-grid"))
                 select(card)
                 waitFor(hasTestTag("season-1"))
@@ -181,8 +180,8 @@ class SeriesJourneyTest {
                 waitFor(hasTestTag("series-page"))
                 screen.back()
                 waitFor(card and isFocused())
-                select(navigation("Ana Sayfa"))
-                screen.onNodeWithTag("home-shelves").performScrollToNode(hasTestTag("shelf-Kaldığın yerden devam et"))
+                screen.returnToHub()
+                screen.onNodeWithTag("hub").performScrollToNode(hasTestTag("shelf-Kaldığın yerden devam et"))
                 val homeSeries = hasContentDescription(series.title) and hasAnyAncestor(hasTestTag("shelf-Kaldığın yerden devam et"))
                 waitFor(homeSeries)
                 screen.onNode(homeSeries).assertExists()

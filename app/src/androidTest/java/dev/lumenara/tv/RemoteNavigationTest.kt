@@ -1,62 +1,76 @@
 package dev.lumenara.tv
 
 import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.test.platform.app.InstrumentationRegistry
+import dev.lumenara.data.Repository
+import dev.lumenara.data.SourceSpec
+import kotlinx.coroutines.runBlocking
+import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.MockResponse
+import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 
 class RemoteNavigationTest {
     @get:Rule val screen = createAndroidComposeRule<MainActivity>()
 
-    @Test
-    fun setupBackAndSettingsSourceNavigation() {
-        fun waitForText(text: String) {
-            screen.waitUntil(30_000) {
-                screen.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()
-            }
+    @Test fun setupBackAndSettingsSourceNavigation() {
+        fun waitFor(matcher: SemanticsMatcher) {
+            screen.waitUntil(30_000) { screen.onAllNodes(matcher).fetchSemanticsNodes().isNotEmpty() }
         }
-        fun waitForSection(section: String) {
-            screen.waitUntil(30_000) {
-                screen.onAllNodesWithTag("section-$section").fetchSemanticsNodes().isNotEmpty()
-            }
-        }
-        fun waitForFocus(matcher: SemanticsMatcher) {
+        val repo = Repository.get(InstrumentationRegistry.getInstrumentation().targetContext)
+        val name = "Test · Kumanda"
+        MockWebServer().use { server ->
+            server.start()
             try {
-                screen.waitUntil(30_000) {
-                    screen.onAllNodes(matcher and isFocused()).fetchSemanticsNodes().isNotEmpty()
+                runBlocking {
+                    repo.library.snapshot().filter { it.name == name }.forEach { repo.remove(it.id) }
+                    server.enqueue(MockResponse().setBody("#EXTM3U\n#EXTINF:-1 group-title=\"Haber\",Kumanda Haber\n${server.url("/live.ts")}\n"))
+                    repo.add(name, SourceSpec(server.url("/list").toString(), true))
                 }
-            } catch (e: ComposeTimeoutException) {
-                throw AssertionError("Beklenen odak: $matcher\n" + screen.onRoot().printToString(), e)
+                screen.waitUntil(30_000) {
+                    runCatching {
+                        screen.onNodeWithTag("source-setup").performScrollToNode(hasText(name))
+                        screen.onAllNodesWithText(name).fetchSemanticsNodes().isNotEmpty()
+                    }.getOrDefault(false)
+                }
+                screen.back()
+                waitFor(hasTestTag("hub-Canlı TV") and isFocused())
+                screen.onNodeWithTag("hub-Canlı TV").assertIsFocused()
+                screen.openHubCard("Ayarlar")
+                waitFor(hasText("IPTV Kaynakları") and isFocused())
+                screen.ok()
+                waitFor(hasText("✓ M3U"))
+                screen.back()
+                waitFor(hasText("IPTV Kaynakları") and isFocused())
+                screen.back()
+                waitFor(hasTestTag("hub-Ayarlar") and isFocused())
+                screen.onNodeWithTag("hub-Ayarlar").assertIsFocused()
+                screen.dpad(Key.DirectionLeft)
+                waitFor(hasTestTag("hub-Ara") and isFocused())
+                screen.ok()
+                waitFor(hasTestTag("section-Ara"))
+                screen.back()
+                waitFor(hasTestTag("hub-Ara") and isFocused())
+            } finally {
+                runBlocking { repo.library.snapshot().filter { it.name == name }.forEach { repo.remove(it.id) } }
             }
         }
-        waitForText("✓ M3U")
-        screen.back()
-        waitForText("Kaynak ekle")
-        screen.onNodeWithContentDescription("Ayarlar")
-            .performSemanticsAction(SemanticsActions.RequestFocus)
-        waitForFocus(hasContentDescription("Ayarlar"))
-        screen.onNodeWithTag("nav-open").assertExists()
-        screen.ok()
-        waitForSection("Ayarlar")
-        screen.dpad(Key.DirectionRight)
-        waitForFocus(hasText("IPTV Kaynakları"))
-        screen.onNodeWithTag("nav-closed").assertExists()
-        screen.onNodeWithText("IPTV Kaynakları").assertIsFocused()
-        screen.ok()
-        waitForText("✓ M3U")
-        screen.back()
-        waitForSection("Ayarlar")
-        waitForFocus(hasText("IPTV Kaynakları"))
-        screen.back()
-        waitForText("Kaynak ekle")
-        screen.onNodeWithContentDescription("Ara")
-            .performSemanticsAction(SemanticsActions.RequestFocus)
-        waitForFocus(hasContentDescription("Ara"))
-        screen.back()
-        waitForFocus(hasText("Kaynak ekle"))
-        screen.onNodeWithTag("nav-closed").assertExists()
-        screen.onNodeWithText("Kaynak ekle").assertIsFocused()
     }
+    @Test fun emptySetupAlsoRequiresTwoBackPresses() {
+        screen.waitUntil(30_000) { screen.onAllNodesWithText("✓ M3U").fetchSemanticsNodes().isNotEmpty() }
+        val activity = screen.activity
+        screen.back()
+        screen.waitUntil(30_000) { screen.onAllNodesWithTag("exit-confirmation").fetchSemanticsNodes().isNotEmpty() }
+        screen.onNodeWithText("✓ M3U").assertExists()
+        assertFalse(activity.isFinishing)
+        screen.waitUntil(30_000) { screen.onAllNodesWithTag("exit-confirmation").fetchSemanticsNodes().isEmpty() }
+        screen.back()
+        screen.waitUntil(30_000) { screen.onAllNodesWithTag("exit-confirmation").fetchSemanticsNodes().isNotEmpty() }
+        screen.runOnUiThread { activity.onBackPressedDispatcher.onBackPressed() }
+        screen.waitUntil(30_000) { activity.isFinishing || activity.isDestroyed }
+    }
+
 }

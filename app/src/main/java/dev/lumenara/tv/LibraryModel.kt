@@ -30,7 +30,7 @@ constructor(val repo: Repository, val prefs: Preferences) : androidx.lifecycle.V
         filter
             .flatMapLatest { f ->
                 if (f.query.isNotEmpty()) delay(200)
-                repo.library.browse(
+                repo.browse(
                     f.source,
                     f.kind,
                     f.category,

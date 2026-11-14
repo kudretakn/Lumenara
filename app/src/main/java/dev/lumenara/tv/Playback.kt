@@ -447,7 +447,7 @@ internal fun Playback(
         if (panel) {
             val candidates by
                 remember(item.source, category, channelQuery, limit) {
-                        model.repo.library.browse(
+                        model.repo.browse(
                             item.source,
                             "LIVE",
                             category,
@@ -458,7 +458,7 @@ internal fun Playback(
                     }
                     .collectAsStateWithLifecycle(emptyList())
             val categories by
-                remember(item.source) { model.repo.library.categories("LIVE", item.source) }
+                remember(item.source) { model.repo.categories("LIVE", item.source) }
                     .collectAsStateWithLifecycle(emptyList())
             val close = remember { FocusRequester() }
             LaunchedEffect(Unit) { close.requestFocus() }
@@ -493,7 +493,7 @@ internal fun Playback(
                         }
                         if (snapshot != null)
                             model.repo.updateMark(item.id) { it.copy(position = snapshot.first, duration = snapshot.second) }
-                        if (version.kind == "EPISODE") changeGroup(model.repo.library.episodeSnapshot(version.parent).seriesOrder())
+                        if (version.kind == "EPISODE") changeGroup(model.repo.episodeSnapshot(version.parent).seriesOrder())
                         select(version)
                     }
                 } }

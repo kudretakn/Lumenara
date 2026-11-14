@@ -21,7 +21,7 @@ class LibraryJourneyTest {
     @get:Rule val screen = createAndroidComposeRule<MainActivity>()
 
     @Test
-    fun addPlaylistFromSetupPreviewAndOpenChannelPanel() {
+    fun addPlaylistFromSetupBrowseGridAndOpenChannelPanel() {
         val test = InstrumentationRegistry.getInstrumentation()
         val context = test.targetContext
         val device = UiDevice.getInstance(test)
@@ -85,7 +85,7 @@ class LibraryJourneyTest {
                 select("HTTP uyumluluğu · Kapalı")
                 button("HTTP uyumluluğu · Açık").assertExists()
                 select("Bağlantıyı sına ve ekle")
-                button("Şu an yayında — favori kanallar").assertExists()
+                button("Canlı TV").assertExists()
                 val channel = runBlocking {
                     val source = repo.library.snapshot().single { it.name == name }
                     val item = repo.library.browse(source.id, "LIVE", "", "", "", 1).first().single()
@@ -100,56 +100,18 @@ class LibraryJourneyTest {
                     repo.guide.map(Mapping(item.id, "live-journey", "sport"))
                     item
                 }
-                screen.onNodeWithContentDescription("Canlı TV")
-                    .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus)
-                screen.waitUntil(30_000) {
-                    screen.onAllNodes(hasContentDescription("Canlı TV") and isFocused())
-                        .fetchSemanticsNodes().isNotEmpty()
-                }
-                screen.onNodeWithTag("nav-open").assertExists()
-                screen.ok()
-                button("Yayın çizelgesi").assertExists()
-                screen.dpad(Key.DirectionRight)
-                screen.waitUntil(30_000) {
-                    screen.onAllNodesWithTag("nav-closed").fetchSemanticsNodes().isNotEmpty()
-                }
-                screen.onNodeWithTag("nav-closed").assertExists()
-                screen.waitUntil(30_000) {
-                    screen.onAllNodesWithTag("live-category-Spor").fetchSemanticsNodes().isNotEmpty()
-                }
-                screen.onNodeWithTag("live-category-Spor")
-                    .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus)
-                screen.waitUntil(30_000) {
-                    screen.onAllNodes(hasTestTag("live-category-Spor") and isFocused())
-                        .fetchSemanticsNodes().isNotEmpty()
-                }
-                screen.ok()
-                screen.waitUntil(30_000) {
-                    screen.onAllNodes(hasTestTag("live-category-Spor") and isSelected())
-                        .fetchSemanticsNodes().isNotEmpty()
-                }
-                screen.onNodeWithTag("live-category-Spor").assertIsSelected()
-                screen.waitUntil(30_000) {
-                    screen.onAllNodesWithTag("live-channel-${channel.id}").fetchSemanticsNodes().isNotEmpty()
-                }
-                val row = screen.onNodeWithTag("live-channel-${channel.id}")
-                // Enter the channel column through the same remote path as the user.
-                screen.dpad(Key.DirectionRight)
+                screen.openHubCard("Canlı TV")
+                screen.openCategory("Spor")
                 screen.waitUntil(30_000) {
                     screen.onAllNodes(hasTestTag("live-channel-${channel.id}") and isFocused())
                         .fetchSemanticsNodes().isNotEmpty()
                 }
+                val row = screen.onNodeWithTag("live-channel-${channel.id}")
                 row.assertIsFocused()
-                screen.waitUntil(60_000) {
-                    screen.onAllNodes(hasTestTag("live-preview") and
-                        SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Oynatılıyor"))
-                        .fetchSemanticsNodes().isNotEmpty()
-                }
-                assertEquals(0L, received.count)
-                button("Sonra: Maç Sonu").assertExists()
-                button("Tam ekran için OK").assertExists()
-                row.assertIsFocused()
-                screen.onNode(hasTestTag("live-preview-panel") and isFocusable()).assertDoesNotExist()
+                // Browsing the grid must not start a stream.
+                assertEquals(1L, received.count)
+                screen.onNodeWithText("Canlı Maç").assertExists()
+                screen.onNodeWithTag("live-preview").assertDoesNotExist()
                 val image = File(context.getExternalFilesDir(null), "screens/live.png")
                 checkNotNull(image.parentFile).mkdirs()
                 assertTrue("Canlı TV ekran görüntüsü", device.takeScreenshot(image))
@@ -158,6 +120,7 @@ class LibraryJourneyTest {
                     screen.onAllNodes(hasContentDescription("Tam ekran oynatıcı") and isFocused())
                         .fetchSemanticsNodes().isNotEmpty()
                 }
+                screen.waitUntil(30_000) { received.count == 0L }
                 screen.dpad(Key.DirectionLeft)
                 screen.waitUntil(30_000) {
                     screen.onAllNodesWithTag("mini-guide").fetchSemanticsNodes().isNotEmpty()
@@ -173,7 +136,7 @@ class LibraryJourneyTest {
                     screen.onAllNodesWithText("Yayına dön").fetchSemanticsNodes().isEmpty()
                 }
                 screen.back()
-                button("Yayın çizelgesi")
+                button("Spor")
                 screen.waitUntil(30_000) {
                     screen.onAllNodes(hasTestTag("live-channel-${channel.id}") and isFocused())
                         .fetchSemanticsNodes().isNotEmpty()
@@ -183,10 +146,11 @@ class LibraryJourneyTest {
                 screen.longPressOkNative()
                 button("Favoriye ekle").assertExists()
                 screen.back()
-                select("Yayın çizelgesi")
+                screen.back()
+                screen.openCategory("Yayın akışı")
                 button("Kanallar").assertExists()
                 screen.back()
-                button("Yayın çizelgesi").assertExists()
+                button("Yayın akışı").assertExists()
             } finally {
                 runBlocking {
                     preferences.set("recent_live", previousRecent)

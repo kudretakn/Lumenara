@@ -84,8 +84,8 @@ data class Mapping(@PrimaryKey val item: String, val feed: String, val channel: 
 
 @Dao
 interface GuideDao {
-    @Query("SELECT id,title,tvgId,search,source FROM items WHERE kind='LIVE' AND (:source='' OR source=:source)")
-    fun searchChannels(source: String): Flow<List<GuideChannel>>
+    @Query("SELECT id,title,tvgId,search,source FROM items WHERE kind='LIVE' AND category NOT IN (:hidden) AND (:source='' OR source=:source)")
+    fun searchChannels(source: String, hidden: List<String> = emptyList()): Flow<List<GuideChannel>>
 
     @Query("""SELECT p.* FROM programmes p JOIN feeds f ON p.feed=f.id
         WHERE (:source='' OR f.source=:source) AND instr(p.search,:query)>0 AND p.end>:from
@@ -109,17 +109,17 @@ interface GuideDao {
         WHERE (:source='' OR f.source=:source)""")
     fun programmeChannels(source: String): Flow<List<ProgrammeChannel>>
 
-    fun resolver(source: String): Flow<GuideResolver> = combine(
-        searchChannels(source), sourceMappings(source), sourceNames(source), programmeChannels(source),
+    fun resolver(source: String, hidden: List<String> = emptyList()): Flow<GuideResolver> = combine(
+        searchChannels(source, hidden), sourceMappings(source), sourceNames(source), programmeChannels(source),
     ) { channels, mappings, names, present -> GuideResolver(channels, mappings, names, present.toSet()) }
 
-    fun searchPrograms(source: String, query: String, from: Long, now: Long): Flow<List<ProgramHit>> =
-        combine(resolver(source), searchSlots(source, searchable(query), from, now)) { resolver, slots ->
+    fun searchPrograms(source: String, query: String, from: Long, now: Long, hidden: List<String> = emptyList()): Flow<List<ProgramHit>> =
+        combine(resolver(source, hidden), searchSlots(source, searchable(query), from, now)) { resolver, slots ->
             resolver.searchPrograms(slots, query, from, now)
         }.flowOn(Dispatchers.Default)
 
-    fun nowAiring(source: String, now: Long, query: String = ""): Flow<List<AiringProgram>> =
-        combine(resolver(source), airingSlots(source, now)) { resolver, slots ->
+    fun nowAiring(source: String, now: Long, query: String = "", hidden: List<String> = emptyList()): Flow<List<AiringProgram>> =
+        combine(resolver(source, hidden), airingSlots(source, now)) { resolver, slots ->
             resolver.nowAiring(slots, now, query)
         }.flowOn(Dispatchers.Default)
 

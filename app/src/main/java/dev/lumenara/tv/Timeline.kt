@@ -5,7 +5,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -24,20 +29,34 @@ internal fun Timeline(
     play: (Item, List<Item>) -> Unit,
     back: () -> Unit,
 ) {
-    var window by remember {
+    val entry = remember { FocusRequester() }
+    var returnChannel by rememberSaveable { mutableStateOf<String?>(null) }
+    var restorePending by remember { mutableStateOf(true) }
+    val list = rememberLazyListState()
+    LaunchedEffect(Unit) { if (returnChannel == null) { withFrameNanos { }; entry.requestFocus() } }
+    var window by rememberSaveable(stateSaver = Saver<ZonedDateTime, Long>(
+        save = { it.toInstant().toEpochMilli() },
+        restore = { Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()) })) {
         mutableStateOf(ZonedDateTime.now().withMinute(0).withSecond(0).withNano(0))
     }
-    var query by remember { mutableStateOf("") }
-    var max by remember { mutableIntStateOf(80) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var max by rememberSaveable { mutableIntStateOf(80) }
     var selection by remember(window, query) { mutableStateOf<Pair<Item, Slot>?>(null) }
     val channels by
-        remember(source, max) { model.repo.library.browse(source, "LIVE", "", "", "", max) }
+        remember(source, max) { model.repo.browse(source, "LIVE", "", "", "", max) }
             .collectAsStateWithLifecycle(emptyList())
+    LaunchedEffect(channels) {
+        if (restorePending && returnChannel != null) {
+            val index = channels.indexOfFirst { it.id == returnChannel }
+            if (index >= 0) list.scrollToItem(index)
+        }
+    }
     val from = window.toInstant().toEpochMilli()
     val to = window.plusHours(2).toInstant().toEpochMilli()
     val time = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault())
     BackHandler { if (selection == null) back() else selection = null }
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(Modifier.focusRequester(entry), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("Yayın akışı", fontSize = 28.sp)
         Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
             Button(onClick = back) { Text("Kanallar") }
             Button(onClick = { window = window.minusDays(1) }) { Text("−1 gün") }
@@ -91,10 +110,15 @@ internal fun Timeline(
             }
         }
         LazyColumn(
+            state = list,
             verticalArrangement = Arrangement.spacedBy(4.dp),
             contentPadding = PaddingValues(3.dp),
         ) {
             items(channels, key = { it.id }) { channel ->
+                val channelFocus = remember { FocusRequester() }
+                if (channel.id == returnChannel && restorePending) LaunchedEffect(Unit) {
+                    withFrameNanos { }; channelFocus.requestFocus(); restorePending = false
+                }
                 val mapping by
                     remember(channel.id) { model.repo.guide.mapping(channel.id) }
                         .collectAsStateWithLifecycle(null)
@@ -114,8 +138,8 @@ internal fun Timeline(
                 if (query.isBlank() || slots.isNotEmpty())
                     Row {
                         Surface(
-                            onClick = { open(channel) },
-                            modifier = Modifier.width(108.dp).height(35.dp),
+                            onClick = { returnChannel = channel.id; open(channel) },
+                            modifier = Modifier.focusRequester(channelFocus).width(108.dp).height(35.dp),
                         ) {
                             Text(
                                 channel.title,

@@ -13,6 +13,7 @@ Son güncelleme: 15 Kasım 2026 · Büyük katalog düzeltmesi (0.3.2)
 - Yerleşik OpenSubtitles anahtarı ve TMDB token (#16). **v0.3.1 yayınlandı.** Kullanıcı kararı; ayrıntısı CLAUDE.md "Gizli bilgiler" maddesinde.
 
 ## Açık
+- **Kartlı gezinme ve +18 filtresi (0.4.0)**: Hub, TR öncelikli kategori kartları, önizlemesiz kanal ızgarası, çift geriyle çıkış ve DataStore görünürlük filtresi uygulandı; JVM/cihaz testleri güncellendi. Kullanıcı talimatıyla Gradle çalıştırılmadı; derleme, lint ve cihaz doğrulaması bekliyor. Commit/push yapılmadı.
 - **Büyük katalog düzeltmesi** (`fix/large-catalog-queries`, sürüm 0.3.2).
   - Sorun: kullanıcının Mi Box 4'ünde (Android 9) 39.682 içerikli Xtream kaynağı eklenince Ana Sayfa, Canlı TV ve Filmler boş kaldı, uygulama donuyordu (%341 CPU, sürekli `CursorWindow: Window is full`).
   - Neden: film/dizi sorguları `mergeVersions` öncesi bütün tabloyu okuyordu.

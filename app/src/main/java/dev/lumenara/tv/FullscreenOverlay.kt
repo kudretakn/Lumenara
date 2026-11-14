@@ -161,11 +161,11 @@ private fun MiniGuide(model: LibraryModel, playing: Item, state: FullscreenState
                       select: (Item, List<Item>) -> Unit, options: () -> Unit) {
     val numbers = liveChannelNumbers(model, playing.source)
     var category by remember { mutableStateOf("") }
-    val categories by remember(playing.source) { model.repo.library.categories("LIVE", playing.source) }
+    val categories by remember(playing.source) { model.repo.categories("LIVE", playing.source) }
         .collectAsStateWithLifecycle(emptyList())
     val rows by key(playing.source, category) {
         remember(playing.source, category) {
-            model.repo.library.browse(playing.source, "LIVE", category, "", "", Int.MAX_VALUE)
+            model.repo.browse(playing.source, "LIVE", category, "", "", Int.MAX_VALUE)
         }.collectAsStateWithLifecycle(emptyList())
     }
     val list = rememberLazyListState()

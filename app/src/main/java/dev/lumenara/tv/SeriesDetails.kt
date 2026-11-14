@@ -24,7 +24,7 @@ import dev.lumenara.design.*
 
 @Composable
 internal fun SeriesDetails(model: LibraryModel, series: Item, play: (Item, List<Item>) -> Unit, back: () -> Unit) {
-    val raw by remember(series.id) { model.repo.library.episodes(series.id) }
+    val raw by remember(series.id) { model.repo.episodes(series.id) }
         .collectAsStateWithLifecycle(emptyList())
     val marks by remember(series.id) { model.repo.library.episodeMarks(series.id) }
         .collectAsStateWithLifecycle(emptyList())

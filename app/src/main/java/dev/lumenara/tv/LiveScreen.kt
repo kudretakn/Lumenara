@@ -28,10 +28,6 @@ import dev.lumenara.catalog.searchable
 import dev.lumenara.data.Item
 import dev.lumenara.data.Slot
 import dev.lumenara.design.*
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -47,157 +43,133 @@ internal fun LiveScreen(
     var numberSource by remember(source) { mutableStateOf(source) }
     val numbers = rememberLiveNumberControl(model, numberSource, select = play)
     val channelNumbers = liveChannelNumbers(model, source)
-    var timeline by rememberSaveable { mutableStateOf(false) }
-    var category by rememberSaveable(source) { mutableStateOf("all") }
-    var query by rememberSaveable { mutableStateOf("") }
+    var category by rememberSaveable(source) { mutableStateOf<String?>(null) }
+    var categoryTitle by rememberSaveable(source) { mutableStateOf("") }
+    var query by rememberSaveable(source, category) { mutableStateOf("") }
     var limit by rememberSaveable(source, category, query) { mutableIntStateOf(80) }
-    // Filters can reuse an already focused lazy row without another focus event.
-    // Keep its identity so resetting the debounce does not lose that focus.
-    var focusedId by remember(source) { mutableStateOf<String?>(null) }
-    var previewId by remember { mutableStateOf<String?>(null) }
-    val listState = rememberSaveable(source, category, query, saver = LazyListState.Saver) { LazyListState() }
-    val categoryState = rememberLazyListState()
-    val returnFocus = remember { FocusRequester() }
-    var returnIndex by remember(returnToChannel) { mutableIntStateOf(-1) }
+    var focusedId by rememberSaveable(source) { mutableStateOf<String?>(null) }
+    val pages = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) { wallClockTicks(30_000).collect { now = it } }
+    val groups by remember(source) { model.repo.liveCategoryCounts(source) }
+        .collectAsStateWithLifecycle(emptyList())
+    val recent by remember(source) { model.repo.recentLive(source) }
+        .collectAsStateWithLifecycle(emptyList())
+    val favorites by remember(source) { model.repo.shelfCount(source, "LIVE", "favorite") }
+        .collectAsStateWithLifecycle(0)
+    val airing by remember(source, now) { model.repo.nowAiring(source, now) }
+        .collectAsStateWithLifecycle(emptyList())
+    val total = groups.sumOf { it.count }
+    val entries = listOf(
+        CategoryEntry("all", "Tüm kanallar", total),
+        CategoryEntry("recent", "Son izlenenler", recent.size),
+        CategoryEntry("favorite", "Favoriler", favorites),
+        CategoryEntry("airing", "Şu an yayında", airing.size),
+        CategoryEntry("timeline", "Yayın akışı", total),
+    ).filter { it.count > 0 } + providerCategories(groups)
+    androidx.activity.compose.BackHandler(category != null) { category = null }
     LaunchedEffect(returnToChannel) {
         val target = returnToChannel ?: return@LaunchedEffect
-        timeline = false
         if (target != focusedId) {
-            // The mini guide may have selected a channel outside the saved filter/page.
             category = "all"
+            categoryTitle = "Tüm kanallar"
             query = ""
-            val index = model.repo.library.browse(source, "LIVE", "", "", "", Int.MAX_VALUE)
+            val index = model.repo.browse(source, "LIVE", "", "", "", Int.MAX_VALUE)
                 .first().indexOfFirst { it.id == target }
-            if (index >= 0) returnIndex = index
+            if (index >= 0) limit = maxOf(limit, index + 1)
             else onChannelFocusRestored()
         }
     }
-    LaunchedEffect(returnIndex, category, query) {
-        if (returnIndex >= 0 && category == "all" && query.isEmpty())
-            limit = maxOf(limit, returnIndex + 1)
-    }
-    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(Unit) {
-        wallClockTicks(30_000).collect { now = it }
-    }
-    val groups by remember(source) { model.repo.library.liveCategoryCounts(source) }
-        .collectAsStateWithLifecycle(emptyList())
-    val rows by remember(source, category, query, limit, if (category == "airing") now else 0L) {
-        if (category == "airing") model.repo.guide.nowAiring(source, now, searchable(query)).flatMapLatest { hits ->
-            val ids = hits.take(limit).map { it.itemId }
-            if (ids.isEmpty()) flowOf(emptyList())
-            else model.repo.library.liveByIds(source, ids).map { items ->
-                val byId = items.associateBy { it.id }
-                ids.mapNotNull { byId[it] }
-            }
-        } else if (category == "recent") model.prefs.recentLive.flatMapLatest { ids ->
-            if (ids.isEmpty()) flowOf(emptyList())
-            else model.repo.library.liveByIds(source, ids).map { items ->
-                val byId = items.associateBy { it.id }
-                ids.mapNotNull { byId[it] }.filter { it.search.contains(searchable(query)) }
-            }
-        } else model.repo.library.browse(
-            source, "LIVE", category.removePrefix("provider:").takeIf { category.startsWith("provider:") }.orEmpty(),
-            searchable(query), if (category == "favorite") "favorite" else "", limit,
-        )
-    }.collectAsStateWithLifecycle(emptyList())
-    LaunchedEffect(returnToChannel, rows) {
-        val index = rows.indexOfFirst { it.id == returnToChannel }
-        if (returnToChannel != null && index >= 0) listState.scrollToItem(index)
-    }
-    // A new focus cancels the previous delay; loading more rows does not restart playback.
-    LaunchedEffect(focusedId, source, category, query, timeline) {
-        previewId = null
-        if (!timeline && focusedId != null) {
-            val target = focusedId
-            delay(600)
-            previewId = target
+    if (category == "timeline") {
+        pages.SaveableStateProvider("timeline") {
+            Timeline(model, source, open, play) { category = null }
         }
-    }
-    if (timeline) {
-        Timeline(model, source, open, play) { timeline = false }
         return
     }
-    val preview = rows.firstOrNull { it.id == previewId }
-    BoxWithConstraints(Modifier.fillMaxSize().testTag("live-screen").onPreviewKeyEvent { numbers.key(it.nativeKeyEvent) }) {
-        // At 960 dp, safe areas and the navigation rail leave 816 dp for all three columns.
-        val categoryWidth = minOf(200.dp, maxWidth * .22f)
-        val channelWidth = minOf(420.dp, maxWidth * .44f)
-        Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            GlassPanel(Modifier.width(categoryWidth).fillMaxHeight()) {
-                Column(Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    LazyColumn(
-                        Modifier.weight(1f).testTag("live-categories").focusRestorer().focusGroup(),
-                        state = categoryState,
-                        contentPadding = PaddingValues(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        items(listOf("recent" to "Son izlenenler", "favorite" to "Favoriler",
-                            "all" to "Tümü", "airing" to "Şu an yayında"), key = { it.first }) { (id, title) ->
-                            Pill(title, category == id, { category = id }, Modifier.fillMaxWidth().testTag("live-category-$id"))
-                        }
-                        items(groups.filter { it.category.isNotEmpty() }, key = { "provider:${it.category}" }) { group ->
-                            val id = "provider:${group.category}"
-                            Pill("${group.category} (${group.count})", category == id,
-                                { category = id }, Modifier.fillMaxWidth().testTag("live-category-${group.category}"))
-                        }
-                    }
-                    FocusCard({ timeline = true }, Modifier.fillMaxWidth()) {
-                        Text("Yayın çizelgesi", Modifier.padding(12.dp), fontSize = 15.sp)
-                    }
-                }
+    Box(Modifier.fillMaxSize().testTag("live-screen")
+        .onPreviewKeyEvent { numbers.key(it.nativeKeyEvent) }) {
+        if (category == null) {
+            pages.SaveableStateProvider("categories") {
+                CategoryGrid("Canlı TV", entries) { category = it.id; categoryTitle = it.name }
             }
-            Column(Modifier.width(channelWidth).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Field("Kanal ara", query, { query = it })
-                LazyColumn(
-                    Modifier.weight(1f).testTag("live-channels").focusRestorer().focusGroup(),
-                    state = listState,
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    if (rows.isEmpty()) item { Text("Eşleşen içerik yok.", color = Ink.muted) }
-                    items(rows, key = { it.id }) { item ->
-                        val restoreFocus = item.id == returnToChannel
-                        if (restoreFocus) LaunchedEffect(item.id) {
-                            // Let the enclosing page finish its initial content focus request.
-                            withFrameNanos { }
-                            returnFocus.requestFocus()
-                            onChannelFocusRestored()
-                        }
-                        LiveChannelRow(model, item, channelNumbers[item.id] ?: 1, now,
-                            { play(item, rows) }, { open(item) }, { focusedId = item.id; numberSource = item.source },
-                            if (restoreFocus) Modifier.focusRequester(returnFocus) else Modifier)
+        } else {
+            val rows by remember(source, category, query, limit, if (category == "airing") now else 0L) {
+                if (category == "airing") model.repo.nowAiring(source, now, searchable(query)).flatMapLatest { hits ->
+                    val ids = hits.take(limit).map { it.itemId }
+                    model.repo.liveByIds(source, ids).map { items ->
+                        val byId = items.associateBy { it.id }
+                        ids.mapNotNull { byId[it] }
                     }
-                    if (category != "recent" && rows.size >= limit) item {
-                        FocusCard({ limit += 80 }, Modifier.fillMaxWidth()) {
-                            Text("Devamını göster", Modifier.padding(12.dp), fontSize = 15.sp)
-                        }
-                    }
-                }
-            }
-            GlassPanel(Modifier.weight(1f).fillMaxHeight().testTag("live-preview-panel")) {
-                Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    if (preview == null) Text("Önizleme için bir kanalda bekleyin.", color = Ink.muted, fontSize = 15.sp)
-                    else key(preview.id) {
-                        Video(model, preview, Modifier.fillMaxWidth().aspectRatio(16f / 9f)
-                            .testTag("live-preview"), preview = true)
-                        val slots = liveProgrammes(model, preview, now)
-                        val current = slots.firstOrNull { now >= it.start && now < it.end }
-                        Text(preview.title, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(current?.title ?: "Program bilgisi yok", fontSize = 20.sp,
-                            maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        current?.let {
-                            Text(slotTime(it), color = Ink.accent, fontSize = 12.sp)
-                            Text(it.description, Modifier.weight(1f, fill = false),
-                                color = Ink.muted, fontSize = 15.sp, maxLines = 5,
-                                overflow = TextOverflow.Ellipsis)
-                        }
-                        Text("Tam ekran için OK", color = Ink.muted, fontSize = 12.sp)
-                    }
-                }
+                } else if (category == "recent") model.repo.recentLive(source).map { rows ->
+                    rows.filter { it.search.contains(searchable(query)) }.take(limit)
+                } else model.repo.browse(source, "LIVE",
+                    category?.removePrefix("provider:").takeIf { category?.startsWith("provider:") == true }.orEmpty(),
+                    searchable(query), if (category == "favorite") "favorite" else "", limit)
+            }.collectAsStateWithLifecycle(emptyList())
+            pages.SaveableStateProvider("channels-$category") {
+                LiveChannelGrid(model, categoryTitle, rows, channelNumbers, now, query, { query = it },
+                    limit, { limit += 80 }, returnToChannel ?: focusedId, { item ->
+                        focusedId = item.id
+                        numberSource = item.source
+                    }, onChannelFocusRestored, open, play)
             }
         }
         NumberEntry(numbers)
+    }
+}
+
+@Composable
+private fun LiveChannelGrid(model: LibraryModel, title: String, rows: List<Item>,
+    numbers: Map<String, Int>, now: Long, query: String, search: (String) -> Unit,
+    limit: Int, more: () -> Unit, returnId: String?, focused: (Item) -> Unit,
+    restored: () -> Unit, open: (Item) -> Unit, play: (Item, List<Item>) -> Unit) {
+    val grid = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
+    val focus = remember { FocusRequester() }
+    val searchFocus = remember { FocusRequester() }
+    var positioned by remember { mutableStateOf(false) }
+    var requestPending by remember { mutableStateOf(true) }
+    val restoreId = remember { returnId }
+    val target = rows.indexOfFirst { it.id == restoreId }.coerceAtLeast(0)
+    LaunchedEffect(rows, query) {
+        if (!positioned && rows.isEmpty()) searchFocus.requestFocus()
+        if (!positioned && rows.isNotEmpty()) {
+            grid.scrollToItem(target)
+            positioned = true
+        }
+    }
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(title, Modifier.weight(1f), fontSize = 28.sp)
+            Box(Modifier.width(240.dp).focusRequester(searchFocus)) { Field("Kanal ara", query, search) }
+        }
+        androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+            androidx.compose.foundation.lazy.grid.GridCells.Fixed(4), state = grid,
+            modifier = Modifier.weight(1f).testTag("live-channels").focusRestorer().focusGroup(),
+            contentPadding = PaddingValues(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(18.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp)) {
+            if (rows.isEmpty()) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(4) }) {
+                Text("Eşleşen içerik yok.", color = Ink.muted)
+            }
+            items(rows.size, key = { rows[it].id }) { index ->
+                val item = rows[index]
+                if (index == target && positioned && requestPending) LaunchedEffect(Unit) {
+                    withFrameNanos { }
+                    focus.requestFocus()
+                    requestPending = false
+                    restored()
+                }
+                ChannelCard(model, item, now, { play(item, rows) }, focused,
+                    Modifier.fillMaxWidth()
+                        .then(if (index == target) Modifier.focusRequester(focus) else Modifier),
+                    number = numbers[item.id], operations = { open(item) })
+            }
+            if (rows.size >= limit) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(4) }) {
+                FocusCard(more, Modifier.fillMaxWidth()) {
+                    Text("Devamını göster", Modifier.padding(12.dp))
+                }
+            }
+        }
     }
 }
 
@@ -235,9 +207,4 @@ internal fun LiveChannelRow(
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
-}
-
-private fun slotTime(slot: Slot): String {
-    val format = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault())
-    return "${format.format(Instant.ofEpochMilli(slot.start))} – ${format.format(Instant.ofEpochMilli(slot.end))}"
 }

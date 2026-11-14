@@ -95,14 +95,8 @@ class CinemaJourneyTest {
         }
         fun describedIn(description: String, tag: String) =
             hasContentDescription(description) and hasAnyAncestor(hasTestTag(tag))
-        fun navigation(name: String) = hasContentDescription(name) and
-            hasAnyAncestor(hasTestTag("nav-open") or hasTestTag("nav-closed"))
         fun section(name: String) {
-            focus(screen.onNode(navigation(name)))
-            screen.ok()
-            screen.waitUntil(30_000) {
-                screen.onAllNodesWithTag("section-$name").fetchSemanticsNodes().isNotEmpty()
-            }
+            if (name == "Ana Sayfa") screen.returnToHub() else screen.openHubCard(name)
         }
         fun waitFor(matcher: SemanticsMatcher) {
             try {
@@ -209,6 +203,8 @@ class CinemaJourneyTest {
                                 "get_vod_categories" ->
                                     """[{"category_id":1,"category_name":"Sinema"}]"""
                                 "get_vod_streams" -> catalog.toString()
+                                "get_series_categories" -> """[{"category_id":3,"category_name":"Dram"}]"""
+                                "get_series" -> """[{"series_id":301,"name":"Kıyı Günlüğü","category_id":"3","year":"2024"}]"""
                                 "get_live_categories" ->
                                     """[{"category_id":2,"category_name":"Haber"}]"""
                                 "get_live_streams" ->
@@ -241,86 +237,37 @@ class CinemaJourneyTest {
                     repo.guide.map(Mapping(channel.id, "home-test-guide", "news"))
                 }
                 section("Ana Sayfa")
-                focus(node("Oynat"))
-                screen.onNodeWithTag("nav-closed").assertExists()
-                capture("cinema-home")
-                capture("screens/home")
-                screen.onNodeWithText("Canlı TV’ye git").assertDoesNotExist()
-                capture("screens/nav-closed")
-                screen.dpad(Key.DirectionLeft)
-                waitFor(hasTestTag("nav-open"))
-                screen.onNodeWithTag("nav-open").assertExists()
-                listOf("Ara", "Ana Sayfa", "Canlı TV", "Filmler", "Diziler", "Listem", "Ayarlar")
-                    .forEach { screen.onNode(navigation(it)).assertExists() }
-                capture("screens/nav-open")
-                screen.dpad(Key.DirectionRight)
-                waitFor(hasText("Oynat") and isFocused())
-                screen.onNodeWithTag("nav-closed").assertExists()
-                node("Oynat").assertIsFocused()
-                screen.dpad(Key.DirectionLeft)
-                waitFor(hasTestTag("nav-open"))
-                screen.back()
-                waitFor(hasText("Oynat") and isFocused())
-                screen.onNodeWithTag("nav-closed").assertExists()
-                node("Oynat").assertIsFocused()
-                // OK on a home channel card must open fullscreen without a detail step.
-                val onAirCard = describedIn("Test Haber", "channel-shelf-Şu an yayında — favori kanallar")
-                screen.onNodeWithTag("home-shelves").performScrollToNode(onAirCard)
-                focus(screen.onNode(onAirCard))
+                waitFor(hasTestTag("hub-Canlı TV") and isFocused())
+                capture("screens/hub")
+                listOf("Canlı TV", "Filmler", "Diziler", "Listem", "Ara", "Ayarlar")
+                    .forEach { screen.onNodeWithTag("hub-$it").assertExists() }
+                section("Canlı TV")
+                screen.openCategory("Haber")
+                waitFor(hasContentDescription("Test Haber") and isFocused())
                 screen.ok()
-                screen.waitUntil(30_000) {
-                    runBlocking { preferences.recentLive.first().isNotEmpty() }
-                }
+                screen.waitUntil(30_000) { runBlocking { preferences.recentLive.first().isNotEmpty() } }
                 screen.onNodeWithContentDescription("Tam ekran oynatıcı").assertExists()
-                // Let the opening banner expire: while visible, Back only dismisses the banner.
-                // FullscreenTest separately verifies that two-step Back contract.
-                screen.waitUntil(30_000) {
-                    screen.onAllNodesWithTag("fullscreen-banner").fetchSemanticsNodes().isEmpty()
-                }
+                waitAbsent(hasTestTag("fullscreen-banner"))
                 screen.back()
-                screen.waitUntil(30_000) {
-                    screen.onAllNodesWithContentDescription("Tam ekran oynatıcı").fetchSemanticsNodes().isEmpty()
-                }
-                node("Son izlenen kanallar").assertExists()
-                // Let Home's entry focus settle on the hero before entering the shelves.
-                // RequestFocus on a card can race the enclosing focus restorers.
-                focus(node("Oynat"))
-                val recentCard = describedIn("Test Haber", "channel-shelf-Son izlenen kanallar")
-                screen.onNodeWithTag("home-shelves").performScrollToNode(recentCard)
-                screen.onNode(recentCard).assertIsDisplayed()
-                screen.dpad(Key.DirectionDown)
-                // A shelf restorer may re-enter the previously visited on-air row.
-                // Move upward through the shelves instead of requesting card focus again.
-                for (step in 0 until 6) {
-                    if (screen.onAllNodes(recentCard and isFocused())
-                            .fetchSemanticsNodes().isNotEmpty()) break
-                    screen.dpad(Key.DirectionUp)
-                }
-                screen.onNode(recentCard).assertIsFocused()
+                waitAbsent(hasContentDescription("Tam ekran oynatıcı"))
+                section("Ana Sayfa")
+                screen.onNodeWithTag("hub").performScrollToNode(hasTestTag("channel-shelf-Son kanal"))
+                val recentCard = describedIn("Test Haber", "channel-shelf-Son kanal")
+                waitFor(recentCard)
                 node("Günün Haberleri").assertExists()
                 capture("screens/home-shelves")
-                // The card in the recent shelf is the channel that actually started playback.
                 val recentId = runBlocking { preferences.recentLive.first().first() }
                 runBlocking {
-                    assertEquals("Test Haber", repo.library.liveByIds("", listOf(recentId))
-                        .first().single().title)
+                    assertEquals("Test Haber", repo.library.liveByIds("", listOf(recentId)).first().single().title)
                 }
-                screen.onNodeWithTag("home-shelves")
-                    .performScrollToNode(hasText("Son eklenen filmler"))
-                val movieShelf = "shelf-Son eklenen filmler"
-                val movieCard = describedIn("Kadife Gece", movieShelf)
-                screen.onNodeWithTag("shelf-Son eklenen filmler")
-                    .performScrollToNode(movieCard)
-                assertTrue(
-                    "Afiş adı ekranın içinde kalmalı",
-                    screen.onNode(hasText("Kadife Gece") and hasAnyAncestor(hasTestTag(movieShelf)))
-                        .fetchSemanticsNode().boundsInRoot.bottom <=
-                        screen.onRoot().fetchSemanticsNode().boundsInRoot.bottom,
-                )
+                section("Filmler")
+                screen.openCategory("Sinema")
+                val movieCard = describedIn("Kadife Gece", "poster-grid")
+                screen.onNodeWithTag("poster-grid").performScrollToNode(movieCard)
+                assertTrue("Afiş adı ekranın içinde kalmalı",
+                    screen.onNode(hasText("Kadife Gece") and hasAnyAncestor(hasTestTag("poster-grid")))
+                        .fetchSemanticsNode().boundsInRoot.bottom <= screen.onRoot().fetchSemanticsNode().boundsInRoot.bottom)
                 focus(screen.onNode(movieCard))
-                screen.waitUntil(30_000) {
-                    screen.onAllNodesWithText("Kadife Gece").fetchSemanticsNodes().size >= 2
-                }
                 capture("cinema-focus")
                 screen.ok()
                 node("+ Listem").assertExists()
@@ -331,6 +278,7 @@ class CinemaJourneyTest {
                 node("✓ Listem").assertExists()
                 screen.back()
                 section("Filmler")
+                screen.openCategory("Sinema")
                 focusFilters()
                 capture("cinema-movies")
                 capture("screens/movies")
@@ -355,24 +303,19 @@ class CinemaJourneyTest {
                 screen.back()
                 waitFor(movieResult)
                 section("Diziler")
-                // Filters belong to each section: Series starts with its own closed panel.
+                screen.openCategory("Tümü")
+                // Filters belong to each section: Series starts with a closed, empty panel.
                 screen.onNodeWithText("Yıl").assertDoesNotExist()
                 focusFilters()
                 screen.ok()
                 filterYear()
                 screen.onAllNodes(hasSetTextAction())[0].assertTextEquals("")
+                screen.onAllNodes(hasSetTextAction())[0].performTextReplacement("1999")
                 screen.back()
-                node("Eşleşen içerik yok.").assertExists()
+                waitFor(hasText("Eşleşen içerik yok."))
                 screen.onNode(describedIn("Açık Deniz", "section-Diziler")).assertDoesNotExist()
                 section("Listem")
-                val favoritesTab = describedIn("Favoriler", "section-Listem")
-                val watchlistTab = describedIn("İzleme Listem", "section-Listem")
-                waitFor(favoritesTab and isSelected())
-                screen.onNode(favoritesTab).assertIsSelected()
-                focus(screen.onNode(watchlistTab))
-                screen.ok()
-                waitFor(watchlistTab and isSelected())
-                screen.onNode(watchlistTab).assertIsSelected()
+                screen.openCategory("İzleme listem")
                 screen.waitUntil(30_000) {
                     screen
                         .onAllNodes(describedIn("Kadife Gece", "section-Listem"))
@@ -380,7 +323,13 @@ class CinemaJourneyTest {
                         .isNotEmpty()
                 }
                 screen.onNode(describedIn("Açık Deniz", "section-Listem")).assertDoesNotExist()
+                screen.back()
+                waitFor(hasTestTag("category-İzleme listem") and isFocused())
+                screen.openCategory("Favoriler")
+                waitFor(hasText("Eşleşen içerik yok."))
+                screen.onNode(describedIn("Kadife Gece", "section-Listem")).assertDoesNotExist()
                 section("Filmler")
+                screen.openCategory("Sinema")
                 select("Filtrele (1)")
                 filterYear()
                 screen.onAllNodes(hasSetTextAction())[0].assertTextEquals("2025")
@@ -401,7 +350,6 @@ class CinemaJourneyTest {
                 screen.onNodeWithTag("search-shelf-Filmler").assertDoesNotExist()
                 section("Ayarlar")
                 node("IPTV Kaynakları").assertExists()
-                screen.dpad(Key.DirectionRight)
                 waitFor(hasText("IPTV Kaynakları") and isFocused())
                 node("IPTV Kaynakları").assertIsFocused()
                 screen.ok()

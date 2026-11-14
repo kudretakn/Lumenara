@@ -9,7 +9,7 @@ import dev.lumenara.catalog.*
 import java.net.URI
 import java.util.UUID
 import java.util.concurrent.TimeUnit
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -43,6 +43,7 @@ data class SourceSpec(
     }
 }
 
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class Repository private constructor(private val context: Context) {
     private val db = Room.databaseBuilder(context, LibraryDb::class.java, "lumenara.db").build()
     val library = db.library()
@@ -50,6 +51,45 @@ class Repository private constructor(private val context: Context) {
     private val vault = Vault(context)
     private val metadata = Metadata(context, vault)
     private val preferences = Preferences(context)
+    // Resolve names from the complete catalog, before applying any visibility filter.
+    val hidden: Flow<List<String>> = combine(
+        preferences.showAdult, library.categoryCounts("", ""),
+    ) { show, groups ->
+        if (show) emptyList() else groups.map { it.category }.filter(::isAdultCategory)
+    }.distinctUntilChanged().flowOn(Dispatchers.Default)
+
+    fun browse(source: String, kind: String, category: String, query: String, shelf: String, limit: Int,
+               year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0) =
+        hidden.flatMapLatest { library.browse(source, kind, category, query, shelf, limit, year, genre, language, minRating, it) }
+
+    fun shelfCount(source: String, kind: String, shelf: String) =
+        hidden.flatMapLatest { library.shelfCount(source, kind, shelf, it) }
+
+    fun categoryCounts(kind: String, source: String) =
+        hidden.flatMapLatest { library.categoryCounts(kind, source, it) }
+    fun categories(kind: String, source: String) =
+        hidden.flatMapLatest { library.categories(kind, source, it) }
+    fun liveCategoryCounts(source: String) =
+        hidden.flatMapLatest { library.liveCategoryCounts(source, it) }
+    fun liveByIds(source: String, ids: List<String>) =
+        hidden.flatMapLatest { library.liveByIds(source, ids, it) }
+    fun liveChannelOrder(source: String) =
+        hidden.flatMapLatest { library.liveChannelOrder(source, it) }
+    fun episodes(id: String) = hidden.flatMapLatest { library.episodes(id, it) }
+    suspend fun episodeSnapshot(id: String) = library.episodeSnapshot(id, hidden.first())
+    fun continueWatching(source: String) =
+        hidden.flatMapLatest { library.continueWatching(source, it) }
+    fun recentLive(source: String) = preferences.recentLive.flatMapLatest { ids ->
+        liveByIds(source, ids).map { rows ->
+            val byId = rows.associateBy { it.id }
+            ids.mapNotNull { byId[it] }
+        }
+    }
+    fun nowAiring(source: String, now: Long, query: String = "") =
+        hidden.flatMapLatest { guide.nowAiring(source, now, query, it) }
+    fun searchPrograms(source: String, query: String, from: Long, now: Long) =
+        hidden.flatMapLatest { guide.searchPrograms(source, query, from, now, it) }
+
     val subtitles = SubtitleService(preferences, SubtitleCache(java.io.File(context.cacheDir, "subtitles")))
 
     suspend fun production(item: Item): Item = if (item.kind == "EPISODE") library.item(item.parent) ?: item
@@ -57,7 +97,12 @@ class Repository private constructor(private val context: Context) {
 
     private val versionIndex = java.util.concurrent.ConcurrentHashMap<String, Map<String, List<Item>>>()
 
-    suspend fun versions(item: Item): List<Item> = withContext(Dispatchers.IO) {
+    suspend fun versions(item: Item): List<Item> {
+        val all = allVersions(item)
+        return if (preferences.showAdult.first()) all else all.filterNot { isAdultCategory(it.category) }
+    }
+
+    private suspend fun allVersions(item: Item): List<Item> = withContext(Dispatchers.IO) {
         val base = production(item)
         if (base.kind !in listOf("MOVIE", "SERIES")) return@withContext listOf(base)
         val key = "${base.source}|${base.kind}|${base.generation}"
@@ -73,9 +118,12 @@ class Repository private constructor(private val context: Context) {
     }
 
     private suspend fun versionPreferenceIdentity(item: Item): String =
-        versions(item).minByOrNull { it.id }?.preferenceIdentity() ?: production(item).preferenceIdentity()
+        allVersions(item).minByOrNull { it.id }?.preferenceIdentity() ?: production(item).preferenceIdentity()
 
     suspend fun selectedVersion(item: Item): Item {
+        if (!preferences.showAdult.first() &&
+            (isAdultCategory(item.category) || isAdultCategory(production(item).category)))
+            throw SourceFailure("Bu kategori gizli.")
         if (item.kind !in listOf("MOVIE", "SERIES", "EPISODE")) return item
         val base = production(item)
         val choices = versions(base)
@@ -96,9 +144,11 @@ class Repository private constructor(private val context: Context) {
         if (item.kind != "EPISODE") return version
         if (item.parent == version.id) return item
         val number = item.seriesEpisode()
+        val showAdult = preferences.showAdult.first()
         return expand(version).firstOrNull {
             val candidate = it.seriesEpisode()
-            candidate.season == number.season && candidate.episode == number.episode
+            (showAdult || !isAdultCategory(it.category)) &&
+                candidate.season == number.season && candidate.episode == number.episode
         } ?: throw SourceFailure("Bu bölüm seçilen sürümde bulunamadı.")
     }
 
@@ -355,7 +405,7 @@ class Repository private constructor(private val context: Context) {
                 for (entry in entries) {
                     if (library.mark(entry.id)?.updated == 0L || library.mark(entry.id) == null) {
                         val number = entry.seriesEpisode()
-                        val shared = versions(series).filter { it.id != series.id }
+                        val shared = allVersions(series).filter { it.id != series.id }
                             .flatMap { library.episodeSnapshot(it.id) }.filter {
                                 val n = it.seriesEpisode(); n.season == number.season && n.episode == number.episode
                             }.mapNotNull { library.mark(it.id) }.maxByOrNull { it.updated }
@@ -381,10 +431,10 @@ class Repository private constructor(private val context: Context) {
         val item = library.item(id) ?: return@withTransaction
         val siblings = if (item.kind == "EPISODE") {
             val number = item.seriesEpisode()
-            versions(item).flatMap { library.episodeSnapshot(it.id) }.filter {
+            allVersions(item).flatMap { library.episodeSnapshot(it.id) }.filter {
                 val n = it.seriesEpisode(); n.season == number.season && n.episode == number.episode
             }
-        } else if (item.kind in listOf("MOVIE", "SERIES")) versions(item) else listOf(item)
+        } else if (item.kind in listOf("MOVIE", "SERIES")) allVersions(item) else listOf(item)
         val existing = siblings.mapNotNull { library.mark(it.id) }
         val shared = library.mark(id) ?: existing.maxByOrNull { it.updated }?.copy(id = id) ?: Mark(id)
         val result = transform(shared)

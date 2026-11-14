@@ -127,7 +127,7 @@ class LiveComfortTest {
                 await(hasTestTag("u1-host") and SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, channels[1].id))
                 screen.waitUntil(30_000) { runBlocking { prefs.recentLive.first().firstOrNull() == channels[1].id } }
 
-                // Home has no movie candidates for this source; the last-channel action still gets focus.
+                // Hub starts on Canlı TV; recent channels still play directly from their shelf.
                 screen.runOnUiThread {
                     val model = ViewModelProvider(screen.activity)[LibraryModel::class.java]
                     screen.activity.setContent {
@@ -135,11 +135,15 @@ class LiveComfortTest {
                             var playing by remember { mutableStateOf<Item?>(null) }
                             val current = playing
                             if (current != null) Playback(model, current, channels, { playing = it }, {}, {})
-                            else Home(model, channels[0].source, {}, { item, _ -> playing = item }, MovieInfo(), {}, 0)
+                            else Home(model, channels[0].source, {}, { item, _ -> playing = item }) {}
                         }
                     }
                 }
-                await(hasTestTag("home-last-channel") and isFocused())
+                await(hasTestTag("hub-Canlı TV") and isFocused())
+                screen.onNodeWithTag("hub").performScrollToNode(hasTestTag("channel-shelf-Son kanal"))
+                screen.onNode(hasContentDescription(channels[1].title) and
+                    hasAnyAncestor(hasTestTag("channel-shelf-Son kanal")))
+                    .performSemanticsAction(SemanticsActions.RequestFocus)
                 shot("u1-last-channel-$engine")
                 screen.ok()
                 await(hasContentDescription("Tam ekran oynatıcı") and isFocused())
@@ -156,6 +160,7 @@ class LiveComfortTest {
                         }
                     }
                 }
+                screen.openCategory("Tüm kanallar")
                 await(hasTestTag("live-channel-${channels[0].id}"))
                 screen.onNodeWithTag("live-channel-${channels[0].id}").performSemanticsAction(SemanticsActions.RequestFocus)
                 screen.dpad(Key.NumPad2)

@@ -421,7 +421,7 @@ internal fun VlcScreen(
                         }
                         if (snapshot != null)
                             model.repo.updateMark(item.id) { it.copy(position = snapshot.first, duration = snapshot.second) }
-                        val rows = if (version.kind == "EPISODE") model.repo.library.episodeSnapshot(version.parent).seriesOrder() else group
+                        val rows = if (version.kind == "EPISODE") model.repo.episodeSnapshot(version.parent).seriesOrder() else group
                         select(version, rows)
                     }
                 } }

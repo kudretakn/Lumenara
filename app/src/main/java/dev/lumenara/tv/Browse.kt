@@ -15,13 +15,13 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
 import dev.lumenara.data.*
 import dev.lumenara.design.Ink
-import dev.lumenara.design.Pill
 import dev.lumenara.design.GlassPanel
 import kotlinx.coroutines.flow.*
 
@@ -70,130 +70,80 @@ private fun Shelf(
     }
 }
 
-@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 @Composable
 internal fun Home(
     model: LibraryModel,
     source: String,
     open: (Item) -> Unit,
     play: (Item, List<Item>) -> Unit,
-    info: MovieInfo,
-    feature: (Item?) -> Unit,
-    interaction: Long,
+    lastCard: String = "Canlı TV",
+    navigate: (String) -> Unit,
 ) {
-    val collections by remember(source) { model.repo.library.collections(source) }
-        .collectAsStateWithLifecycle(emptyList())
-    val candidates by remember(source) { model.repo.library.homeFeatures(source) }
-        .collectAsStateWithLifecycle(emptyList())
-    val recent by remember(source) {
-        model.prefs.recentLive.flatMapLatest { ids ->
-            if (ids.isEmpty()) flowOf(emptyList())
-            else model.repo.library.liveByIds(source, ids).map { rows ->
-                val byId = rows.associateBy { it.id }
-                ids.mapNotNull { byId[it] }
-            }
-        }
-    }.collectAsStateWithLifecycle(emptyList())
-    val onAir by remember(source) {
-        model.repo.library.browse(source, "LIVE", "", "", "favorite", 20)
-            .flatMapLatest { favorites ->
-                if (favorites.isNotEmpty()) flowOf(favorites)
-                else model.repo.library.firstLiveCategory(source)
-            }
-    }.collectAsStateWithLifecycle(emptyList())
-    val shelfSpecs = listOf(
-        Triple("Kaldığın yerden devam et", "", "resume"),
-        Triple("Son eklenen filmler", "MOVIE", "recent"),
-        Triple("Yüksek puanlı filmler", "MOVIE", "popular"),
-        Triple("Diziler", "SERIES", ""),
-        Triple("İzleme listem", "", "list"),
-    ) + collections.map { Triple(it, "MOVIE", "collection") } +
-        Triple("İzlediklerinize göre", "", "suggest")
-    val shelves = shelfSpecs.map { (title, kind, shelf) ->
-        key(title, shelf) {
-            val rows by remember(source, title, kind, shelf) {
-                when (shelf) {
-                    "collection" -> model.repo.library.members(source, title)
-                    "suggest" -> model.repo.library.suggestions(source)
-                    "resume" -> model.repo.library.continueWatching(source)
-                    else -> model.repo.library.browse(source, kind, "", "", shelf, 24)
+    val recent by remember(source) { model.repo.recentLive(source) }.collectAsStateWithLifecycle(emptyList())
+    val resume by remember(source) { model.repo.continueWatching(source) }.collectAsStateWithLifecycle(emptyList())
+    val counts = listOf("LIVE", "MOVIE", "SERIES").map { kind ->
+        val groups by remember(source, kind) { model.repo.categoryCounts(kind, source) }
+            .collectAsStateWithLifecycle(emptyList())
+        groups.sumOf { it.count }
+    }
+    val update by model.update.collectAsStateWithLifecycle()
+    var focused by rememberSaveable { mutableStateOf(lastCard) }
+    val entry = remember { FocusRequester() }
+    val list = rememberLazyListState()
+    val cards = listOf("Canlı TV", "Filmler", "Diziler", "Listem", "Ara", "Ayarlar")
+    val target = if (focused in cards) focused else lastCard
+    val returnShelf = remember { focused.takeIf { it == "recent" || it == "resume" } }
+    var restored by remember { mutableStateOf(false) }
+    LaunchedEffect(recent, resume) {
+        if (!restored) {
+            when {
+                returnShelf == "recent" && recent.isNotEmpty() -> list.scrollToItem(3)
+                returnShelf == "resume" && resume.isNotEmpty() -> list.scrollToItem(if (recent.isEmpty()) 3 else 4)
+                returnShelf == null -> {
+                    list.scrollToItem(0)
+                    withFrameNanos { }
+                    entry.requestFocus()
                 }
-            }.collectAsStateWithLifecycle(emptyList())
-            Triple(title, shelf, rows)
-        }
-    }.filter { it.third.isNotEmpty() }
-    var page by rememberSaveable(source) { mutableIntStateOf(0) }
-    var shelvesFocused by rememberSaveable(source) { mutableStateOf(false) }
-    var focusedId by rememberSaveable(source) { mutableStateOf<String?>(null) }
-    val focused = (recent + onAir + shelves.flatMap { it.third } + candidates)
-        .firstOrNull { it.id == focusedId }
-    val rotating = candidates.getOrNull(page % candidates.size.coerceAtLeast(1))
-    val hero = (if (shelvesFocused) focused ?: rotating else rotating) ?: recent.firstOrNull()
-    val lastChannelFocus = remember { FocusRequester() }
-    var initialFocusDone by rememberSaveable(source) { mutableStateOf(false) }
-    LaunchedEffect(recent.firstOrNull()?.id) {
-        if (!initialFocusDone && recent.isNotEmpty()) {
-            withFrameNanos { }
-            withFrameNanos { }
-            lastChannelFocus.requestFocus()
-            initialFocusDone = true
+                else -> return@LaunchedEffect
+            }
+            restored = true
         }
     }
-    LaunchedEffect(source, candidates, shelvesFocused, interaction) {
-        if (!shelvesFocused && candidates.size > 1) {
-            wallClockTicks(9_000).drop(1).collect {
-                page = (page + 1) % candidates.size
+    LazyColumn(Modifier.fillMaxSize().testTag("hub").focusRestorer().focusGroup(), state = list,
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp)) {
+        item { LumenaraLogo(showName = true) }
+        items(2) { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(22.dp)) {
+                repeat(3) { column ->
+                    val index = row * 3 + column
+                    val name = cards[index]
+                    val caption = if (index < 3) {
+                        val number = java.text.NumberFormat.getIntegerInstance(java.util.Locale.forLanguageTag("tr"))
+                            .format(counts[index])
+                        "$number " + listOf("kanal", "film", "dizi")[index]
+                    } else ""
+                    NavigationCard(name, caption,
+                        Modifier.weight(1f).height(if (row == 0) 200.dp else 110.dp)
+                            .testTag("hub-$name").semantics {
+                                contentDescription = name
+                                if (name == "Ayarlar" && update != null) stateDescription = "Güncelleme hazır"
+                            }.then(if (name == target) Modifier.focusRequester(entry) else Modifier)
+                            .onFocusChanged { if (it.isFocused) focused = name },
+                        update = name == "Ayarlar" && update != null,
+                        icon = listOf(2, 3, 4, 5, 0, 6)[index],
+                    ) { navigate(name) }
+                }
             }
         }
-    }
-    LaunchedEffect(hero) { feature(hero) }
-    val choose: (Item) -> Unit = { focusedId = it.id }
-    BoxWithConstraints(Modifier.fillMaxSize()) {
-        // Leave room for a complete portrait shelf: heading, artwork, title and year.
-        // The enclosing screen already reserves the TV's 27 dp bottom safe area.
-        val heroHeight = maxHeight * .48f
-        Column {
-            Box(Modifier.fillMaxWidth().height(heroHeight)
-                .onFocusChanged { if (it.hasFocus) shelvesFocused = false }
-                .focusRestorer()
-                .focusGroup()) {
-                hero?.let {
-                    Hero(model, it, info, open, play, Modifier.padding(top = 12.dp)) {
-                        recent.firstOrNull()?.let { channel ->
-                            Button(onClick = { play(channel, recent) },
-                                modifier = Modifier.focusRequester(lastChannelFocus).testTag("home-last-channel")) {
-                                Text("▶ Son kanal: ${channel.title}", Modifier.widthIn(max = 220.dp),
-                                    maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                            }
-                        }
-                    }
-                }
-                if (candidates.isNotEmpty())
-                    Row(Modifier.align(Alignment.BottomStart).padding(bottom = 4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        candidates.forEachIndexed { index, _ ->
-                            Box(Modifier.size(if (index == page % candidates.size) 8.dp else 6.dp)
-                                .background(if (index == page % candidates.size) Ink.focusRing else Ink.stroke,
-                                    androidx.compose.foundation.shape.CircleShape))
-                        }
-                    }
-            }
-            LazyColumn(
-                Modifier.weight(1f).testTag("home-shelves").onFocusChanged { shelvesFocused = it.hasFocus }
-                    .focusRestorer().focusGroup(),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                contentPadding = PaddingValues(top = 8.dp, bottom = 28.dp),
-            ) {
-                if (recent.isNotEmpty()) item(key = "recent-live") {
-                    ChannelShelf(model, "Son izlenen kanallar", recent, play, choose)
-                }
-                if (onAir.isNotEmpty()) item(key = "on-air") {
-                    ChannelShelf(model, "Şu an yayında — favori kanallar", onAir, play, choose)
-                }
-                items(shelves, key = { "${it.second}:${it.first}" }) { (title, shelf, rows) ->
-                    Shelf(model, title, rows, shelf, open, choose)
-                }
-            }
+        if (recent.isNotEmpty()) item(key = "recent-live") {
+            ChannelShelf(model, "Son kanal", recent, play, { focused = "recent" })
+        }
+        if (resume.isNotEmpty()) item(key = "resume") {
+            Shelf(model, "Kaldığın yerden devam et", resume, "resume", open, { focused = "resume" })
+        }
+        if (counts.all { it == 0 }) item {
+            Text("İçerik eklemek için Ayarlar → IPTV Kaynakları.", color = Ink.muted)
         }
     }
 }
@@ -220,15 +170,46 @@ internal fun Browse(
         return
     }
     if (section == "Ara") {
-        SearchScreen(model, source, open, play)
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Text("Ara", fontSize = 28.sp)
+            Box(Modifier.weight(1f)) { SearchScreen(model, source, open, play) }
+        }
         return
     }
-    var listTab by rememberSaveable { mutableStateOf("Favoriler") }
-    val shelf = if (section == "Listem") {
-        if (listTab == "Favoriler") "favorite" else "list"
-    } else ""
-    var category by rememberSaveable(source) { mutableStateOf("") }
-    var limit by rememberSaveable(source, category, shelf) { mutableIntStateOf(80) }
+    var selectedCategory by rememberSaveable(source, section) { mutableStateOf<String?>(null) }
+    var categoryTitle by rememberSaveable(source, section) { mutableStateOf("") }
+    val category = selectedCategory?.removePrefix("provider:").takeIf {
+        selectedCategory?.startsWith("provider:") == true
+    }.orEmpty()
+    val shelf = if (section == "Listem") selectedCategory.orEmpty() else ""
+    val groups by remember(kind, source) { model.repo.categoryCounts(kind, source) }
+        .collectAsStateWithLifecycle(emptyList())
+    val favoriteCount by remember(source) { model.repo.shelfCount(source, "", "favorite") }
+        .collectAsStateWithLifecycle(0)
+    val listedCount by remember(source) { model.repo.shelfCount(source, "", "list") }
+        .collectAsStateWithLifecycle(0)
+    val cardPages = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
+    BackHandler(selectedCategory != null) { selectedCategory = null }
+    if (selectedCategory == null) {
+        val entries = if (section == "Listem")
+            listOf(CategoryEntry("favorite", "Favoriler", favoriteCount), CategoryEntry("list", "İzleme listem", listedCount))
+        else listOf(CategoryEntry("all", "Tümü", groups.sumOf { it.count })).filter { it.count > 0 } +
+            providerCategories(groups)
+        cardPages.SaveableStateProvider("categories") {
+            CategoryGrid(section, entries) { selectedCategory = it.id; categoryTitle = it.name }
+        }
+        return
+    }
+    cardPages.SaveableStateProvider("content-$selectedCategory") {
+        PosterGridContent(model, section, source, kind, category, shelf, categoryTitle, open, play)
+    }
+}
+
+@Composable
+private fun PosterGridContent(model: LibraryModel, section: String, source: String, kind: String,
+    category: String, shelf: String, categoryTitle: String, open: (Item) -> Unit,
+    play: (Item, List<Item>) -> Unit) {
+    var limit by rememberSaveable { mutableIntStateOf(80) }
     var advanced by rememberSaveable { mutableStateOf(false) }
     var year by rememberSaveable { mutableStateOf("") }
     var genre by rememberSaveable { mutableStateOf("") }
@@ -246,41 +227,40 @@ internal fun Browse(
             restoreFilterFocus = false
         }
     }
-    LaunchedEffect(source, kind, shelf, category, limit, year, genre, language, rating) {
-        model.filter.value = Filter(source, kind, category, "", shelf, limit,
-            year, genre, language, rating.toDouble())
+    val rows by remember(source, kind, shelf, category, limit, year, genre, language, rating) {
+        model.repo.browse(source, kind, category, "", shelf, limit, year, genre, language, rating.toDouble())
+    }.collectAsStateWithLifecycle(emptyList())
+    val grid = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
+    var lastPoster by rememberSaveable(source, category, shelf) { mutableStateOf<String?>(null) }
+    val posterFocus = remember { FocusRequester() }
+    var positioned by remember(category, shelf) { mutableStateOf(false) }
+    var requestPending by remember { mutableStateOf(true) }
+    val restoreId = remember { lastPoster }
+    val posterTarget = rows.indexOfFirst { it.id == restoreId }.coerceAtLeast(0)
+    LaunchedEffect(rows) {
+        if (!positioned && rows.isNotEmpty()) {
+            grid.scrollToItem(posterTarget)
+            positioned = true
+        }
     }
-    val rows by model.results.collectAsStateWithLifecycle()
-    val groups by remember(kind, source) { model.repo.library.categories(kind, source) }
-        .collectAsStateWithLifecycle(emptyList())
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { wallClockTicks(30_000).collect { now = it } }
     BackHandler(advanced) { closeFilters() }
+    LaunchedEffect(rows) {
+        if (rows.isEmpty() && kind in listOf("MOVIE", "SERIES") && !advanced) filterButton.requestFocus()
+    }
+    val emptyFocus = remember { FocusRequester() }
+    LaunchedEffect(rows) { if (rows.isEmpty() && kind.isEmpty()) emptyFocus.requestFocus() }
     val panelFocus = remember { FocusRequester() }
     // Keep the filter layer over the content instead of consuming another Column slot.
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().focusProperties {
             if (advanced) canFocus = false
         }.focusGroup(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            if (section == "Listem") {
-                LazyRow(contentPadding = PaddingValues(6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    items(listOf("Favoriler", "İzleme Listem")) { tab ->
-                        Pill(tab, listTab == tab, onClick = { listTab = tab })
-                    }
-                }
-            }
-            if (kind == "MOVIE" || kind == "SERIES") {
-                Row(verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    LazyRow(Modifier.weight(1f).focusRestorer().focusGroup(),
-                        contentPadding = PaddingValues(6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(listOf("") + groups, key = { it }) { group ->
-                            Pill(group.ifEmpty { "Tümü" }, category == group,
-                                onClick = { category = group })
-                        }
-                    }
+            Row(verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(categoryTitle, Modifier.weight(1f), fontSize = 28.sp)
+                if (kind == "MOVIE" || kind == "SERIES") {
                     val count = listOf(year, genre, language).count { it.isNotEmpty() } +
                         if (rating > 0) 1 else 0
                     Button(onClick = { advanced = true },
@@ -292,6 +272,7 @@ internal fun Browse(
             }
             androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
                 columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(6),
+                state = grid,
                 modifier = Modifier.weight(1f).testTag("poster-grid").focusRestorer().focusGroup(),
                 // TV safe area plus the title/year below the focusable poster.
                 contentPadding = PaddingValues(start = 8.dp, top = 8.dp, end = 8.dp, bottom = 64.dp),
@@ -299,15 +280,30 @@ internal fun Browse(
                 verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
                 if (rows.isEmpty()) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(6) }) {
-                    Text("Eşleşen içerik yok.", color = Ink.muted)
+                    Column {
+                        Text("Eşleşen içerik yok.", color = Ink.muted)
+                        if (kind.isEmpty()) {
+                            val back = androidx.activity.compose.LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
+                            Button(onClick = { back?.onBackPressed() }, modifier = Modifier.focusRequester(emptyFocus)) { Text("Geri") }
+                        }
+                    }
                 }
                 items(rows.size, key = { rows[it].id }, span = { index ->
                     androidx.compose.foundation.lazy.grid.GridItemSpan(if (rows[index].kind == "LIVE") 2 else 1)
                 }) { index ->
                     val entry = rows[index]
+                    if (index == posterTarget && positioned && requestPending) LaunchedEffect(Unit) {
+                        withFrameNanos { }
+                        posterFocus.requestFocus()
+                        requestPending = false
+                    }
+                    val cardModifier = Modifier.fillMaxWidth()
+                        .then(if (index == posterTarget) Modifier.focusRequester(posterFocus) else Modifier)
+                        .onFocusChanged { if (it.isFocused) lastPoster = entry.id }
                     if (entry.kind == "LIVE")
-                        ChannelCard(model, entry, now, { play(entry, rows.filter { it.kind == "LIVE" }) }, {})
-                    else MovieCard(model, entry, true, open, modifier = Modifier.fillMaxWidth())
+                        ChannelCard(model, entry, now, { play(entry, rows.filter { it.kind == "LIVE" }) }, { lastPoster = it.id },
+                            modifier = cardModifier, operations = { open(entry) })
+                    else MovieCard(model, entry, true, open, { lastPoster = it.id }, modifier = cardModifier)
                 }
                 if (rows.size >= limit) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(6) }) {
                     Button(onClick = { limit += 80 }) { Text("Devamını göster") }
