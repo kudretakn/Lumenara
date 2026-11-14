@@ -30,6 +30,24 @@ timeout 2400 adb shell am instrument -w -r "$runner" > "$out/instrument.txt" 2>&
 code=$?
 results "$out/instrument.txt" > "$out/first-run.txt"
 
+# A process crash ends the run early and the tests after it never start. List every test
+# (log-only mode runs nothing) and continue with the ones that have no result yet.
+timeout 300 adb shell am instrument -w -r -e log true "$runner" > "$out/test-list.txt" 2>&1
+results "$out/test-list.txt" | sed 's/^[A-Z]*  //' | sort -u > "$out/all-tests.txt"
+for part in 1 2 3; do
+  [ "$code" -eq 124 ] && break
+  grep -q -E '^OK \(|FAILURES!!!' "$out/instrument.txt" && break
+  missing=$(comm -23 "$out/all-tests.txt" <(sed 's/^[A-Z]*  //' "$out/first-run.txt" | sort -u) \
+    | sed 's/\.\([^.]*\)$/#\1/' | paste -sd, -)
+  [ -z "$missing" ] && break
+  echo "Run ended early; continuing with: $missing"
+  log="$out/instrument-continue-$part.txt"
+  timeout 2400 adb shell am instrument -w -r -e class "$missing" "$runner" > "$log" 2>&1
+  code=$?
+  results "$log" >> "$out/first-run.txt"
+  grep -q -E '^OK \(|FAILURES!!!' "$log" && { cat "$log" >> "$out/instrument.txt"; break; }
+done
+
 final="$out/summary.txt"
 grep -v '^FAIL' "$out/first-run.txt" > "$final" || true
 retry=0
@@ -52,8 +70,10 @@ cat "$final"
 grep -A4 'INSTRUMENTATION_STATUS: stack=' "$out"/instrument*.txt | head -120
 
 if [ "$code" -eq 124 ]; then echo "Instrumentation timed out (last test above was still running)"; exit 1; fi
-# A process crash ends the first run early; tests after it never ran, so retrying is not enough.
-grep -q -E '^OK \(|FAILURES!!!' "$out/instrument.txt" || { echo "The instrumentation run ended early (crash?)"; exit 1; }
+# Every listed test must have a result; a crash that kept tests from running fails the job.
+never=$(comm -23 "$out/all-tests.txt" <(sed 's/^[A-Z]*  //' "$final" | sort -u))
+[ -s "$out/all-tests.txt" ] || { echo "Could not list the tests"; exit 1; }
+[ -z "$never" ] || { echo "Tests that never ran (crash?):"; echo "$never"; exit 1; }
 grep -q '^PASS' "$final" || { echo "No test passed; the instrumentation run did not complete"; exit 1; }
 grep -q '^FAIL' "$final" && exit 1
 exit 0
