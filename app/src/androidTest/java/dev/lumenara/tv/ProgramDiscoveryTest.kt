@@ -11,7 +11,6 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.lumenara.data.*
 import dev.lumenara.design.LumenaraTheme
-import dev.lumenara.design.Pill
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
@@ -71,20 +70,16 @@ class ProgramDiscoveryTest {
                 val long = channels.single { it.tvgId == "long" }
                 val short = channels.single { it.tvgId == "short" }
                 val playing = mutableStateOf<Item?>(null)
+                val page = mutableStateOf("Ara")
                 screen.runOnUiThread {
                     val model = ViewModelProvider(screen.activity)[LibraryModel::class.java]
                     screen.activity.setContent {
                         LumenaraTheme {
-                            var page by remember { mutableStateOf("Ara") }
                             val current = playing.value
                             if (current != null) Playback(model, current, channels, { playing.value = it }, { playing.value = null }, {})
                             else Column {
-                                Row {
-                                    Pill("Ara", page == "Ara", { page = "Ara" })
-                                    Pill("Canlı TV", page == "Canlı TV", { page = "Canlı TV" })
-                                }
                                 Box(Modifier.weight(1f)) {
-                                    if (page == "Ara") SearchScreen(model, long.source, {}, { item, _ -> playing.value = item })
+                                    if (page.value == "Ara") SearchScreen(model, long.source, {}, { item, _ -> playing.value = item })
                                     else LiveScreen(model, long.source, {}, { item, _ -> playing.value = item })
                                 }
                             }
@@ -105,9 +100,11 @@ class ProgramDiscoveryTest {
                 screen.waitUntil(30_000) { runBlocking { prefs.recentLive.first().firstOrNull() == long.id } }
                 // Close playback in the test host, then select the Live TV page.
                 screen.runOnIdle { playing.value = null }
-                await(hasText("Canlı TV"))
-                screen.onNodeWithText("Canlı TV").performClick()
-                await(hasTestTag("live-category-airing"))
+                screen.runOnIdle { page.value = "Canlı TV" }
+                runCatching { await(hasTestTag("live-category-airing")) }.onFailure {
+                    screen.onRoot().printToLog("U2")
+                    throw it
+                }
                 screen.onNodeWithTag("live-category-airing").performSemanticsAction(SemanticsActions.RequestFocus)
                 screen.ok()
                 await(hasTestTag("live-channel-${short.id}"))
