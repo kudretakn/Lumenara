@@ -121,11 +121,11 @@ internal fun VlcScreen(
                 position = it.time
                 model.progress(item, position, it.length)
                 it.setEventListener(null)
-                input?.close()
+                withContext(NonCancellable + Dispatchers.IO) { input?.close() }
                 it.stop()
                 it.detachViews()
                 it.release()
-            } ?: input?.close()
+            } ?: withContext(NonCancellable + Dispatchers.IO) { input?.close() }
             library?.release()
         }
     }

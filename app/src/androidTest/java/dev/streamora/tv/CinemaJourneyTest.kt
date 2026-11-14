@@ -254,7 +254,9 @@ class CinemaJourneyTest {
                 screen.onNodeWithTag("nav-closed").assertExists()
                 node("Oynat").assertIsFocused()
                 // OK on a home channel card must open fullscreen without a detail step.
-                focus(screen.onNode(describedIn("Test Haber", "channel-shelf-Şu an yayında — favori kanallar")))
+                val onAirCard = describedIn("Test Haber", "channel-shelf-Şu an yayında — favori kanallar")
+                screen.onNodeWithTag("home-shelves").performScrollToNode(onAirCard)
+                focus(screen.onNode(onAirCard))
                 screen.ok()
                 screen.waitUntil(30_000) {
                     runBlocking { preferences.recentLive.first().isNotEmpty() }
