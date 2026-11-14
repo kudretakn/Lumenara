@@ -3,6 +3,7 @@ package dev.lumenara.data
 import android.util.JsonReader
 import dev.lumenara.catalog.Kind
 import dev.lumenara.catalog.Listing
+import dev.lumenara.catalog.episodeName
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.json.JSONObject
@@ -149,21 +150,25 @@ internal class Xtream(private val spec: SourceSpec) {
                         val info = ep.optJSONObject("info")
                         add(
                             Listing(
-                                "$seriesTitle · S${season}E${ep.optInt("episode_num", i + 1)} · ${ep.optString("title")}",
+                                "$seriesTitle · S${ep.optInt("season", season.toIntOrNull() ?: 1)}E${ep.optInt("episode_num", i + 1)} · ${ep.optString("title")}",
                                 stream("series", id, ep.optString("container_extension", "mp4"))
                                     .toString(),
-                                "Sezon $season",
+                                "Sezon ${ep.optInt("season", season.toIntOrNull() ?: 1)}",
                                 "",
                                 Kind.EPISODE,
                                 info?.optString("movie_image").orEmpty(),
                                 info?.optString("plot").orEmpty(),
                                 info?.optString("releasedate").orEmpty().take(4),
+                                durationMs = (info?.optLong("duration_secs", 0)?.takeIf { it > 0 }
+                                    ?: info?.optString("duration")?.split(':')?.mapNotNull { it.toLongOrNull() }
+                                        ?.takeIf { it.size == 3 }?.let { it[0] * 3600 + it[1] * 60 + it[2] }
+                                    ?: 0) * 1000,
                                 introStartMs = info?.optLong("intro_start_ms", -1) ?: -1,
                                 introEndMs = info?.optLong("intro_end_ms", -1) ?: -1,
                             )
                         )
                     }
                 }
-            }
+            }.sortedWith(compareBy({ episodeName(it.title).season }, { episodeName(it.title).episode }, { it.url }))
         }
 }

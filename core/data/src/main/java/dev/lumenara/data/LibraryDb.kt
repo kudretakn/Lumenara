@@ -163,6 +163,24 @@ interface LibraryDao {
     @Query("SELECT * FROM items WHERE parent=:id ORDER BY items.rowid")
     fun episodes(id: String): Flow<List<Item>>
 
+    @Query("SELECT * FROM items WHERE parent=:id")
+    suspend fun episodeSnapshot(id: String): List<Item>
+
+    @Query("SELECT marks.* FROM marks JOIN items USING(id) WHERE items.parent=:id")
+    fun episodeMarks(id: String): Flow<List<Mark>>
+
+    @Query("""SELECT i.* FROM items i JOIN (
+        SELECT CASE WHEN ep.kind='EPISODE' THEN ep.parent ELSE ep.id END AS cardId, MAX(m.updated) AS activity
+        FROM items ep JOIN marks m ON m.id=ep.id WHERE m.position>0 AND
+            (ep.kind='EPISODE' OR ep.kind='MOVIE' AND (m.duration<=0 OR m.position<m.duration*0.95))
+        GROUP BY cardId
+        ) history ON history.cardId=i.id
+        WHERE (:source='' OR i.source=:source) AND i.kind IN ('MOVIE','SERIES')
+        AND (i.kind!='SERIES' OR EXISTS(SELECT 1 FROM items ep LEFT JOIN marks m ON m.id=ep.id
+            WHERE ep.parent=i.id AND (m.id IS NULL OR m.duration<=0 OR m.position<m.duration*0.90)))
+        ORDER BY history.activity DESC,i.id LIMIT 24""")
+    fun continueWatching(source: String): Flow<List<Item>>
+
     @Query("DELETE FROM items WHERE parent=:id AND generation!=:token")
     suspend fun pruneEpisodes(id: String, token: Long)
 
@@ -174,13 +192,16 @@ interface LibraryDao {
     )
     suspend fun orphans(id: String)
 
+    @Query("DELETE FROM items WHERE source=:id AND generation!=:generation")
+    suspend fun prunePlaylist(id: String, generation: Long)
+
     @Query("DELETE FROM sources WHERE id=:id") suspend fun deleteSource(id: String)
 
     @Query("SELECT COUNT(*) FROM items WHERE source=:source") suspend fun count(source: String): Int
 
     @Query(
         """SELECT items.* FROM items LEFT JOIN marks USING(id)
-        WHERE (:source = '' OR source=:source) AND (:kind = '' OR kind=:kind OR :kind='SERIES' AND kind='EPISODE' AND parent='')
+        WHERE (:source = '' OR source=:source) AND kind!='EPISODE' AND (:kind = '' OR kind=:kind)
         AND (:category = '' OR category=:category) AND instr(search,:query)>0
         AND (:year='' OR year=:year) AND (:genre='' OR instr(genre,:genre)>0)
         AND (:language='' OR language=:language) AND CAST(rating AS REAL)>=:minRating

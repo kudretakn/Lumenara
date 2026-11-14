@@ -40,6 +40,7 @@ internal class CatalogStage(cache: File, private val source: String, private val
                                 item.introStartMs,
                                 item.introEndMs,
                                 item.backdrop,
+                                item.parent,
                             )
                         )
                         .toString()
@@ -80,6 +81,7 @@ internal class CatalogStage(cache: File, private val source: String, private val
                     introStartMs = row.getLong(17),
                     introEndMs = row.getLong(18),
                     backdrop = row.getString(19),
+                    parent = row.getString(20),
                 )
             if (batch.size == 128) {
                 insert(batch)

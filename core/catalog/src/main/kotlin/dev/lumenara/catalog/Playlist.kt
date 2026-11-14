@@ -33,6 +33,8 @@ data class Listing(
     val introEndMs: Long = -1,
     val backdrop: String = "",
     val tvgChno: String = "",
+    val parentUrl: String = "",
+    val durationMs: Long = 0,
 )
 
 fun canSkipIntro(start: Long, end: Long, position: Long, duration: Long) =
@@ -52,7 +54,8 @@ fun contentKey(source: String, address: String): String {
 object Playlist {
     private val attribute = Regex("""([\w-]+)\s*=\s*"([^"]*)"""".trimIndent())
     private val videoFile = Regex("""(?i)\.(mp4|mkv|avi|mov|webm)$""")
-    private val episode = Regex("""(?i)\bS\d{1,3}E\d{1,4}\b""")
+    private val seriesGroup = Regex("""\b(dizi\w*|series|sezon\w*)\b""")
+    private val movieGroup = Regex("""\b(vod|film\w*|movie\w*|sinema\w*)\b""")
 
     fun read(reader: Reader, base: URI?, allowHttp: Boolean, emit: (Listing) -> Unit) {
         var info = ""
@@ -91,9 +94,11 @@ object Playlist {
                     val group = fields["group-title"].orEmpty().ifBlank { "Diğer" }
                     val kind =
                         when {
-                            uri.path.contains("/series/") || episode.containsMatchIn(title) ->
+                            uri.path.contains("/series/", true) || hasEpisodeNumber(title) ||
+                                seriesGroup.containsMatchIn(searchable(group)) ->
                                 Kind.EPISODE
-                            uri.path.contains("/movie/") || videoFile.containsMatchIn(uri.path) ->
+                            uri.path.contains("/movie/", true) || movieGroup.containsMatchIn(searchable(group)) ||
+                                videoFile.containsMatchIn(uri.path) ->
                                 Kind.MOVIE
                             else -> Kind.LIVE
                         }

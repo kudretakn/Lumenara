@@ -7,7 +7,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
-import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -227,14 +228,28 @@ internal fun MovieCard(
     progress: Boolean = false,
 ) {
     var focused by remember { mutableStateOf(false) }
+    var restoreFocus by rememberSaveable(item.id) { mutableStateOf(false) }
+    val requester = remember { FocusRequester() }
+    LaunchedEffect(Unit) { if (restoreFocus) { withFrameNanos { }; requester.requestFocus(); restoreFocus = false } }
+    val episodes by remember(item.id, progress) {
+        if (progress && item.kind == "SERIES") model.repo.library.episodes(item.id)
+        else kotlinx.coroutines.flow.flowOf(emptyList<Item>())
+    }.collectAsStateWithLifecycle(emptyList())
+    val marks by remember(item.id, progress) {
+        if (progress && item.kind == "SERIES") model.repo.library.episodeMarks(item.id)
+        else kotlinx.coroutines.flow.flowOf(emptyList<Mark>())
+    }.collectAsStateWithLifecycle(emptyList())
+    val continuing = episodes.continueItem(marks)
+    val episodeMark = marks.firstOrNull { it.id == continuing?.id }
+    val episodeName = continuing?.let { dev.lumenara.catalog.episodeName(it.title, it.category) }
     val mark by
         remember(item.id) { model.repo.library.observeMark(item.id) }
             .collectAsStateWithLifecycle(null)
     Column(modifier.width(if (portrait) 116.dp else 194.dp)) {
         FocusCard(
-            onClick = { open(item) },
+            onClick = { restoreFocus = true; open(item) },
             modifier =
-                Modifier.fillMaxWidth()
+                Modifier.fillMaxWidth().focusRequester(requester)
                     .semantics { contentDescription = item.title }
                     .onFocusChanged {
                         focused = it.isFocused
@@ -247,9 +262,10 @@ internal fun MovieCard(
                     item,
                     Modifier.fillMaxWidth().height(if (portrait) 150.dp else 108.dp),
                 )
-                if (progress && (mark?.duration ?: 0) > 0) {
+                val progressMark = if (item.kind == "SERIES") episodeMark else mark
+                if (progress && (progressMark?.duration ?: 0) > 0) {
                     val ratio =
-                        ((mark?.position ?: 0).toFloat() / checkNotNull(mark).duration).coerceIn(
+                        ((progressMark?.position ?: 0).toFloat() / checkNotNull(progressMark).duration).coerceIn(
                             0f,
                             1f,
                         )
@@ -268,7 +284,8 @@ internal fun MovieCard(
             overflow = TextOverflow.Ellipsis,
         )
         Text(
-            if (progress) "İzlemeye devam et" else item.year.ifBlank { item.category },
+            if (progress && episodeName != null) "S${episodeName.season} B${episodeName.episode}"
+            else if (progress) "İzlemeye devam et" else item.year.ifBlank { item.category },
             color = Ink.muted,
             fontSize = 10.sp,
             lineHeight = 14.sp,

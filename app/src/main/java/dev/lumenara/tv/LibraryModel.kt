@@ -110,6 +110,17 @@ constructor(val repo: Repository, val prefs: Preferences) : androidx.lifecycle.V
         }
     }
 
+    fun watched(item: Item, value: Boolean) {
+        viewModelScope.launch {
+            repo.updateMark(item.id) {
+                // Unknown durations use a positive sentinel until real playback supplies a duration.
+                val total = it.duration.takeIf { d -> d > 0 } ?: 1L
+                it.copy(position = if (value) total else 0, duration = if (value) total else it.duration,
+                    updated = if (value) System.currentTimeMillis() else 0)
+            }
+        }
+    }
+
     fun started(item: Item) {
         if (item.kind != "LIVE") return
         viewModelScope.launch { prefs.recordLive(item.id) }

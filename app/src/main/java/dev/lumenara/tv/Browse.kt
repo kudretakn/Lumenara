@@ -115,6 +115,7 @@ internal fun Home(
                 when (shelf) {
                     "collection" -> model.repo.library.members(source, title)
                     "suggest" -> model.repo.library.suggestions(source)
+                    "resume" -> model.repo.library.continueWatching(source)
                     else -> model.repo.library.browse(source, kind, "", "", shelf, 24)
                 }
             }.collectAsStateWithLifecycle(emptyList())

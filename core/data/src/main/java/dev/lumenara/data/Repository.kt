@@ -144,7 +144,11 @@ class Repository private constructor(private val context: Context) {
         var providerLimit = 0
         try {
             staged.write { append ->
-                fun accept(row: Listing) = append(item(source.id, token, row))
+                val grouper = SeriesGrouper()
+                fun accept(row: Listing) {
+                    if (spec.user.isNotEmpty()) append(item(source.id, token, row))
+                    else grouper.accept(row) { append(item(source.id, token, it)) }
+                }
                 when {
                     spec.user.isNotEmpty() -> providerLimit = Xtream(spec).read(::accept)
                     spec.address.startsWith("content://") ->
@@ -172,7 +176,8 @@ class Repository private constructor(private val context: Context) {
             db.withTransaction {
                 library.save(source)
                 staged.read(library::writeBatch)
-                library.prune(source.id, token)
+                if (spec.user.isEmpty()) library.prunePlaylist(source.id, token)
+                else library.prune(source.id, token)
                 library.orphans(source.id)
                 library.save(source.copy(refreshed = token, count = library.count(source.id)))
             }
@@ -193,6 +198,7 @@ class Repository private constructor(private val context: Context) {
             searchable("${entry.title} ${entry.group} ${entry.tvgId}"),
             token,
             entry.logo.takeIf { it.startsWith("https://") }?.let(vault::encrypt).orEmpty(),
+            parent = entry.parentUrl.takeIf(String::isNotBlank)?.let { contentKey(source, it) }.orEmpty(),
             summary = entry.summary,
             year = entry.year,
             genre = entry.genre,
@@ -237,16 +243,20 @@ class Repository private constructor(private val context: Context) {
             lock.withLock {
                 val source = library.source(series.source) ?: return@withLock emptyList()
                 val spec = SourceSpec.decode(vault.decrypt(source.endpoint))
+                if (spec.user.isEmpty()) return@withLock library.episodeSnapshot(series.id)
                 val token = System.currentTimeMillis()
-                val entries =
+                val listings =
                     Xtream(spec)
                         .episodes(vault.decrypt(series.encryptedUrl), series.title)
                         .distinctBy { it.url }
-                        .map {
-                            item(source.id, token, it).copy(parent = series.id)
-                        }
+                val entries = listings.map { item(source.id, token, it).copy(parent = series.id) }
                 db.withTransaction {
                     library.save(entries)
+                    listings.zip(entries).forEach { (listing, episode) ->
+                        val mark = library.mark(episode.id) ?: Mark(episode.id)
+                        if (mark.duration <= 0 && listing.durationMs > 0)
+                            library.save(mark.copy(duration = listing.durationMs))
+                    }
                     library.pruneEpisodes(series.id, token)
                 }
                 entries
