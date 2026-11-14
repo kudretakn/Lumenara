@@ -2,9 +2,9 @@
 
 ## Başlatıcı bannerı ve simgesi
 
-Logo: design/logo/concept-1-*.svg, Lumenara için üretildi
+Logo: design/logo/concept-1-*.svg, Lumenara için üretildi; uygulama içi ad yazılı logo `concept-1-banner.svg`, yalnız sahne ışığı sembolü içeren Android TV bannerı `concept-1-banner-mark.svg`.
 
-`app/src/main/res/drawable-xhdpi/banner.png` (320×180) ve `app/src/main/res/drawable-xxhdpi/banner.png` (480×270), `concept-1-banner.svg` kaynağından `rsvg-convert -w 320 -h 180` ve `rsvg-convert -w 480 -h 270` ile, Inter Display yazı tipi kullanılarak üretildi.
+`app/src/main/res/drawable-xhdpi/banner.png` (320×180) ve `app/src/main/res/drawable-xxhdpi/banner.png` (480×270), `concept-1-banner-mark.svg` kaynağından `rsvg-convert -w 320 -h 180` ve `rsvg-convert -w 480 -h 270` ile üretildi.
 
 `app/src/main/res/drawable/mark.xml`, `concept-1-mark.svg` kaynağının 48dp×48dp, 512×512 viewport kullanan Android VectorDrawable karşılığıdır: yuvarlatılmış koyu zemin, altın rengi gradyanlı sahne ışığı ve sahne çizgisi.
 
