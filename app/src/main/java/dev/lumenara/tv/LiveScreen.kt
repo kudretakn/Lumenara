@@ -82,8 +82,15 @@ internal fun LiveScreen(
     }
     val groups by remember(source) { model.repo.library.liveCategoryCounts(source) }
         .collectAsStateWithLifecycle(emptyList())
-    val rows by remember(source, category, query, limit) {
-        if (category == "recent") model.prefs.recentLive.flatMapLatest { ids ->
+    val rows by remember(source, category, query, limit, if (category == "airing") now else 0L) {
+        if (category == "airing") model.repo.guide.nowAiring(source, now, searchable(query)).flatMapLatest { hits ->
+            val ids = hits.take(limit).map { it.itemId }
+            if (ids.isEmpty()) flowOf(emptyList())
+            else model.repo.library.liveByIds(source, ids).map { items ->
+                val byId = items.associateBy { it.id }
+                ids.mapNotNull { byId[it] }
+            }
+        } else if (category == "recent") model.prefs.recentLive.flatMapLatest { ids ->
             if (ids.isEmpty()) flowOf(emptyList())
             else model.repo.library.liveByIds(source, ids).map { items ->
                 val byId = items.associateBy { it.id }
@@ -126,8 +133,8 @@ internal fun LiveScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         items(listOf("recent" to "Son izlenenler", "favorite" to "Favoriler",
-                            "all" to "Tümü"), key = { it.first }) { (id, title) ->
-                            Pill(title, category == id, { category = id }, Modifier.fillMaxWidth())
+                            "all" to "Tümü", "airing" to "Şu an yayında"), key = { it.first }) { (id, title) ->
+                            Pill(title, category == id, { category = id }, Modifier.fillMaxWidth().testTag("live-category-$id"))
                         }
                         items(groups.filter { it.category.isNotEmpty() }, key = { "provider:${it.category}" }) { group ->
                             val id = "provider:${group.category}"

@@ -101,7 +101,7 @@ interface LibraryDao {
     fun liveChannelOrder(source: String): Flow<List<LiveChannelId>>
 
     @Query("""SELECT * FROM items WHERE id IN (:ids) AND kind='LIVE'
-        AND (:source='' OR source=:source) LIMIT 20""")
+        AND (:source='' OR source=:source)""")
     fun liveByIds(source: String, ids: List<String>): Flow<List<Item>>
 
     @Query("""SELECT * FROM items WHERE (:source='' OR source=:source)

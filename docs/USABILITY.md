@@ -52,6 +52,8 @@ Kullanıcı kararları (14 Kasım 2026): internetten altyazı önce OpenSubtitle
 
 ## U2 — Program bulma
 
+✓ tamamlandı
+
 - **Ara:** "Programlar" rafı eklenir. Sorgu `Guide` program aramasından gelir (mevcut `instr(search, query)` sorgusu). Kartta program adı, kanal, gün ve saat bulunur. OK: yayın şu an sürüyorsa kanalı tam ekran açar; arşivi varsa arşivden oynatır; yoksa kanalın detayını açar.
 - **Canlı TV:** Kategori sütununa "Şu an yayında" filtresi eklenir. Bu filtre EPG'si olan kanalları şu anki programın kalan süresine göre sıralar.
 
