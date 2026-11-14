@@ -53,7 +53,14 @@ internal fun VlcScreen(
     var message by remember { mutableStateOf("") }
     var delayMs by remember { mutableLongStateOf(0) }
     LaunchedEffect(layout, panel, fullscreen.guide, fullscreen.finished) {
-        if (!panel && !fullscreen.guide && !fullscreen.finished) focus.requestFocus()
+        if (!panel && !fullscreen.guide && !fullscreen.finished) {
+            focus.requestFocus()
+            if (layout != null) {
+                // Reclaim Compose focus after the native video layout has been attached.
+                withFrameNanos { }
+                focus.requestFocus()
+            }
+        }
     }
     LaunchedEffect(layout, item.id) {
         val surface = layout ?: return@LaunchedEffect
@@ -150,7 +157,7 @@ internal fun VlcScreen(
                     isFocusableInTouchMode = false
                 }.also { view -> layout = view }
             },
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().focusProperties { canFocus = false },
         )
         if (!panel) FullscreenOverlay(model, item, group, fullscreen, select, { panel = true },
             { player?.time ?: 0 }, { player?.length ?: 0 },

@@ -171,7 +171,7 @@ class LibraryJourneyTest {
                 }
                 // Long OK keeps the existing favorite/EPG operations reachable.
                 screen.onNodeWithTag("live-channel-${channel.id}").assertIsFocused()
-                screen.longOk()
+                screen.longPressOkNative()
                 button("Favoriye ekle").assertExists()
                 screen.back()
                 select("Yayın çizelgesi")

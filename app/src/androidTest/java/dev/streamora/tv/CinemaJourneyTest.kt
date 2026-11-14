@@ -93,8 +93,12 @@ class CinemaJourneyTest {
             node.performSemanticsAction(SemanticsActions.RequestFocus)
             screen.waitUntil(30_000) { isFocused().matches(node.fetchSemanticsNode()) }
         }
+        fun describedIn(description: String, tag: String) =
+            hasContentDescription(description) and hasAnyAncestor(hasTestTag(tag))
+        fun navigation(name: String) = hasContentDescription(name) and
+            hasAnyAncestor(hasTestTag("nav-open") or hasTestTag("nav-closed"))
         fun section(name: String) {
-            focus(screen.onNodeWithContentDescription(name))
+            focus(screen.onNode(navigation(name)))
             screen.ok()
             screen.waitUntil(30_000) {
                 screen.onAllNodesWithTag("section-$name").fetchSemanticsNodes().isNotEmpty()
@@ -226,7 +230,7 @@ class CinemaJourneyTest {
                 waitFor(hasTestTag("nav-open"))
                 screen.onNodeWithTag("nav-open").assertExists()
                 listOf("Ara", "Ana Sayfa", "Canlı TV", "Filmler", "Diziler", "Listem", "Ayarlar")
-                    .forEach { screen.onNodeWithContentDescription(it).assertExists() }
+                    .forEach { screen.onNode(navigation(it)).assertExists() }
                 capture("screens/nav-open")
                 screen.dpad(Key.DirectionRight)
                 waitFor(hasText("Oynat") and isFocused())
@@ -239,7 +243,7 @@ class CinemaJourneyTest {
                 screen.onNodeWithTag("nav-closed").assertExists()
                 node("Oynat").assertIsFocused()
                 // OK on a home channel card must open fullscreen without a detail step.
-                focus(screen.onNodeWithContentDescription("Test Haber"))
+                focus(screen.onNode(describedIn("Test Haber", "channel-shelf-Şu an yayında — favori kanallar")))
                 screen.ok()
                 screen.waitUntil(30_000) {
                     runBlocking { preferences.recentLive.first().isNotEmpty() }
@@ -258,8 +262,7 @@ class CinemaJourneyTest {
                 // Let Home's entry focus settle on the hero before entering the shelves.
                 // RequestFocus on a card can race the enclosing focus restorers.
                 focus(node("Oynat"))
-                val recentCard = hasContentDescription("Test Haber") and
-                    hasAnyAncestor(hasTestTag("channel-shelf-Son izlenen kanallar"))
+                val recentCard = describedIn("Test Haber", "channel-shelf-Son izlenen kanallar")
                 screen.onNodeWithTag("home-shelves").performScrollToNode(recentCard)
                 screen.onNode(recentCard).assertIsDisplayed()
                 screen.dpad(Key.DirectionDown)
@@ -281,16 +284,17 @@ class CinemaJourneyTest {
                 }
                 screen.onNodeWithTag("home-shelves")
                     .performScrollToNode(hasText("Son eklenen filmler"))
+                val movieShelf = "shelf-Son eklenen filmler"
+                val movieCard = describedIn("Kadife Gece", movieShelf)
                 screen.onNodeWithTag("shelf-Son eklenen filmler")
-                    .performScrollToNode(hasContentDescription("Kadife Gece"))
+                    .performScrollToNode(movieCard)
                 assertTrue(
                     "Afiş adı ekranın içinde kalmalı",
-                    node("Kadife Gece").fetchSemanticsNode().boundsInRoot.bottom <=
+                    screen.onNode(hasText("Kadife Gece") and hasAnyAncestor(hasTestTag(movieShelf)))
+                        .fetchSemanticsNode().boundsInRoot.bottom <=
                         screen.onRoot().fetchSemanticsNode().boundsInRoot.bottom,
                 )
-                screen
-                    .onNodeWithContentDescription("Kadife Gece")
-                    .performSemanticsAction(SemanticsActions.RequestFocus)
+                focus(screen.onNode(movieCard))
                 screen.waitUntil(30_000) {
                     screen.onAllNodesWithText("Kadife Gece").fetchSemanticsNodes().size >= 2
                 }
@@ -306,13 +310,14 @@ class CinemaJourneyTest {
                 capture("cinema-movies")
                 screen.ok()
                 node("Yıl").assertExists()
-                waitFor(hasContentDescription("Açık Deniz"))
+                val movieResult = describedIn("Açık Deniz", "section-Filmler")
+                waitFor(movieResult)
                 screen.onAllNodes(hasSetTextAction())[0].performTextReplacement("1999")
                 node("Eşleşen içerik yok.").assertExists()
                 screen.onAllNodes(hasSetTextAction())[0].performTextReplacement("2025")
                 screen.waitUntil(30_000) {
                     screen
-                        .onAllNodesWithContentDescription("Açık Deniz")
+                        .onAllNodes(movieResult)
                         .fetchSemanticsNodes()
                         .isNotEmpty()
                 }
@@ -324,21 +329,23 @@ class CinemaJourneyTest {
                 node("Yıl").assertExists()
                 screen.onAllNodes(hasSetTextAction())[0].assertTextEquals("")
                 node("Eşleşen içerik yok.").assertExists()
-                screen.onNodeWithContentDescription("Açık Deniz").assertDoesNotExist()
+                screen.onNode(describedIn("Açık Deniz", "section-Diziler")).assertDoesNotExist()
                 section("Listem")
-                waitFor(hasContentDescription("Favoriler") and isSelected())
-                screen.onNodeWithContentDescription("Favoriler").assertIsSelected()
-                focus(screen.onNodeWithContentDescription("İzleme Listem"))
+                val favoritesTab = describedIn("Favoriler", "section-Listem")
+                val watchlistTab = describedIn("İzleme Listem", "section-Listem")
+                waitFor(favoritesTab and isSelected())
+                screen.onNode(favoritesTab).assertIsSelected()
+                focus(screen.onNode(watchlistTab))
                 screen.ok()
-                waitFor(hasContentDescription("İzleme Listem") and isSelected())
-                screen.onNodeWithContentDescription("İzleme Listem").assertIsSelected()
+                waitFor(watchlistTab and isSelected())
+                screen.onNode(watchlistTab).assertIsSelected()
                 screen.waitUntil(30_000) {
                     screen
-                        .onAllNodesWithContentDescription("Kadife Gece")
+                        .onAllNodes(describedIn("Kadife Gece", "section-Listem"))
                         .fetchSemanticsNodes()
                         .isNotEmpty()
                 }
-                screen.onNodeWithContentDescription("Açık Deniz").assertDoesNotExist()
+                screen.onNode(describedIn("Açık Deniz", "section-Listem")).assertDoesNotExist()
                 section("Filmler")
                 node("Yıl").assertExists()
                 screen.onAllNodes(hasSetTextAction())[0].assertTextEquals("2025")

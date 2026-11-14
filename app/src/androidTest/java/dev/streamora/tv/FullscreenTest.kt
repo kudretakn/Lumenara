@@ -42,8 +42,14 @@ class FullscreenTest {
         val name = "Test · Tam ekran $engine"
         val bytes = test.context.assets.open("streamora-test.ts").use { it.readBytes() }
         fun await(matcher: SemanticsMatcher, present: Boolean = true) {
-            screen.waitUntil(30_000) {
-                screen.onAllNodes(matcher).fetchSemanticsNodes().isNotEmpty() == present
+            try {
+                screen.waitUntil(30_000) {
+                    screen.onAllNodes(matcher).fetchSemanticsNodes().isNotEmpty() == present
+                }
+            } catch (e: ComposeTimeoutException) {
+                throw AssertionError(
+                    "Beklenen: $matcher, present=$present\n" + screen.onRoot().printToString(), e
+                )
             }
         }
         fun shot(filename: String) {
