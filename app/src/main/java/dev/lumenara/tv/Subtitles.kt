@@ -10,8 +10,13 @@ import androidx.media3.common.*
 import androidx.tv.material3.*
 import dev.lumenara.design.Ink
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.focusGroup
+import androidx.activity.compose.BackHandler
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.window.Dialog
 import dev.lumenara.catalog.SubtitleType
 import dev.lumenara.catalog.productionName
 import dev.lumenara.catalog.languageName
@@ -23,7 +28,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 
@@ -115,33 +122,46 @@ internal fun VersionChoice(model: LibraryModel, item: Item,
     }
 }
 
-@Composable
-internal fun SubtitleSearch(model: LibraryModel, item: Item,
-                            status: (String) -> Unit = {},
-                            attach: (MediaItem.SubtitleConfiguration) -> Unit) {
-    var open by remember(item.id) { mutableStateOf(false) }
-    var loading by remember(item.id) { mutableStateOf(false) }
-    var results by remember(item.id) { mutableStateOf(emptyList<SubtitleResult>()) }
-    var message by remember(item.id) { mutableStateOf("") }
-    var remaining by remember(item.id) { mutableStateOf<Int?>(null) }
-    val scope = rememberCoroutineScope()
-    LaunchedEffect(item.id) { remaining = model.prefs.text("subtitle_remaining").first().toIntOrNull() }
-    val searchFocus = remember { FocusRequester() }
-    var restore by remember { mutableStateOf(false) }
-    LaunchedEffect(open, restore) {
-        if (!open && restore) { searchFocus.requestFocus(); restore = false }
+internal class SubtitleSearchState(
+    private val model: LibraryModel,
+    private val item: Item,
+    private val scope: CoroutineScope,
+    private val status: (String) -> Unit,
+    private val attach: (MediaItem.SubtitleConfiguration) -> Unit,
+) {
+    var open by mutableStateOf(false)
+        private set
+    var loading by mutableStateOf(false)
+        private set
+    var results by mutableStateOf(emptyList<SubtitleResult>())
+        private set
+    var message by mutableStateOf("")
+        private set
+    var remaining by mutableStateOf<Int?>(null)
+    val searchFocus = FocusRequester()
+    var searchAttached = false
+    var restore by mutableStateOf(false)
+
+    fun dismiss() {
+        open = false
+        restore = true
     }
+
     fun search() {
+        if (loading) {
+            open = true
+            return
+        }
         scope.launch {
             loading = true
             results = emptyList()
             message = ""
+            open = true
             try {
                 if (!model.repo.subtitles.configured()) {
                     message = "Ayarlar’dan OpenSubtitles veya Subdl API anahtarı ekleyin."
                     return@launch
                 }
-                open = true
                 val response = withContext(Dispatchers.IO) {
                     model.repo.subtitles.search(model.repo.subtitleQuery(item))
                 }
@@ -153,66 +173,132 @@ internal fun SubtitleSearch(model: LibraryModel, item: Item,
             finally { loading = false }
         }
     }
-    Column {
-        Button(onClick = { search() }, enabled = !loading,
-            modifier = Modifier.focusRequester(searchFocus).testTag("subtitle-search")) { Text("Altyazı ara") }
-        if (!open && message.isNotBlank()) Text(message, color = Ink.accent)
-        remaining?.let { Text("OpenSubtitles · kalan indirme: $it") }
-    }
-    if (open) Dialog(onDismissRequest = { open = false; restore = true }) {
-        val first = remember { FocusRequester() }
-        LaunchedEffect(Unit) { first.requestFocus() }
-        GlassPanel(Modifier.fillMaxWidth().heightIn(max = 440.dp).testTag("subtitle-results")) {
-            LazyColumn(
-                Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                item {
-                    Text("Altyazı ara · Türkçe")
-                    Button(onClick = { open = false; restore = true }, modifier = Modifier.focusRequester(first)) { Text("Kapat") }
-                    if (loading) Text("Altyazılar yükleniyor…")
-                    if (message.isNotBlank()) Text(message)
-                    remaining?.let { Text("OpenSubtitles · kalan indirme: $it") }
+
+    fun select(result: SubtitleResult) {
+        if (loading) return
+        scope.launch {
+            loading = true
+            try {
+                val key = model.repo.preferenceKey(item)
+                val downloaded = withContext(Dispatchers.IO) {
+                    model.repo.subtitles.download(key, result)
                 }
-                items(results.size) { index ->
-                    val result = results[index]
-                    Button(enabled = !loading, modifier = Modifier.testTag("subtitle-result-$index"), onClick = {
-                        scope.launch {
-                            loading = true
-                            try {
-                                val key = model.repo.preferenceKey(item)
-                                val downloaded = withContext(Dispatchers.IO) {
-                                    model.repo.subtitles.download(key, result)
-                                }
-                                remaining = downloaded.second
-                                downloaded.second?.let { model.prefs.set("subtitle_remaining", it.toString()) }
-                                model.prefs.set("text_$key", "downloaded")
-                                status("Altyazı eklendi" + (downloaded.second?.let { " · OpenSubtitles kalan indirme: $it" } ?: ""))
-                                attach(subtitleConfiguration(downloaded.first))
-                                message = "Altyazı eklendi."
-                                open = false
-                                restore = true
-                            } catch (e: CancellationException) { throw e }
-                            catch (e: SubtitleFailure) {
-                                message = e.message.orEmpty()
-                                if (e.quota && result.source == "OpenSubtitles") {
-                                    try {
-                                        val fallback = withContext(Dispatchers.IO) {
-                                            model.repo.subtitles.search(model.repo.subtitleQuery(item), skipOpen = true)
-                                        }
-                                        results = fallback.entries
-                                        message = fallback.message
-                                    } catch (cancel: CancellationException) { throw cancel }
-                                    catch (_: Exception) { message = "OpenSubtitles günlük sınırı doldu · Subdl araması tamamlanamadı." }
-                                }
-                            }
-                            catch (_: Exception) { message = "Altyazı indirilemedi. Yeniden deneyin." }
-                            finally { loading = false }
+                remaining = downloaded.second
+                downloaded.second?.let { model.prefs.set("subtitle_remaining", it.toString()) }
+                model.prefs.set("text_$key", "downloaded")
+                status("Altyazı eklendi" + (downloaded.second?.let { " · OpenSubtitles kalan indirme: $it" } ?: ""))
+                attach(subtitleConfiguration(downloaded.first))
+                message = "Altyazı eklendi."
+                dismiss()
+            } catch (e: CancellationException) { throw e }
+            catch (e: SubtitleFailure) {
+                message = e.message.orEmpty()
+                if (e.quota && result.source == "OpenSubtitles") {
+                    try {
+                        val fallback = withContext(Dispatchers.IO) {
+                            model.repo.subtitles.search(model.repo.subtitleQuery(item), skipOpen = true)
                         }
-                    }) { Column {
-                        Text("${languageName(result.language)} · ${result.release}")
-                        Text("${result.downloads} indirme · ${result.source}")
-                    } }
+                        results = fallback.entries
+                        message = fallback.message
+                    } catch (cancel: CancellationException) { throw cancel }
+                    catch (_: Exception) { message = "OpenSubtitles günlük sınırı doldu · Subdl araması tamamlanamadı." }
                 }
-                if (!loading) item { Button(onClick = { search() }) { Text("Yeniden ara") } }
+            }
+            catch (_: Exception) { message = "Altyazı indirilemedi. Yeniden deneyin." }
+            finally { loading = false }
+        }
+    }
+}
+
+@Composable
+internal fun rememberSubtitleSearchState(
+    model: LibraryModel,
+    item: Item,
+    status: (String) -> Unit = {},
+    attach: (MediaItem.SubtitleConfiguration) -> Unit,
+): SubtitleSearchState = key(model, item.id) {
+    val scope = rememberCoroutineScope()
+    val currentStatus by rememberUpdatedState(status)
+    val currentAttach by rememberUpdatedState(attach)
+    val state = remember(model, item.id) {
+        SubtitleSearchState(model, item, scope, { currentStatus(it) }, { currentAttach(it) })
+    }
+    LaunchedEffect(state) {
+        state.remaining = model.prefs.text("subtitle_remaining").first().toIntOrNull()
+    }
+    state
+}
+
+@Composable
+internal fun SubtitleSearch(state: SubtitleSearchState) {
+    DisposableEffect(state) {
+        state.searchAttached = true
+        onDispose { state.searchAttached = false }
+    }
+    Column {
+        Button(onClick = state::search, enabled = !state.loading || !state.open,
+            modifier = Modifier.focusRequester(state.searchFocus).testTag("subtitle-search")) { Text("Altyazı ara") }
+        if (!state.open && state.message.isNotBlank()) Text(state.message, color = Ink.accent)
+        state.remaining?.let { Text("OpenSubtitles · kalan indirme: $it") }
+    }
+}
+
+/** Call last in the player's root Box so results cover every other player layer. */
+@Composable
+internal fun SubtitleResults(state: SubtitleSearchState, panel: Boolean, playerFocus: FocusRequester) {
+    LaunchedEffect(state.open, state.restore, panel) {
+        if (!state.open && state.restore) {
+            withFrameNanos { }
+            if (panel && state.searchAttached) state.searchFocus.requestFocus()
+            else playerFocus.requestFocus()
+            state.restore = false
+        }
+    }
+    BackHandler(state.open) { state.dismiss() }
+    if (!state.open) return
+    val first = remember { FocusRequester() }
+    val close = remember { FocusRequester() }
+    val list = rememberLazyListState()
+    LaunchedEffect(state.results, state.loading) {
+        if (!state.loading && state.results.isNotEmpty()) {
+            list.scrollToItem(1)
+            withFrameNanos { }
+            first.requestFocus()
+        } else close.requestFocus()
+    }
+    Box(
+        Modifier.fillMaxSize()
+            .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = .64f))
+            .pointerInput(Unit) { detectTapGestures { } }
+            .focusProperties { onExit = { cancelFocusChange() } }
+            .focusGroup(),
+        contentAlignment = androidx.compose.ui.Alignment.Center,
+    ) {
+        GlassPanel(Modifier.padding(32.dp).widthIn(max = 760.dp).fillMaxWidth()
+            .heightIn(max = 440.dp).testTag("subtitle-results")) {
+            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Altyazı ara · Türkçe")
+                Button(onClick = state::dismiss, modifier = Modifier.focusRequester(close)) { Text("Kapat") }
+                LazyColumn(state = list, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    item {
+                        if (state.loading) Text("Altyazılar yükleniyor…")
+                        if (state.message.isNotBlank()) Text(state.message)
+                        state.remaining?.let { Text("OpenSubtitles · kalan indirme: $it") }
+                    }
+                    items(state.results.size) { index ->
+                        val result = state.results[index]
+                        Button(enabled = !state.loading,
+                            modifier = Modifier.then(if (index == 0) Modifier.focusRequester(first) else Modifier)
+                                .testTag("subtitle-result-$index"),
+                            onClick = { state.select(result) }) {
+                            Column {
+                                Text("${languageName(result.language)} · ${result.release}")
+                                Text("${result.downloads} indirme · ${result.source}")
+                            }
+                        }
+                    }
+                    if (!state.loading) item { Button(onClick = state::search) { Text("Yeniden ara") } }
+                }
             }
         }
     }

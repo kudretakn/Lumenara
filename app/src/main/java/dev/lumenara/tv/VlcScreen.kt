@@ -72,6 +72,10 @@ internal fun VlcScreen(
     val playbackMutex = remember { Mutex() }
     var message by remember { mutableStateOf("") }
     var subtitleNotice by remember(item.id) { mutableStateOf("") }
+    val subtitleSearch = rememberSubtitleSearchState(model, item, status = { subtitleNotice = it }) {
+        attachSubtitle(it)
+        panel = false
+    }
     var delayMs by remember(item.id) { mutableLongStateOf(0) }
     var preferenceKey by remember(item.id) { mutableStateOf("") }
     val scope = rememberCoroutineScope()
@@ -136,8 +140,8 @@ internal fun VlcScreen(
             p.setSpuDelay(delayMs * 1000)
         }
     }
-    LaunchedEffect(layout, panel, fullscreen.guide, fullscreen.finished, player, retry.generation, retry.reconnecting) {
-        if (!panel && !fullscreen.guide && !fullscreen.finished) {
+    LaunchedEffect(subtitleSearch.open, layout, panel, fullscreen.guide, fullscreen.finished, player, retry.generation, retry.reconnecting) {
+        if (!subtitleSearch.open && !panel && !fullscreen.guide && !fullscreen.finished) {
             if (!composeView.hasFocus()) composeView.requestFocus()
             val initialGranted = focus.requestFocus()
             android.util.Log.d("LumenaraFocus", "VLC trigger=layout/panel/fullscreen/retry initialGranted=$initialGranted viewHasFocus=${composeView.hasFocus()}")
@@ -273,6 +277,7 @@ internal fun VlcScreen(
                 if (activeSubtitle) stateDescription = "İndirilen altyazı etkin"
             }
             .onPreviewKeyEvent {
+                if (subtitleSearch.open) return@onPreviewKeyEvent false
                 val key = it.nativeKeyEvent
                 val code = key.keyCode
                 if (!panel && fullscreen.key(key, item.kind == "LIVE", ::move, { panel = true },
@@ -342,7 +347,7 @@ internal fun VlcScreen(
                         select(version, rows)
                     }
                 } }
-                item { SubtitleSearch(model, item, status = { subtitleNotice = it }) { attachSubtitle(it); panel = false } }
+                item { SubtitleSearch(subtitleSearch) }
                 item { Subtitles { configuration -> scope.launch {
                     model.prefs.set("text_$preferenceKey", if (configuration == null) "off" else "tr")
                     attachSubtitle(configuration)
@@ -402,5 +407,6 @@ internal fun VlcScreen(
                 }
             }
         }
+        SubtitleResults(subtitleSearch, panel, focus)
     }
 }

@@ -364,9 +364,13 @@ internal fun Playback(
         changeGroup(rows); select(channel)
     } else null
     val retry = rememberLiveRetry(item.id)
+    val subtitleSearch = rememberSubtitleSearchState(model, item, status = { subtitleNotice = it }) {
+        subtitle = it
+        panel = false
+    }
     BackHandler { if (panel) panel = false else if (!fullscreen.dismiss()) back() }
-    LaunchedEffect(panel, fullscreen.guide, fullscreen.finished, failed, engine, retry.generation, retry.reconnecting) {
-        if (!panel && !fullscreen.guide && !fullscreen.finished && !failed) {
+    LaunchedEffect(subtitleSearch.open, panel, fullscreen.guide, fullscreen.finished, failed, engine, retry.generation, retry.reconnecting) {
+        if (!subtitleSearch.open && !panel && !fullscreen.guide && !fullscreen.finished && !failed) {
             // PlayerView updates and reconnect badge removal must finish before reclaiming focus.
             withFrameNanos { }
             if (!composeView.hasFocus()) composeView.requestFocus()
@@ -380,6 +384,7 @@ internal fun Playback(
             .focusRequester(focus)
             .semantics { contentDescription = "Tam ekran oynatıcı" }
             .onPreviewKeyEvent {
+                if (subtitleSearch.open) return@onPreviewKeyEvent false
                 val key = it.nativeKeyEvent
                 val code = key.keyCode
                 if (!panel && !failed && fullscreen.key(key, live, ::move,
@@ -493,7 +498,7 @@ internal fun Playback(
                     }
                 } }
                 item { Tracks(engine, model, item) }
-                item { SubtitleSearch(model, item, status = { subtitleNotice = it }) { subtitle = it; panel = false } }
+                item { SubtitleSearch(subtitleSearch) }
                 item {
                     Text("Altyazı kaydırma · ${delayMs / 1000.0} sn")
                     Row { for (step in listOf(-500L, 500L)) Button(onClick = {
@@ -640,6 +645,7 @@ internal fun Playback(
                     item { Button(onClick = { limit += 80 }) { Text("Devamını göster") } }
             }
         }
+        SubtitleResults(subtitleSearch, panel, focus)
     }
 }
 
