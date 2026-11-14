@@ -40,7 +40,7 @@ class FullscreenTest {
         val previousFallback = runBlocking { prefs.text("fallback", "Açık").first() }
         val previousRecent = runBlocking { prefs.text("recent_live").first() }
         val name = "Test · Tam ekran $engine"
-        val bytes = test.context.assets.open("streamora-test.mp4").use { it.readBytes() }
+        val bytes = test.context.assets.open("streamora-test.ts").use { it.readBytes() }
         fun await(matcher: SemanticsMatcher, present: Boolean = true) {
             screen.waitUntil(30_000) {
                 screen.onAllNodes(matcher).fetchSemanticsNodes().isNotEmpty() == present
@@ -58,17 +58,13 @@ class FullscreenTest {
                         appendLine("#EXTM3U")
                         repeat(count) {
                             appendLine("#EXTINF:-1 group-title=\"Test\",Kanal %05d".format(it))
-                            appendLine(server.url("/live/$it.mp4"))
+                            appendLine(server.url("/live/$it.ts"))
                         }
                     })
-                    val start = request.getHeader("Range")?.substringAfter("bytes=")
-                        ?.substringBefore("-")?.toIntOrNull() ?: 0
-                    if (start >= bytes.size) return MockResponse().setResponseCode(416)
-                    return MockResponse().setResponseCode(if (start > 0) 206 else 200)
-                        .setHeader("Content-Type", "video/mp4")
-                        .setHeader("Accept-Ranges", "bytes")
-                        .setHeader("Content-Range", "bytes $start-${bytes.lastIndex}/${bytes.size}")
-                        .setBody(Buffer().write(bytes, start, bytes.size - start))
+                    if (request.path?.endsWith(".ts") == true) return MockResponse()
+                        .setHeader("Content-Type", "video/mp2t")
+                        .setBody(Buffer().write(bytes))
+                    return MockResponse().setResponseCode(404)
                 }
             }
             server.start()

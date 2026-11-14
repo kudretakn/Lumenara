@@ -165,6 +165,10 @@ class LibraryJourneyTest {
                 }
                 screen.back()
                 button("Yayın çizelgesi")
+                screen.waitUntil(30_000) {
+                    screen.onAllNodes(hasTestTag("live-channel-${channel.id}") and isFocused())
+                        .fetchSemanticsNodes().isNotEmpty()
+                }
                 // Long OK keeps the existing favorite/EPG operations reachable.
                 screen.onNodeWithTag("live-channel-${channel.id}").assertIsFocused()
                 screen.longOk()

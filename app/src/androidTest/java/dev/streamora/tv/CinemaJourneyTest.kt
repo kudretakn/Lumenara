@@ -113,6 +113,12 @@ class CinemaJourneyTest {
             focus(node(text))
             screen.ok()
         }
+        fun focusFilters() {
+            val label = hasText("İçerik filtreleri")
+            val button = isFocusable() and (label or hasAnyDescendant(label))
+            waitFor(button)
+            focus(screen.onNode(button))
+        }
         fun capture(name: String) {
             // A real device screenshot includes GPU-composited image transitions and TV focus
             // rings.
@@ -296,7 +302,7 @@ class CinemaJourneyTest {
                 node("Listeden çıkar").assertExists()
                 screen.back()
                 section("Filmler")
-                focus(node("İçerik filtreleri"))
+                focusFilters()
                 capture("cinema-movies")
                 screen.ok()
                 node("Yıl").assertExists()
@@ -313,7 +319,8 @@ class CinemaJourneyTest {
                 section("Diziler")
                 // Filters belong to each section: Series starts with its own closed panel.
                 screen.onNodeWithText("Yıl").assertDoesNotExist()
-                select("İçerik filtreleri")
+                focusFilters()
+                screen.ok()
                 node("Yıl").assertExists()
                 screen.onAllNodes(hasSetTextAction())[0].assertTextEquals("")
                 node("Eşleşen içerik yok.").assertExists()

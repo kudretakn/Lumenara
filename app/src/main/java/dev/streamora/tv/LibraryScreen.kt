@@ -46,6 +46,7 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
     LaunchedEffect(available) { if (available.none { it.id == scope }) scope = "" }
     var detail by remember { mutableStateOf<Item?>(null) }
     var playing by remember { mutableStateOf<Item?>(null) }
+    var returnToChannel by remember { mutableStateOf<String?>(null) }
     var siblings by remember { mutableStateOf(emptyList<Item>()) }
     val pages = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
     val request by model.remoteSearch.collectAsStateWithLifecycle()
@@ -64,7 +65,10 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
     val item = playing
     if (item != null) {
         key(item.id, item.encryptedUrl) {
-            Playback(model, item, siblings, { playing = it }, { playing = null }, { siblings = it })
+            Playback(model, item, siblings, { playing = it }, {
+                if (section == "Canlı TV") returnToChannel = item.id
+                playing = null
+            }, { siblings = it })
         }
         return
     }
@@ -179,7 +183,8 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
                                     }
                                 if (section == "Ana Sayfa")
                                     Home(model, scope, open, play, info, { featured = it }, homeInteraction)
-                                else Browse(model, section, scope, open, play)
+                                else Browse(model, section, scope, open, play,
+                                    returnToChannel, { returnToChannel = null })
                             }
                     }
                 }

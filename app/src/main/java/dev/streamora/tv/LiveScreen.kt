@@ -8,6 +8,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusRestorer
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.layout.ContentScale
@@ -38,6 +40,8 @@ internal fun LiveScreen(
     source: String,
     open: (Item) -> Unit,
     play: (Item, List<Item>) -> Unit,
+    returnToChannel: String? = null,
+    onChannelFocusRestored: () -> Unit = {},
 ) {
     var timeline by rememberSaveable { mutableStateOf(false) }
     var category by rememberSaveable(source) { mutableStateOf("all") }
@@ -47,6 +51,25 @@ internal fun LiveScreen(
     var previewId by remember { mutableStateOf<String?>(null) }
     val listState = rememberSaveable(source, category, query, saver = LazyListState.Saver) { LazyListState() }
     val categoryState = rememberLazyListState()
+    val returnFocus = remember { FocusRequester() }
+    var returnIndex by remember(returnToChannel) { mutableIntStateOf(-1) }
+    LaunchedEffect(returnToChannel) {
+        val target = returnToChannel ?: return@LaunchedEffect
+        timeline = false
+        if (target != focusedId) {
+            // The mini guide may have selected a channel outside the saved filter/page.
+            category = "all"
+            query = ""
+            val index = model.repo.library.browse(source, "LIVE", "", "", "", Int.MAX_VALUE)
+                .first().indexOfFirst { it.id == target }
+            if (index >= 0) returnIndex = index
+            else onChannelFocusRestored()
+        }
+    }
+    LaunchedEffect(returnIndex, category, query) {
+        if (returnIndex >= 0 && category == "all" && query.isEmpty())
+            limit = maxOf(limit, returnIndex + 1)
+    }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
         wallClockTicks(30_000).collect { now = it }
@@ -65,6 +88,10 @@ internal fun LiveScreen(
             searchable(query), if (category == "favorite") "favorite" else "", limit,
         )
     }.collectAsStateWithLifecycle(emptyList())
+    LaunchedEffect(returnToChannel, rows) {
+        val index = rows.indexOfFirst { it.id == returnToChannel }
+        if (returnToChannel != null && index >= 0) listState.scrollToItem(index)
+    }
     // A new focus cancels the previous delay; loading more rows does not restart playback.
     LaunchedEffect(focusedId, source, category, query, timeline) {
         previewId = null
@@ -116,8 +143,16 @@ internal fun LiveScreen(
                 ) {
                     if (rows.isEmpty()) item { Text("Eşleşen içerik yok.", color = Ink.muted) }
                     itemsIndexed(rows, key = { _, item -> item.id }) { index, item ->
+                        val restoreFocus = item.id == returnToChannel
+                        if (restoreFocus) LaunchedEffect(item.id) {
+                            // Let the enclosing page finish its initial content focus request.
+                            withFrameNanos { }
+                            returnFocus.requestFocus()
+                            onChannelFocusRestored()
+                        }
                         LiveChannelRow(model, item, index + 1, now,
-                            { play(item, rows) }, { open(item) }, { focusedId = item.id })
+                            { play(item, rows) }, { open(item) }, { focusedId = item.id },
+                            if (restoreFocus) Modifier.focusRequester(returnFocus) else Modifier)
                     }
                     if (category != "recent" && rows.size >= limit) item {
                         FocusCard({ limit += 80 }, Modifier.fillMaxWidth()) {

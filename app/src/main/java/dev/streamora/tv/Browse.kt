@@ -187,6 +187,8 @@ internal fun Browse(
     source: String,
     open: (Item) -> Unit,
     play: (Item, List<Item>) -> Unit,
+    returnToChannel: String? = null,
+    onChannelFocusRestored: () -> Unit = {},
 ) {
     val kind =
         when (section) {
@@ -196,7 +198,7 @@ internal fun Browse(
             else -> ""
         }
     if (kind == "LIVE") {
-        LiveScreen(model, source, open, play)
+        LiveScreen(model, source, open, play, returnToChannel, onChannelFocusRestored)
         return
     }
     var listTab by rememberSaveable { mutableStateOf("Favoriler") }
