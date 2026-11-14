@@ -25,8 +25,12 @@ class RemoteNavigationTest {
             }
         }
         fun waitForFocus(matcher: SemanticsMatcher) {
-            screen.waitUntil(30_000) {
-                screen.onAllNodes(matcher and isFocused()).fetchSemanticsNodes().isNotEmpty()
+            try {
+                screen.waitUntil(30_000) {
+                    screen.onAllNodes(matcher and isFocused()).fetchSemanticsNodes().isNotEmpty()
+                }
+            } catch (e: ComposeTimeoutException) {
+                throw AssertionError("Beklenen odak: $matcher\n" + screen.onRoot().printToString(), e)
             }
         }
         waitForText("✓ M3U")

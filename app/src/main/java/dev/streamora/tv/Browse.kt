@@ -139,10 +139,13 @@ internal fun Home(
     LaunchedEffect(hero) { feature(hero) }
     val choose: (Item) -> Unit = { focusedId = it.id }
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val heroHeight = maxHeight * .55f
+        // Leave room for a complete portrait shelf: heading, artwork, title and year.
+        // The enclosing screen already reserves the TV's 27 dp bottom safe area.
+        val heroHeight = maxHeight * .48f
         Column {
             Box(Modifier.fillMaxWidth().height(heroHeight)
                 .onFocusChanged { if (it.hasFocus) shelvesFocused = false }
+                .focusRestorer()
                 .focusGroup()) {
                 hero?.let {
                     Hero(model, it, info, open, play, Modifier.padding(top = 12.dp))

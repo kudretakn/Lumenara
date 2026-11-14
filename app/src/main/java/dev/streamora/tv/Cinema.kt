@@ -259,6 +259,7 @@ internal fun MovieCard(
             Modifier.padding(top = 7.dp),
             color = if (focused) Color.White else Ink.text,
             fontSize = 12.sp,
+            lineHeight = 16.sp,
             fontWeight = FontWeight.Medium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -267,6 +268,7 @@ internal fun MovieCard(
             if (progress) "İzlemeye devam et" else item.year.ifBlank { item.category },
             color = Ink.muted,
             fontSize = 10.sp,
+            lineHeight = 14.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )

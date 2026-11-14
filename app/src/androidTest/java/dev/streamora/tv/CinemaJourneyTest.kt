@@ -102,8 +102,12 @@ class CinemaJourneyTest {
             }
         }
         fun waitFor(matcher: SemanticsMatcher) {
-            screen.waitUntil(30_000) {
-                screen.onAllNodes(matcher).fetchSemanticsNodes().isNotEmpty()
+            try {
+                screen.waitUntil(30_000) {
+                    screen.onAllNodes(matcher).fetchSemanticsNodes().isNotEmpty()
+                }
+            } catch (e: ComposeTimeoutException) {
+                throw AssertionError("Beklenen: $matcher\n" + screen.onRoot().printToString(), e)
             }
         }
         fun select(text: String) {

@@ -71,7 +71,11 @@ class LibraryJourneyTest {
                 screen.waitUntil(30_000) {
                     screen.onAllNodes(hasText(label) and isFocused()).fetchSemanticsNodes().isNotEmpty()
                 }
-                device.pressDPadCenter()
+                // Keep the synthetic focus change and its key event on the same Compose
+                // input path; native injection can race the text field's input connection.
+                screen.onRoot().performKeyInput {
+                    pressKey(androidx.compose.ui.input.key.Key.DirectionCenter)
+                }
             }
             try {
                 button("✓ M3U")

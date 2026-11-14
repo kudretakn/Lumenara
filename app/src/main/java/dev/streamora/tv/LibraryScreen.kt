@@ -71,11 +71,19 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
     var railFocus by remember { mutableStateOf(false) }
     val rail = remember { FocusRequester() }
     val contentFocus = remember { FocusRequester() }
+    val settingsEntry = remember { FocusRequester() }
+    var returningToContent by remember { mutableStateOf(false) }
     BackHandler(detail != null || section != "Ana Sayfa") {
         when {
             detail != null -> detail = null
-            section == "IPTV Kaynakları" -> section = sourceParent
-            else -> section = "Ana Sayfa"
+            section == "IPTV Kaynakları" -> {
+                returningToContent = true
+                section = sourceParent
+            }
+            else -> {
+                returningToContent = true
+                section = "Ana Sayfa"
+            }
         }
     }
     detail?.let {
@@ -89,9 +97,13 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
     var homeInteraction by remember { mutableLongStateOf(0L) }
     LaunchedEffect(section) {
         featured = null
-        if (!railFocus && section != "IPTV Kaynakları") {
-            if (!contentFocus.requestFocus()) rail.requestFocus()
+        // Removing a focused page can temporarily move focus to the rail. Back is an
+        // explicit return to content, so that transient focus must not suppress it.
+        if ((returningToContent || !railFocus) && section != "IPTV Kaynakları") {
+            if (returningToContent && section == "Ayarlar") settingsEntry.requestFocus()
+            else contentFocus.requestFocus()
         }
+        returningToContent = false
     }
     Box(Modifier.fillMaxSize().background(Ink.background).onPreviewKeyEvent {
         if (section == "Ana Sayfa" && it.type == KeyEventType.KeyDown) homeInteraction++
@@ -124,7 +136,7 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
                 ) {
                     when (section) {
                         "IPTV Kaynakları" -> Setup(model, available) { section = "Ana Sayfa" }
-                        "Ayarlar" -> SettingsScreen(model, available) {
+                        "Ayarlar" -> SettingsScreen(model, available, settingsEntry) {
                             sourceParent = "Ayarlar"
                             section = "IPTV Kaynakları"
                         }
