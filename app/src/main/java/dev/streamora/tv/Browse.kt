@@ -1,11 +1,5 @@
 package dev.streamora.tv
 
-import android.app.Activity
-import android.content.Intent
-import android.speech.RecognizerIntent
-import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
@@ -15,6 +9,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.*
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.unit.*
@@ -24,6 +20,7 @@ import coil.compose.AsyncImage
 import dev.streamora.data.*
 import dev.streamora.design.Ink
 import dev.streamora.design.Pill
+import dev.streamora.design.GlassPanel
 import kotlinx.coroutines.flow.*
 
 @Composable
@@ -201,139 +198,114 @@ internal fun Browse(
         LiveScreen(model, source, open, play, returnToChannel, onChannelFocusRestored)
         return
     }
-    var listTab by rememberSaveable { mutableStateOf("Favoriler") }
-    if (section == "Listem") {
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            listOf("Favoriler", "İzleme Listem").forEach { tab ->
-                Pill(tab, listTab == tab, onClick = { listTab = tab })
-            }
-        }
+    if (section == "Ara") {
+        SearchScreen(model, source, open, play)
+        return
     }
-    val shelf =
-        when (if (section == "Listem") listTab else section) {
-            "Favoriler" -> "favorite"
-            "İzleme Listem" -> "list"
-            else -> ""
-        }
-    var query by rememberSaveable { mutableStateOf("") }
+    var listTab by rememberSaveable { mutableStateOf("Favoriler") }
+    val shelf = if (section == "Listem") {
+        if (listTab == "Favoriler") "favorite" else "list"
+    } else ""
     var category by rememberSaveable(source) { mutableStateOf("") }
-    var limit by rememberSaveable(source, query, category) { mutableIntStateOf(80) }
+    var limit by rememberSaveable(source, category, shelf) { mutableIntStateOf(80) }
     var advanced by rememberSaveable { mutableStateOf(false) }
-    BackHandler(advanced) { advanced = false }
     var year by rememberSaveable { mutableStateOf("") }
     var genre by rememberSaveable { mutableStateOf("") }
     var language by rememberSaveable { mutableStateOf("") }
     var rating by rememberSaveable { mutableIntStateOf(0) }
-    LaunchedEffect(
-        section,
-        source,
-        kind,
-        shelf,
-        query,
-        category,
-        limit,
-        year,
-        genre,
-        language,
-        rating,
-    ) {
-        model.filter.value =
-            Filter(
-                source,
-                kind,
-                category,
-                query,
-                shelf,
-                limit,
-                year,
-                genre,
-                language,
-                rating.toDouble(),
-            )
+    val filterButton = remember { FocusRequester() }
+    var restoreFilterFocus by remember { mutableStateOf(false) }
+    val closeFilters: () -> Unit = {
+        restoreFilterFocus = true
+        advanced = false
+    }
+    LaunchedEffect(advanced) {
+        if (!advanced && restoreFilterFocus) {
+            filterButton.requestFocus()
+            restoreFilterFocus = false
+        }
+    }
+    LaunchedEffect(source, kind, shelf, category, limit, year, genre, language, rating) {
+        model.filter.value = Filter(source, kind, category, "", shelf, limit,
+            year, genre, language, rating.toDouble())
     }
     val rows by model.results.collectAsStateWithLifecycle()
-    val groups by
-        remember(kind, source) { model.repo.library.categories(kind, source) }
-            .collectAsStateWithLifecycle(emptyList())
-    val voice =
-        rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result
-            ->
-            if (result.resultCode == Activity.RESULT_OK)
-                result.data
-                    ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
-                    ?.firstOrNull()
-                    ?.let { query = it }
-        }
-    if (kind == "MOVIE" || kind == "SERIES") {
-        Button(onClick = { advanced = !advanced }) { Text("İçerik filtreleri") }
-        if (advanced)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Column(Modifier.weight(1f)) { Field("Yıl", year, { year = it.take(4) }) }
-                Column(Modifier.weight(1f)) { Field("Tür", genre, { genre = it }) }
-                Column(Modifier.weight(1f)) { Field("Dil", language, { language = it }) }
-                Button(onClick = { rating = (rating + 1) % 10 }) { Text("Puan ≥ $rating") }
-            }
-    }
-    if (section == "Ara") {
-        Field("Kanal adı, kategori veya yayın kimliği", query, { query = it })
-        fun listen() {
-            runCatching {
-                voice.launch(
-                    Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-                        .putExtra(
-                            RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                            RecognizerIntent.LANGUAGE_MODEL_FREE_FORM,
-                        )
-                        .putExtra(RecognizerIntent.EXTRA_LANGUAGE, "tr-TR")
-                )
-            }
-                .onFailure {
-                    model.notice.value = "Ses tanıma hizmeti bulunamadı. Metinle arayabilirsiniz."
+    val groups by remember(kind, source) { model.repo.library.categories(kind, source) }
+        .collectAsStateWithLifecycle(emptyList())
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) { wallClockTicks(30_000).collect { now = it } }
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (section == "Listem") {
+            LazyRow(contentPadding = PaddingValues(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                items(listOf("Favoriler", "İzleme Listem")) { tab ->
+                    Pill(tab, listTab == tab, onClick = { listTab = tab })
                 }
-        }
-        val request by model.remoteSearch.collectAsStateWithLifecycle()
-        LaunchedEffect(request) {
-            if (request > 0) {
-                model.remoteSearch.value = 0
-                listen()
             }
         }
-        Button(onClick = { listen() }) { Text("Sesle ara") }
-        val notice by model.notice.collectAsStateWithLifecycle()
-        if (notice.isNotEmpty()) Text(notice, color = Ink.accent)
-    }
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        if (groups.isNotEmpty())
-            LazyColumn(Modifier.width(122.dp).focusRestorer().focusGroup(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                items(listOf("") + groups, key = { it }) { group ->
-                    Surface(onClick = { category = group }) {
-                        Text(
-                            (if (group == category) "✓ " else "") + group.ifEmpty { "Tümü" },
-                            Modifier.fillMaxWidth().padding(6.dp),
-                            maxLines = 2,
-                        )
+        if (kind == "MOVIE" || kind == "SERIES") {
+            Row(verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                LazyRow(Modifier.weight(1f).focusRestorer().focusGroup(),
+                    contentPadding = PaddingValues(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(listOf("") + groups, key = { it }) { group ->
+                        Pill(group.ifEmpty { "Tümü" }, category == group,
+                            onClick = { category = group })
                     }
                 }
+                val count = listOf(year, genre, language).count { it.isNotEmpty() } +
+                    if (rating > 0) 1 else 0
+                Button(onClick = { advanced = true },
+                    modifier = Modifier.testTag("filter-button")
+                        .focusRequester(filterButton)) {
+                    Text(if (count == 0) "Filtrele" else "Filtrele ($count)")
+                }
             }
+        }
         androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
-            columns = androidx.compose.foundation.lazy.grid.GridCells.Adaptive(116.dp),
-            modifier = Modifier.weight(1f).focusRestorer().focusGroup(),
-            contentPadding = PaddingValues(6.dp),
+            columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(6),
+            modifier = Modifier.weight(1f).testTag("poster-grid").focusRestorer().focusGroup(),
+            contentPadding = PaddingValues(8.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
-            if (rows.isEmpty()) item { Text("Eşleşen içerik yok.", color = Ink.muted) }
-            items(rows.size, key = { rows[it].id }) { index ->
-                MovieCard(
-                    model,
-                    rows[index],
-                    rows[index].kind != "LIVE",
-                    open,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+            if (rows.isEmpty()) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(6) }) {
+                Text("Eşleşen içerik yok.", color = Ink.muted)
             }
-            if (rows.size >= limit)
-                item { Button(onClick = { limit += 80 }) { Text("Devamını göster") } }
+            items(rows.size, key = { rows[it].id }, span = { index ->
+                androidx.compose.foundation.lazy.grid.GridItemSpan(if (rows[index].kind == "LIVE") 2 else 1)
+            }) { index ->
+                val entry = rows[index]
+                if (entry.kind == "LIVE")
+                    ChannelCard(model, entry, now, { play(entry, rows.filter { it.kind == "LIVE" }) }, {})
+                else MovieCard(model, entry, true, open, modifier = Modifier.fillMaxWidth())
+            }
+            if (rows.size >= limit) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(6) }) {
+                Button(onClick = { limit += 80 }) { Text("Devamını göster") }
+            }
+        }
+    }
+    if (advanced) {
+        androidx.compose.ui.window.Dialog(onDismissRequest = closeFilters,
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
+            val panelFocus = remember { FocusRequester() }
+            LaunchedEffect(Unit) { panelFocus.requestFocus() }
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterEnd) {
+                GlassPanel(
+                    Modifier.width(360.dp).fillMaxHeight().testTag("filter-panel")) {
+                    LazyColumn(Modifier.fillMaxSize().focusRequester(panelFocus).focusGroup()
+                        .padding(horizontal = 28.dp, vertical = 27.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                        item { Text("İçerik filtreleri", fontSize = 24.sp) }
+                        item { Field("Yıl", year, { year = it.take(4) }) }
+                        item { Field("Tür", genre, { genre = it }) }
+                        item { Field("Dil", language, { language = it }) }
+                        item { Button(onClick = { rating = (rating + 1) % 10 }) { Text("Puan ≥ $rating") } }
+                        item { Button(onClick = closeFilters) { Text("Sonuçları göster") } }
+                    }
+                }
+            }
         }
     }
 }

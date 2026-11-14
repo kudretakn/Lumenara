@@ -113,20 +113,31 @@ class CinemaJourneyTest {
                 throw AssertionError("Beklenen: $matcher\n" + screen.onRoot().printToString(), e)
             }
         }
+        fun searchShelf(tag: String) {
+            screen.waitUntil(30_000) {
+                runCatching {
+                    screen.onNodeWithTag("search-results").performScrollToNode(hasTestTag(tag))
+                    screen.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty()
+                }.getOrDefault(false)
+            }
+        }
+        fun waitAbsent(matcher: SemanticsMatcher) {
+            screen.waitUntil(30_000) { screen.onAllNodes(matcher).fetchSemanticsNodes().isEmpty() }
+        }
         fun select(text: String) {
             focus(node(text))
             screen.ok()
         }
         fun focusFilters() {
-            val label = hasText("İçerik filtreleri")
-            val button = isFocusable() and (label or hasAnyDescendant(label))
+            val button = isFocusable() and hasText("Filtrele")
             waitFor(button)
             focus(screen.onNode(button))
         }
         fun capture(name: String) {
             // A real device screenshot includes GPU-composited image transitions and TV focus
             // rings.
-            Thread.sleep(1300)
+            val readyAt = android.os.SystemClock.uptimeMillis() + 1300
+            screen.waitUntil(30_000) { android.os.SystemClock.uptimeMillis() >= readyAt }
             val file = File(context.getExternalFilesDir(null), "$name.png")
             checkNotNull(file.parentFile).mkdirs()
             assertTrue("Ekran görüntüsü kaydedilmeli: $name", device.takeScreenshot(file))
@@ -300,20 +311,29 @@ class CinemaJourneyTest {
                 }
                 capture("cinema-focus")
                 screen.ok()
-                node("İzleme listeme ekle").assertExists()
+                node("+ Listem").assertExists()
+                node("Oynat").assertIsFocused()
                 capture("cinema-details")
-                select("İzleme listeme ekle")
-                node("Listeden çıkar").assertExists()
+                capture("screens/details")
+                select("+ Listem")
+                node("✓ Listem").assertExists()
                 screen.back()
                 section("Filmler")
                 focusFilters()
                 capture("cinema-movies")
+                capture("screens/movies")
                 screen.ok()
+                waitFor(hasTestTag("filter-panel"))
                 node("Yıl").assertExists()
                 val movieResult = describedIn("Açık Deniz", "section-Filmler")
                 waitFor(movieResult)
                 screen.onAllNodes(hasSetTextAction())[0].performTextReplacement("1999")
+                screen.back()
+                waitFor(hasText("Filtrele (1)") and isFocused())
+                screen.onNodeWithTag("filter-panel").assertDoesNotExist()
                 node("Eşleşen içerik yok.").assertExists()
+                select("Filtrele (1)")
+                node("Yıl").assertExists()
                 screen.onAllNodes(hasSetTextAction())[0].performTextReplacement("2025")
                 screen.waitUntil(30_000) {
                     screen
@@ -321,6 +341,8 @@ class CinemaJourneyTest {
                         .fetchSemanticsNodes()
                         .isNotEmpty()
                 }
+                screen.back()
+                waitFor(movieResult)
                 section("Diziler")
                 // Filters belong to each section: Series starts with its own closed panel.
                 screen.onNodeWithText("Yıl").assertDoesNotExist()
@@ -328,6 +350,7 @@ class CinemaJourneyTest {
                 screen.ok()
                 node("Yıl").assertExists()
                 screen.onAllNodes(hasSetTextAction())[0].assertTextEquals("")
+                screen.back()
                 node("Eşleşen içerik yok.").assertExists()
                 screen.onNode(describedIn("Açık Deniz", "section-Diziler")).assertDoesNotExist()
                 section("Listem")
@@ -347,8 +370,24 @@ class CinemaJourneyTest {
                 }
                 screen.onNode(describedIn("Açık Deniz", "section-Listem")).assertDoesNotExist()
                 section("Filmler")
+                select("Filtrele (1)")
                 node("Yıl").assertExists()
                 screen.onAllNodes(hasSetTextAction())[0].assertTextEquals("2025")
+                screen.back()
+                section("Ara")
+                screen.onNode(hasSetTextAction()).performTextReplacement("Deniz")
+                searchShelf("search-shelf-Filmler")
+                waitFor(hasContentDescription("Açık Deniz") and
+                    hasAnyAncestor(hasTestTag("search-shelf-Filmler")))
+                waitAbsent(hasTestTag("channel-shelf-Kanallar"))
+                screen.onNodeWithTag("channel-shelf-Kanallar").assertDoesNotExist()
+                capture("screens/search")
+                screen.onNode(hasSetTextAction()).performTextReplacement("Test Haber")
+                searchShelf("channel-shelf-Kanallar")
+                waitFor(hasContentDescription("Test Haber") and
+                    hasAnyAncestor(hasTestTag("channel-shelf-Kanallar")))
+                waitAbsent(hasTestTag("search-shelf-Filmler"))
+                screen.onNodeWithTag("search-shelf-Filmler").assertDoesNotExist()
                 section("Ayarlar")
                 node("IPTV Kaynakları").assertExists()
                 screen.dpad(Key.DirectionRight)

@@ -2,6 +2,8 @@
 
 ## 0.3.0 (geliştiriliyor)
 
+- Filmler/Diziler için kategori Pill satırı, filtre sayılı sağ cam panel ve altı sütunlu afiş ızgarası; Listem için favori/liste sekmeleri ve EPG bilgili kanal kartları eklendi. Ara, metin/ses girişi ve türe göre boş olmayan raflara ayrıldı. Detayda ilk odak oynat düğmesinde, sezon sekmeleri ve ilerlemeli yatay bölüm kartları gösterilir. Sinema yolculuğu filtre paneli, arama rafları ve `screens/movies.png`, `screens/details.png`, `screens/search.png` çekim adımlarıyla güncellendi.
+
 - Media3 ve VLC tam ekranda ortak 4 saniyelik cam bilgi bandı ve 8 saniye işlemsizlikte kapanan, kategori seçicili sanallaştırılmış mini rehber eklendi. Sol / bant açıkken OK rehberi, uzun OK / Menü seçenekleri açar; VOD zaman çubuğu, ±10 saniye sarma ve sonraki bölüm kartı yenilendi. İki motor ve 10.000 kanallı sahte sağlayıcı için tam ekran yolculukları ve ekran görüntüsü adımları eklendi.
 
 - Canlı TV üç sütuna ayrıldı: son izlenenler/favoriler ve sayılı kategoriler, görünür satırlarda EPG/sonraki program bilgili kanal listesi ve 600 ms odak beklemesiyle sesli önizleme. OK doğrudan tam ekran, uzun OK kanal işlemlerini açar; arama, sayfalama ve yayın çizelgesi korunur. Sahte sağlayıcı yolculuğu ve `screens/live.png` ekran görüntüsü adımı güncellendi.

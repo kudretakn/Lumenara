@@ -3,10 +3,16 @@ package dev.streamora.tv
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.platform.testTag
+import dev.streamora.design.FocusCard
+import dev.streamora.design.Pill
+import dev.streamora.design.ProgressLine
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.*
@@ -31,9 +37,15 @@ internal fun Details(
     val episodes by
         remember(item.id) { model.repo.library.episodes(item.id) }
             .collectAsStateWithLifecycle(emptyList())
-    var season by remember { mutableStateOf("") }
+    val resumable by remember(item.id) {
+        if (item.kind == "SERIES")
+            model.repo.library.browse(item.source, "", "", "", "resume", Int.MAX_VALUE)
+        else kotlinx.coroutines.flow.flowOf(emptyList<Item>())
+    }.collectAsStateWithLifecycle(emptyList())
+    val resumeId = resumable.firstOrNull { it.parent == item.id }?.id
+    var season by rememberSaveable(item.id) { mutableStateOf("") }
     var loaded by remember { mutableStateOf(false) }
-    val busy by model.busy.collectAsStateWithLifecycle()
+    var pendingPlay by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
     val info by
         produceState(MovieInfo.from(item), item.id) {
@@ -52,18 +64,27 @@ internal fun Details(
             loaded = true
         }
     val primary = remember { FocusRequester() }
-    LaunchedEffect(Unit) { primary.requestFocus() }
+    LaunchedEffect(item.id) { primary.requestFocus() }
+    LaunchedEffect(item.id) { if (item.kind == "SERIES") load() }
+    LaunchedEffect(episodes, pendingPlay, loaded) {
+        if (pendingPlay) {
+            val next = episodes.firstOrNull { it.id == resumeId } ?: episodes.firstOrNull()
+            if (next != null) {
+                pendingPlay = false
+                play(next, episodes)
+            } else if (loaded) pendingPlay = false
+        }
+    }
     Box(Modifier.fillMaxSize()) {
         CinemaBackdrop(model, item, info)
         LazyColumn(
-            Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 54.dp, end = 40.dp, top = 24.dp, bottom = 32.dp),
+            Modifier.fillMaxSize().testTag("details-content").focusRestorer().focusGroup(),
+            contentPadding = PaddingValues(horizontal = 48.dp, vertical = 27.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            item { Button(onClick = back) { Text("Geri") } }
             item {
                 Column(
-                    Modifier.widthIn(max = 510.dp).padding(top = 24.dp),
+                    Modifier.widthIn(max = 510.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     Text(
@@ -81,14 +102,6 @@ internal fun Details(
                         overflow = TextOverflow.Ellipsis,
                     )
                     MovieMeta(item, info)
-                    if (info.summary.isNotBlank())
-                        Text(
-                            info.summary,
-                            Modifier.widthIn(max = 460.dp),
-                            fontSize = 14.sp,
-                            lineHeight = 21.sp,
-                            color = Ink.text.copy(alpha = .85f),
-                        )
                     if (info.collection.isNotBlank())
                         Text(info.collection, color = Ink.muted, fontSize = 12.sp)
                 }
@@ -101,9 +114,14 @@ internal fun Details(
                     item {
                         Button(
                             modifier = Modifier.focusRequester(primary),
-                            enabled = !busy,
                             onClick = {
-                                if (item.kind == "SERIES") load() else play(item, listOf(item))
+                                if (item.kind == "SERIES") {
+                                    val next = episodes.firstOrNull { it.id == resumeId } ?: episodes.firstOrNull()
+                                    if (next != null) play(next, episodes) else {
+                                        pendingPlay = true
+                                        load()
+                                    }
+                                } else play(item, listOf(item))
                             },
                             colors =
                                 ButtonDefaults.colors(
@@ -114,16 +132,14 @@ internal fun Details(
                             NavIcon(2, Modifier.size(16.dp))
                             Spacer(Modifier.width(8.dp))
                             Text(
-                                if (item.kind == "SERIES") "Sezon ve bölümler"
-                                else if ((mark?.position ?: 0) > 0) "Devam et" else "Oynat"
+                                if ((mark?.position ?: 0) > 0 || resumeId != null) "Devam et" else "Oynat"
                             )
                         }
                     }
                     item {
                         Button(onClick = { model.mark(item, false) }) {
                             Text(
-                                if (mark?.listed == true) "Listeden çıkar"
-                                else "İzleme listeme ekle"
+                                if (mark?.listed == true) "✓ Listem" else "+ Listem"
                             )
                         }
                     }
@@ -153,10 +169,14 @@ internal fun Details(
                                         }
                                 }
                             ) {
-                                Text("Fragmanı izle")
+                                Text("Fragman")
                             }
                         }
                 }
+            }
+            if (info.summary.isNotBlank()) item {
+                Text(info.summary, Modifier.widthIn(max = 460.dp), fontSize = 14.sp,
+                    lineHeight = 21.sp, color = Ink.text.copy(alpha = .85f))
             }
             if (info.people.isNotEmpty())
                 item {
@@ -239,41 +259,40 @@ internal fun Details(
                 item { Text(notice, color = Ink.muted) }
             if (episodes.isNotEmpty())
                 item {
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    LazyRow(Modifier.focusRestorer().focusGroup(), contentPadding = PaddingValues(6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                         items(listOf("") + episodes.map { it.category }.distinct(), key = { it }) {
                             value ->
-                            Button(onClick = { season = value }) {
-                                Text(
-                                    (if (value == season) "✓ " else "") +
-                                        value.ifEmpty { "Tüm sezonlar" }
-                                )
+                            Pill(value.ifEmpty { "Tüm sezonlar" }, season == value,
+                                onClick = { season = value })
+                        }
+                    }
+                }
+            if (episodes.isNotEmpty()) item {
+                LazyRow(Modifier.testTag("episode-shelf").focusRestorer().focusGroup(),
+                    contentPadding = PaddingValues(10.dp), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                    items(episodes.filter { season == "" || season == it.category }, key = { it.id }) { ep ->
+                        val state by remember(ep.id) { model.repo.library.observeMark(ep.id) }
+                            .collectAsStateWithLifecycle(null)
+                        val duration = state?.duration ?: 0
+                        val progress = if (duration > 0) (state?.position ?: 0).toFloat() / duration else 0f
+                        FocusCard(onClick = { play(ep, episodes) }, modifier = Modifier.width(210.dp)) {
+                            Column {
+                                Poster(model, ep, Modifier.fillMaxWidth().height(112.dp))
+                                ProgressLine(progress)
+                                Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                                    Text(ep.title, maxLines = 2, fontSize = 14.sp, overflow = TextOverflow.Ellipsis)
+                                    Text(if (duration > 0) "${duration / 60_000} dk" else "Süre bilgisi yok",
+                                        color = Ink.muted, fontSize = 12.sp)
+                                    if (ep.summary.isNotBlank()) Text(ep.summary, color = Ink.muted,
+                                        fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                }
                             }
                         }
                     }
                 }
-            items(episodes.filter { season == "" || season == it.category }, key = { it.id }) { ep
-                ->
-                val state by
-                    remember(ep.id) { model.repo.library.observeMark(ep.id) }
-                        .collectAsStateWithLifecycle(null)
-                val percent =
-                    state
-                        ?.takeIf { it.duration > 0 }
-                        ?.let {
-                            (it.position.toDouble() / it.duration * 100).toInt().coerceIn(0, 100)
-                        } ?: 0
-                Button(onClick = { play(ep, episodes) }) {
-                    Text(
-                        ep.title +
-                            when {
-                                percent >= 95 -> " · İzlendi"
-                                percent > 0 -> " · %$percent"
-                                else -> ""
-                            }
-                    )
-                }
-                if (ep.summary.isNotEmpty()) Text(ep.summary, color = Ink.muted)
             }
+            item { Button(onClick = back) { Text("Geri") } }
         }
     }
 }
