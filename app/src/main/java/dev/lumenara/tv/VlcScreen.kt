@@ -334,7 +334,11 @@ internal fun VlcScreen(
                 item { VersionChoice(model, item) { version ->
                     scope.launch {
                         val p = player
-                        if (p != null) model.repo.updateMark(item.id) { it.copy(position = p.time.coerceAtLeast(0), duration = p.length.coerceAtLeast(0)) }
+                        if (p != null) {
+                            val position = p.time.coerceAtLeast(0)
+                            val duration = p.length.coerceAtLeast(0)
+                            model.repo.updateMark(item.id) { it.copy(position = position, duration = duration) }
+                        }
                         val rows = if (version.kind == "EPISODE") model.repo.library.episodeSnapshot(version.parent).seriesOrder() else group
                         select(version, rows)
                     }

@@ -481,8 +481,13 @@ internal fun Playback(
                 }
                 item { VersionChoice(model, item) { version ->
                     scope.launch {
+                        // Read ExoPlayer on the main thread; updateMark runs its transform inside a DB transaction.
                         val p = engine
-                        if (p != null) model.repo.updateMark(item.id) { it.copy(position = p.currentPosition.coerceAtLeast(0), duration = p.duration.coerceAtLeast(0)) }
+                        if (p != null) {
+                            val position = p.currentPosition.coerceAtLeast(0)
+                            val duration = p.duration.coerceAtLeast(0)
+                            model.repo.updateMark(item.id) { it.copy(position = position, duration = duration) }
+                        }
                         if (version.kind == "EPISODE") changeGroup(model.repo.library.episodeSnapshot(version.parent).seriesOrder())
                         select(version)
                     }
