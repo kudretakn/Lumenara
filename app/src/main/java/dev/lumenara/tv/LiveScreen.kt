@@ -45,7 +45,7 @@ internal fun LiveScreen(
     onChannelFocusRestored: () -> Unit = {},
 ) {
     var numberSource by remember(source) { mutableStateOf(source) }
-    val numbers = rememberLiveNumberControl(model, numberSource, play)
+    val numbers = rememberLiveNumberControl(model, numberSource, select = play)
     val channelNumbers = liveChannelNumbers(model, source)
     var timeline by rememberSaveable { mutableStateOf(false) }
     var category by rememberSaveable(source) { mutableStateOf("all") }

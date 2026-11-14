@@ -49,7 +49,7 @@ internal fun VlcScreen(
     fun move(delta: Int) { group.getOrNull(group.indexOfFirst { it.id == item.id } + delta)?.let { select(it, group) } }
     BackHandler { if (panel) panel = false else if (!fullscreen.dismiss()) back() }
     if (!life.isAtLeast(Lifecycle.State.STARTED)) return
-    val numbers = if (item.kind == "LIVE") rememberLiveNumberControl(model, item.source, select) else null
+    val numbers = if (item.kind == "LIVE") rememberLiveNumberControl(model, item.source, item.id, select) else null
     val retry = rememberLiveRetry(item.id)
     val context = LocalContext.current
     val composeView = LocalView.current

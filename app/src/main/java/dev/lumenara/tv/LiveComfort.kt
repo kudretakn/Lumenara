@@ -81,18 +81,19 @@ internal class LiveNumberControl {
     var input by mutableStateOf(NumberInput())
         private set
     var channels by mutableStateOf<List<Item>>(emptyList())
-    var previous: Item? = null
-    var select: (Item, List<Item>) -> Unit = { _, _ -> }
+    var current: String? = null
+    var selectPrevious: () -> Unit = {}
+    var selectNumber: (Item) -> Unit = {}
     fun apply(transition: NumberTransition) {
         input = transition.state
-        val target = when (val command = transition.command) {
-            NumberCommand.Previous -> previous
-            is NumberCommand.Select -> resolveChannel(command.number, channels)
-            null -> return
+        when (val command = transition.command) {
+            NumberCommand.Previous -> selectPrevious()
+            is NumberCommand.Select -> resolveChannel(command.number, channels)?.let(selectNumber)
+                ?: run { input = input.missing(System.currentTimeMillis()) }
+            null -> Unit
         }
-        if (target == null) input = input.missing(System.currentTimeMillis())
-        else select(target, if (channels.any { it.id == target.id }) channels else listOf(target))
     }
+    fun markMissing() { input = input.missing(System.currentTimeMillis()) }
     fun key(key: KeyEvent): Boolean {
         val code = key.keyCode
         val digit = when (code) {
@@ -115,23 +116,31 @@ internal class LiveNumberControl {
 
 @Composable
 internal fun rememberLiveNumberControl(model: LibraryModel, source: String,
-    select: (Item, List<Item>) -> Unit): LiveNumberControl {
+    currentId: String? = null, select: (Item, List<Item>) -> Unit): LiveNumberControl {
     val state = remember(source) { LiveNumberControl() }
     val allChannels = liveChannels(model, source)
     val channels = if (source.isNotEmpty()) allChannels else
         allChannels.filter { it.source == allChannels.firstOrNull()?.source }
     val scope = rememberCoroutineScope()
     val currentSelect by rememberUpdatedState(select)
-    val recent by model.prefs.recentLive.collectAsStateWithLifecycle(emptyList())
-    val previous by produceState<Item?>(null, recent) {
-        value = null
-        val id = recent.getOrNull(1) ?: return@produceState
-        model.repo.library.liveByIds("", listOf(id)).collect { value = it.firstOrNull() }
-    }
+    val currentIdState by rememberUpdatedState(currentId)
     SideEffect {
         state.channels = channels
-        state.previous = previous
-        state.select = { target, rows ->
+        state.current = currentIdState
+        state.selectPrevious = {
+            scope.launch {
+                val id = model.prefs.recentLive.first().firstOrNull { currentIdState != null && it != currentIdState }
+                val target = id?.let { model.repo.library.liveByIds("", listOf(it)).first().firstOrNull() }
+                if (target == null) state.markMissing()
+                else {
+                    val rows = if (target.source == source) channels else
+                        model.repo.library.browse(target.source, "LIVE", "", "", "", Int.MAX_VALUE).first()
+                    currentSelect(target, rows)
+                }
+            }
+        }
+        state.selectNumber = { target ->
+            val rows = if (channels.any { it.id == target.id }) channels else listOf(target)
             scope.launch {
                 val group = if (target.source == source) rows else
                     model.repo.library.browse(target.source, "LIVE", "", "", "", Int.MAX_VALUE).first()

@@ -302,7 +302,7 @@ internal fun Playback(
         }
         return
     }
-    val numbers = if (live) rememberLiveNumberControl(model, item.source) { channel, rows ->
+    val numbers = if (live) rememberLiveNumberControl(model, item.source, item.id) { channel, rows ->
         changeGroup(rows); select(channel)
     } else null
     val retry = rememberLiveRetry(item.id)
