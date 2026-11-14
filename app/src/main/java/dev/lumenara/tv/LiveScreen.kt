@@ -23,7 +23,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
-import coil.compose.AsyncImage
 import dev.lumenara.catalog.searchable
 import dev.lumenara.data.Item
 import dev.lumenara.data.Slot
@@ -124,6 +123,7 @@ private fun LiveChannelGrid(model: LibraryModel, title: String, rows: List<Item>
     limit: Int, more: () -> Unit, returnId: String?, focused: (Item) -> Unit,
     restored: () -> Unit, open: (Item) -> Unit, play: (Item, List<Item>) -> Unit) {
     val grid = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
+    PrefetchArtwork(model, grid, rows, columns = 4)
     val focus = remember { FocusRequester() }
     val searchFocus = remember { FocusRequester() }
     var positioned by remember { mutableStateOf(false) }
@@ -196,7 +196,7 @@ internal fun LiveChannelRow(
                 Text(if (selected) "▶ $number" else number.toString(), color = Ink.muted, fontSize = 12.sp, lineHeight = 14.sp)
                 Box(Modifier.size(if (compactHeight != null) 20.dp else 28.dp), contentAlignment = Alignment.Center) {
                     Text(item.title.take(1), color = Ink.accent, fontSize = 15.sp, lineHeight = 18.sp)
-                    if (logo != null) AsyncImage(logo, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                    if (logo != null) Artwork(model, item, logo, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
                 }
                 Text(item.title, fontSize = 15.sp, lineHeight = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }

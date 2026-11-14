@@ -11,7 +11,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
-import coil.compose.AsyncImage
 import dev.lumenara.data.Item
 import dev.lumenara.data.nextItem
 import dev.lumenara.design.*
@@ -131,7 +130,7 @@ internal fun BoxScope.FullscreenOverlay(
                         Text("${numbers[item.id] ?: 1}", color = Ink.muted)
                         Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
                             Text(item.title.take(1), color = Ink.accent)
-                            if (logo != null) AsyncImage(logo, null, Modifier.fillMaxSize())
+                            if (logo != null) Artwork(model, item, logo, Modifier.fillMaxSize())
                         }
                         Text(item.title, fontSize = 28.sp, maxLines = 1)
                     }

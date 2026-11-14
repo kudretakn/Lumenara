@@ -6,6 +6,36 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 
 object Transport {
+    /** Internal marker, consumed before any bytes reach the server. */
+    const val IMAGE_HTTP_HEADER = "X-Lumenara-Image-Http"
+
+    private data class ImagePermission(val allowHttp: Boolean)
+
+    /** Dedicated, credential-free client; enforce permission again on every redirect hop. */
+    fun imageClient(): OkHttpClient = base.newBuilder()
+        .cookieJar(okhttp3.CookieJar.NO_COOKIES)
+        .authenticator(okhttp3.Authenticator.NONE)
+        .proxyAuthenticator(okhttp3.Authenticator.NONE)
+        .followSslRedirects(true)
+        .addInterceptor { chain ->
+            val request = chain.request()
+            val permission = ImagePermission(request.header(IMAGE_HTTP_HEADER) == "true")
+            if (!imageUrlAllowed(request.url, permission.allowHttp)) throw IOException("Image URL blocked")
+            chain.proceed(request.newBuilder().removeHeader(IMAGE_HTTP_HEADER)
+                .tag(ImagePermission::class.java, permission).build())
+        }
+        .addNetworkInterceptor { chain ->
+            val request = chain.request()
+            if (!imageUrlAllowed(request.url, request.tag(ImagePermission::class.java)?.allowHttp == true))
+                throw IOException("Image URL blocked")
+            chain.proceed(request.newBuilder().removeHeader("Cookie").removeHeader("Cookie2")
+                .removeHeader("Authorization").removeHeader("Proxy-Authorization").build())
+        }
+        .build()
+
+    internal fun imageUrlAllowed(url: okhttp3.HttpUrl, allowHttp: Boolean): Boolean =
+        (url.isHttps || allowHttp) && url.username.isEmpty() && url.password.isEmpty()
+
     private val base =
         OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)

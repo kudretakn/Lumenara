@@ -19,7 +19,6 @@ import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.*
-import coil.compose.AsyncImage
 import dev.lumenara.data.*
 import dev.lumenara.design.Ink
 import dev.lumenara.design.GlassPanel
@@ -31,7 +30,7 @@ internal fun Poster(model: LibraryModel, item: Item, modifier: Modifier) {
     Box(modifier.background(Ink.surface), contentAlignment = Alignment.Center) {
         Text(item.title.take(1), color = Ink.accent, fontSize = 30.sp)
         if (image != null)
-            AsyncImage(image, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            Artwork(model, item, image, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
     }
 }
 
@@ -243,6 +242,7 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
             positioned = true
         }
     }
+    PrefetchArtwork(model, grid, rows)
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { wallClockTicks(30_000).collect { now = it } }
     BackHandler(advanced) { closeFilters() }

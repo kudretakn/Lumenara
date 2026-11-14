@@ -22,11 +22,20 @@ class LumenaraApp : Application(), ImageLoaderFactory {
         androidx.media3.common.util.Log.setLogLevel(androidx.media3.common.util.Log.LOG_LEVEL_OFF)
     }
 
-    override fun newImageLoader() =
-        ImageLoader.Builder(this)
-            .okHttpClient(Transport.client(false))
-            .components { add(SvgDecoder.Factory()) }
+    override fun newImageLoader(): ImageLoader {
+        val disk = coil.disk.DiskCache.Builder().directory(java.io.File(cacheDir, "images"))
+            .maxSizeBytes(256L * 1024 * 1024).build()
+        val memory = coil.memory.MemoryCache.Builder(this).maxSizePercent(.15).build()
+        return ImageLoader.Builder(this)
+            .okHttpClient(Transport.imageClient())
+            .diskCache(disk)
+            .memoryCache(memory)
+            .respectCacheHeaders(false)
+            .allowRgb565(true)
+            .crossfade(false)
+            .components { add(ArtworkInterceptor(disk, memory)); add(SvgDecoder.Factory()) }
             .build()
+    }
 }
 
 @Module
