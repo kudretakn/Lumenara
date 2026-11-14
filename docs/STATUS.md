@@ -1,6 +1,6 @@
 # Durum
 
-Son güncelleme: 15 Kasım 2026 · Yerleşik API anahtarları PR'ı (0.3.1)
+Son güncelleme: 15 Kasım 2026 · Büyük katalog düzeltmesi (0.3.2)
 
 ## Biten
 - 0.3.0 arayüz yenilemesi (#1–#6), core/data testleri (#7), Lumenara adı ve logo (#8), tek tuşla güncelleme ve release.yml (#9), CHANGELOG 0.3.0 (#10).
@@ -10,12 +10,15 @@ Son güncelleme: 15 Kasım 2026 · Yerleşik API anahtarları PR'ı (0.3.1)
 - STATUS güncellemesi (#15).
 - **v0.3.0 yayınlandı** (14 Kasım 2026): https://github.com/kudretakn/Lumenara-releases/releases/tag/v0.3.0. Etiket #14 sonrası `main` üzerinde, yani U1–U2 dahil.
 - GitHub secret'ları tamam: `LUMENARA_KEYSTORE_B64`, `LUMENARA_KEYSTORE_PASSWORD`, `LUMENARA_RELEASES_TOKEN`, `OPENSUBTITLES_API_KEY`, `TMDB_READ_TOKEN`.
+- Yerleşik OpenSubtitles anahtarı ve TMDB token (#16). **v0.3.1 yayınlandı.** Kullanıcı kararı; ayrıntısı CLAUDE.md "Gizli bilgiler" maddesinde.
 
 ## Açık
-- **Yerleşik API anahtarları** (`feat/embedded-opensubtitles-key`, sürüm 0.3.1). Kullanıcı kararı; ayrıntısı CLAUDE.md "Gizli bilgiler" maddesinde.
-  - Release derlemesi `OPENSUBTITLES_API_KEY` ve `TMDB_READ_TOKEN` secret'larını `core/data` BuildConfig'ine gömer. Repoda ve CI'da değerler boş.
-  - Ayarlar'da girilen anahtar her zaman önce gelir.
-  - Merge sonrası `v0.3.1` etiketi atılacak.
+- **Büyük katalog düzeltmesi** (`fix/large-catalog-queries`, sürüm 0.3.2).
+  - Sorun: kullanıcının Mi Box 4'ünde (Android 9) 39.682 içerikli Xtream kaynağı eklenince Ana Sayfa, Canlı TV ve Filmler boş kaldı, uygulama donuyordu (%341 CPU, sürekli `CursorWindow: Window is full`).
+  - Neden: film/dizi sorguları `mergeVersions` öncesi bütün tabloyu okuyordu.
+  - Düzeltme: `LibraryDb.kt`'de SQL LIMIT eklendi (`VERSION_HEADROOM = 4`; vitrin 60, öneriler/devam et 96, koleksiyon 240).
+  - Yeni test: `LargeCatalogTest.homeAndMovieShelvesStayFastWithThirtyThousandMovies`. Kullanıcının TV'sinde geçti: vitrin 1,4 sn, son eklenenler 2,9 sn, yüksek puanlılar 0,7 sn, film listesi 5,4 sn. Mi Box'ta 30 bin satırın içe aktarılması ~6 dk sürdü.
+  - Merge sonrası `v0.3.2` etiketi atılacak.
 
 ## Sıradaki
 1. **U3** (`docs/USABILITY.md`). Kullanıcı başlama talimatı verene kadar bekliyor.
@@ -23,7 +26,8 @@ Son güncelleme: 15 Kasım 2026 · Yerleşik API anahtarları PR'ı (0.3.1)
    - Kanal sıralama: uzun OK menüsüne Yukarı/Aşağı/Başa al eklenir. Room şeması 7→8 olur ve `MigrationTest` güncellenir; tvg-chno da saklanır.
 2. ROADMAP eksikleri: izleme kaydı taşıma, TMDB alternatif başlık, altyazı eşitleme, performans ölçümü.
 3. Kozmetik: altyazı arama ekran görüntüsünde oynatıcının arkasında kitaplık görünüyor (opaklığı kontrol et).
-4. Windows'ta `SubtitleCache.save` düşüyor: `File.renameTo` hedef dosya varken başarısız oluyor (`SubtitleCache.kt:17`). Bu yüzden `SubtitleApiTest`'ten iki test yalnız Windows'ta düşüyor. CI (Linux) ve Android etkilenmiyor. Düzeltme yolu: `Files.move(..., REPLACE_EXISTING)`.
+4. Büyük katalog performansı devamı: 120 kartlık film listesi Mi Box'ta hâlâ 5,4 sn (bütün tabloda GROUP BY + başlığa göre sıralama). Sürüm anahtarını içe aktarmada bir sütuna yazmak ve indekslemek bunu kısaltır; U3'teki 7→8 şema geçişiyle birleştirilebilir. İçe aktarma süresi de ölçülmeli.
+5. Windows'ta `SubtitleCache.save` düşüyor: `File.renameTo` hedef dosya varken başarısız oluyor (`SubtitleCache.kt:17`). Bu yüzden `SubtitleApiTest`'ten iki test yalnız Windows'ta düşüyor. CI (Linux) ve Android etkilenmiyor. Düzeltme yolu: `Files.move(..., REPLACE_EXISTING)`.
 
 ## Kullanıcıdan beklenenler
 - TV'deki uygulamada Ayarlar → GitHub deposu = `kudretakn/Lumenara-releases`, ardından "Kaydet ve sürüm kontrolü yap" ve güncelle.
