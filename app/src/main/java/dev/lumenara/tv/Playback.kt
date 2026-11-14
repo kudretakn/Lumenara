@@ -77,8 +77,9 @@ internal fun Video(
                 val start =
                     if (resume >= 0) resume
                     else
-                        saved?.position?.takeIf {
-                            saved.duration <= 0 || it < saved.duration * 0.95
+                        saved?.let {
+                            if (item.kind == "EPISODE") dev.lumenara.catalog.resumePosition(it.position, it.duration)
+                            else it.position.takeIf { position -> it.duration <= 0 || position < it.duration * .95 } ?: 0
                         } ?: 0
                 val engine =
                     createPlayer(
@@ -162,7 +163,8 @@ internal fun Video(
     DisposableEffect(item.id, attempt, subtitle) {
         onDispose {
             player?.let { engine ->
-                resume = engine.currentPosition
+                resume = if (engine.playbackState == Player.STATE_ENDED && engine.duration > 0)
+                    engine.duration else engine.currentPosition
                 model.progress(item, resume, engine.duration)
                 engine.release()
                 player = null
@@ -269,8 +271,12 @@ internal fun Playback(
     val fullscreen = rememberFullscreenState(item)
     var subtitle by remember { mutableStateOf<MediaItem.SubtitleConfiguration?>(null) }
     fun move(delta: Int) {
-        val at = group.indexOfFirst { it.id == item.id }
-        group.getOrNull(at + delta)?.let(select)
+        if (item.kind == "EPISODE" && delta == 1) group.nextItem(item)?.let(select)
+        else {
+            val rows = if (item.kind == "EPISODE") group.seriesOrder() else group
+            val at = rows.indexOfFirst { it.id == item.id }
+            if (at >= 0) rows.getOrNull(at + delta)?.let(select)
+        }
     }
     val preferred by remember {
         model.prefs.text("engine", "Media3")
@@ -369,14 +375,14 @@ internal fun Playback(
             },
             ended = {
                 if (item.kind == "EPISODE")
-                    fullscreen.finished = group.getOrNull(group.indexOfFirst { it.id == item.id } + 1) != null
+                    fullscreen.finished = group.nextItem(item) != null
             },
         )
         if (!panel) FullscreenOverlay(model, item, group, fullscreen,
             { channel, rows -> changeGroup(rows); select(channel) },
             { panel = true },
             { engine?.currentPosition ?: 0 }, { engine?.duration ?: 0 },
-            if (item.kind == "EPISODE" && group.getOrNull(group.indexOfFirst { it.id == item.id } + 1) != null)
+            if (item.kind == "EPISODE" && group.nextItem(item) != null)
                 ({ move(1) }) else null)
         numbers?.let { NumberEntry(it) }
         if (panel) {

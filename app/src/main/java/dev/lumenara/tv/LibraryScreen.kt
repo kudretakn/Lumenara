@@ -59,7 +59,7 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
     }
     val open: (Item) -> Unit = { detail = it }
     val play: (Item, List<Item>) -> Unit = { item, group ->
-        siblings = group
+        siblings = if (item.kind == "EPISODE") group.seriesOrder() else group
         playing = item
     }
     val item = playing
@@ -91,7 +91,9 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
         }
     }
     detail?.let {
-        key(it.id) { Details(model, it, play) { detail = null } }
+        pages.SaveableStateProvider("details-${it.id}") {
+            key(it.id) { Details(model, it, play) { detail = null } }
+        }
         return
     }
     val width by animateDpAsState(if (railFocus) 240.dp else 72.dp, label = "Menü genişliği")

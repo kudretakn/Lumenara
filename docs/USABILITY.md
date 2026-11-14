@@ -38,6 +38,17 @@ Kullanıcının kaynağı Xtream; diziler API'den dizi, sezon ve bölüm olarak 
 7. **Tür ipuçları:** M3U `group-title` içinde "VOD", "Film", "Movie", "Sinema" geçen kayıtlar MOVIE, "Dizi", "Series", "Sezon" geçenler EPISODE ya da SERIES sayılır. Uzantısız ya da `.ts` uzantılı film adresleri grup ipucuyla film olarak sınıflanır. Canlı kanal varsayılan olarak kalır.
 8. **Testler:** Gerçek sağlayıcı biçimlerinden türetilmiş anonim M3U ve Xtream örnekleriyle JVM testleri yazılır (ayrıştırma, gruplama, sezon ve bölüm sıralama, devam et seçimi, izlenme kuralı). Cihaz testinde dizi kartı → sezon → bölüm → oynat → geri → ✓ ve "Devam et" akışı denenir.
 
+## A — Dublaj ve altyazı (S'den sonra, U2'den önce)
+
+Kullanıcı kararları (14 Kasım 2026): internetten altyazı önce OpenSubtitles'tan, bulunamazsa Subdl'dan alınır ve yalnız kullanıcı istediğinde çekilir; Türkçe dublaj varsa varsayılan odur; sağlayıcının ayrı "Dublaj" ve "Altyazılı" kayıtları tek kartta birleşir.
+
+1. **Sürüm birleştirme:** Aynı yapımın sağlayıcıdaki "Dublaj", "TR Dublaj", "Türkçe Dublaj" ve "Altyazılı", "TR Altyazı" kayıtları başlık, yıl ve TMDB numarası normalize edilerek tek kartta birleşir. Detayda ve oynatıcı panelinde "Dublaj / Altyazılı" seçimi bulunur. İzleme ilerlemesi ve liste/favori durumu sürümler arasında ortaktır. Dizilerde aynı birleştirme dizi düzeyinde yapılır.
+2. **Varsayılan dil:** Dublajlı sürüm ya da yayında Türkçe ses izi varsa o seçilir ve altyazı kapalı kalır. Yoksa orijinal ses ve Türkçe altyazı (yayındaki ya da daha önce indirilmiş) açılır. Kullanıcının bir yapım için yaptığı seçim hatırlanır.
+3. **İz seçimi:** Media3 ve VLC'de ses ve altyazı izleri dil adıyla listelenir. Altyazı kaydırma (±0,5 sn adımlarla) iki motorda da vardır.
+4. **Altyazı ara:** Oynatıcı panelindeki düğmeyle açılır. Arama TMDB/IMDb numarası (Xtream `get_vod_info` / `get_series_info` içinden) ve sezon/bölüm bilgisiyle, numara yoksa başlık ve yılla yapılır. Önce OpenSubtitles REST API v1 sorgulanır; sonuç yoksa ya da kota dolduysa Subdl API. Sonuç listesinde dil, sürüm adı, indirme sayısı ve kaynak görünür. Seçilen altyazı indirilir, kodlaması algılanır (UTF-8 / Windows-1254 / ISO-8859-9 → UTF-8), SRT/VTT/ASS olarak oynatıma eklenir ve uygulama önbelleğinde tutulur. Aynı içerik tekrar açılınca önbellekten gelir.
+5. **Anahtarlar:** Ayarlar'da "OpenSubtitles API anahtarı" ve "Subdl API anahtarı" alanları bulunur. Anahtarlar Keystore ile şifrelenip DataStore'da saklanır, loglara ve tanılamaya yazılmaz. Anahtar yoksa "Altyazı ara" düğmesi kısa bir yönlendirme gösterir.
+6. **Testler:** Sürüm birleştirme normalizasyonu, kodlama algılama ve iki API'nin yanıt ayrıştırması (MockWebServer) için JVM testleri yazılır. Cihaz testinde "Dublaj / Altyazılı" geçişi ve sahte API ile altyazı arama → seçme → ekranda altyazı akışı denenir.
+
 ## U2 — Program bulma
 
 - **Ara:** "Programlar" rafı eklenir. Sorgu `Guide` program aramasından gelir (mevcut `instr(search, query)` sorgusu). Kartta program adı, kanal, gün ve saat bulunur. OK: yayın şu an sürüyorsa kanalı tam ekran açar; arşivi varsa arşivden oynatır; yoksa kanalın detayını açar.

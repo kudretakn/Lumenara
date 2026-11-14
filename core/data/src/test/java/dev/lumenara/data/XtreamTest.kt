@@ -17,6 +17,15 @@ class XtreamTest {
   val episodes=Xtream(SourceSpec(s.url("/").toString(),true,"u","p")).episodes(s.url("episodes").toString(),"Series")
   assertEquals(2,episodes.size); assertEquals(Kind.EPISODE,episodes[0].kind); assertEquals("Sezon 1",episodes[0].group); assertEquals(1200,episodes[1].introStartMs); assertEquals(3400,episodes[1].introEndMs)
  }
+ @Test fun anonymousGetSeriesInfoOrdersEpisodesAndReadsDurationAndSeason() = MockWebServer().use { s ->
+  s.enqueue(MockResponse().setBody("""{"info":{"name":"Kıyı"},"seasons":[{"season_number":2},{"season_number":1}],"episodes":{"2":[{"id":"205","episode_num":5,"season":2,"title":"Dönüş","container_extension":"mkv","info":{"duration_secs":2400,"movie_image":"https://art.invalid/205.jpg","plot":"Yeni başlangıç"}}],"1":[{"id":"110","episode_num":10,"season":1,"title":"Final","info":{"duration":"00:42:00"}},{"id":"102","episode_num":2,"season":1,"title":"Yol"}]}}"""))
+  val rows=Xtream(SourceSpec(s.url("/").toString(),true,"u","p")).episodes(s.url("/player_api.php?action=get_series_info&series_id=10").toString(),"Kıyı")
+  assertEquals(listOf(2,10,5), rows.map { dev.lumenara.catalog.episodeName(it.title).episode })
+  assertEquals(listOf(1,1,2), rows.map { dev.lumenara.catalog.episodeName(it.title).season })
+  assertTrue(rows.last().url.endsWith("/series/u/p/205.mkv"))
+  assertEquals(2400000L,rows.last().durationMs); assertEquals(2520000L,rows[1].durationMs)
+  assertEquals("Yeni başlangıç",rows.last().summary)
+ }
  @Test fun episodeParsingSkipsMalformedEntriesAndUsesDefaults() = MockWebServer().use { s ->
   s.enqueue(MockResponse().setBody("""{"episodes":{"1":[null,{"title":"missing id"},{"id":"ok","title":"Fine"}]}}"""))
   val ep=Xtream(SourceSpec(s.url("/").toString(),true)).episodes(s.url("episodes").toString(),"Show").single()

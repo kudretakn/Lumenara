@@ -13,6 +13,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import dev.lumenara.data.Item
+import dev.lumenara.data.nextItem
 import dev.lumenara.design.*
 import kotlinx.coroutines.flow.collect
 
@@ -35,7 +36,7 @@ internal class FullscreenState {
     fun openGuide() { guide = true; activity = System.currentTimeMillis(); bannerUntil = 0 }
     fun dismiss(): Boolean = when {
         guide -> { guide = false; true }
-        bannerUntil > now -> { bannerUntil = 0; true }
+        bannerUntil > now && !finished -> { bannerUntil = 0; true }
         else -> false
     }
     fun key(key: KeyEvent, live: Boolean, move: (Int) -> Unit, options: () -> Unit,
@@ -100,7 +101,13 @@ internal fun BoxScope.FullscreenOverlay(
             val focus = remember { FocusRequester() }
             LaunchedEffect(Unit) { focus.requestFocus() }
             FocusCard(next, Modifier.padding(16.dp).fillMaxWidth().focusRequester(focus)) {
-                Text("Sonraki bölüm  ▶", Modifier.padding(20.dp), fontSize = 20.sp)
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Sonraki bölüm  ▶", fontSize = 20.sp)
+                    group.nextItem(item)?.let { episode ->
+                        val name = dev.lumenara.catalog.episodeName(episode.title, episode.category)
+                        Text("S${name.season} B${name.episode} · ${name.title}", color = Ink.muted, fontSize = 14.sp, maxLines = 2)
+                    }
+                }
             }
         }
     } else if (state.bannerUntil > state.now) {

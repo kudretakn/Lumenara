@@ -10,6 +10,14 @@ class CatalogStageTest {
   val dir=Files.createTempDirectory("catalog-stage").toFile(); val stage=CatalogStage(dir,"source",7)
   try { stage.write { emit -> emit(item()) }; val rows=mutableListOf<Item>(); stage.read { rows.addAll(it) }; assertEquals(1,rows.size); assertEquals("Title",rows[0].title); assertEquals(100,rows[0].introStartMs); assertEquals("https://example.test/bg.jpg",rows[0].backdrop) } finally { stage.close(); dir.deleteRecursively() }
  }
+ @Test fun preservesVirtualSeriesParentThroughStaging() {
+  val dir=Files.createTempDirectory("series-stage").toFile(); val stage=CatalogStage(dir,"source",7)
+  try {
+   stage.write { emit -> emit(item("series").copy(kind="SERIES")); emit(item("episode").copy(kind="EPISODE",parent="series",category="Sezon 2",title="Dizi · S2E5 · Bölüm")) }
+   val rows=mutableListOf<Item>(); stage.read { rows.addAll(it) }
+   assertEquals("series",rows.last().parent); assertEquals(2,rows.last().seriesEpisode().season); assertEquals(5,rows.last().seriesEpisode().episode)
+  } finally { stage.close(); dir.deleteRecursively() }
+ }
  @Test fun emptyCatalogFailsClearly() {
   val dir=Files.createTempDirectory("catalog-stage").toFile(); val stage=CatalogStage(dir,"source",1)
   try { assertTrue(runCatching { stage.write { } }.exceptionOrNull() is SourceFailure) } finally { stage.close(); dir.deleteRecursively() }

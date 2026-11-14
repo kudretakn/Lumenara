@@ -17,6 +17,8 @@ import androidx.lifecycle.*
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.tv.material3.*
 import dev.lumenara.data.Item
+import dev.lumenara.data.nextItem
+import dev.lumenara.data.seriesOrder
 import dev.lumenara.design.Ink
 import dev.lumenara.design.glass
 import androidx.compose.ui.semantics.contentDescription
@@ -46,7 +48,12 @@ internal fun VlcScreen(
     var panel by remember { mutableStateOf(false) }
     var position by remember(item.id) { mutableLongStateOf(initial) }
     val fullscreen = rememberFullscreenState(item)
-    fun move(delta: Int) { group.getOrNull(group.indexOfFirst { it.id == item.id } + delta)?.let { select(it, group) } }
+    fun move(delta: Int) {
+        val rows = if (item.kind == "EPISODE") group.seriesOrder() else group
+        val target = if (item.kind == "EPISODE" && delta == 1) rows.nextItem(item)
+            else rows.indexOfFirst { it.id == item.id }.takeIf { it >= 0 }?.let { rows.getOrNull(it + delta) }
+        target?.let { select(it, rows) }
+    }
     BackHandler { if (panel) panel = false else if (!fullscreen.dismiss()) back() }
     if (!life.isAtLeast(Lifecycle.State.STARTED)) return
     val numbers = if (item.kind == "LIVE") rememberLiveNumberControl(model, item.source, item.id, select) else null
@@ -81,13 +88,17 @@ internal fun VlcScreen(
             var input: VlcInput? = null
             var library: LibVLC? = null
             var engine: MediaPlayer? = null
+            var completed = false
             try {
                 val source = model.repo.library.source(item.source) ?: error("Kaynak kaldırıldı")
                 val address = model.repo.address(item)
                 val mark = model.repo.library.mark(item.id)
                 val start =
                     if (position >= 0) position
-                    else mark?.position?.takeIf { mark.duration <= 0 || it < mark.duration * 0.95 } ?: 0
+                    else mark?.let {
+                        if (item.kind == "EPISODE") dev.lumenara.catalog.resumePosition(it.position, it.duration)
+                        else it.position.takeIf { position -> it.duration <= 0 || position < it.duration * .95 } ?: 0
+                    } ?: 0
                 withContext(Dispatchers.IO) {
                     input = VlcInput.open(context, address, source.allowHttp)
                     // Native initialization and media setup can block for seconds.
@@ -128,9 +139,10 @@ internal fun VlcScreen(
                                     }
                                 }
                                 MediaPlayer.Event.EndReached -> {
+                                    completed = true
                                     model.progress(item, p.length, p.length)
                                     if (item.kind == "EPISODE")
-                                        fullscreen.finished = group.getOrNull(group.indexOfFirst { row -> row.id == item.id } + 1) != null
+                                        fullscreen.finished = group.nextItem(item) != null
                                 }
                             }
                         }
@@ -163,7 +175,7 @@ internal fun VlcScreen(
                                 val length = it.length
                                 withContext(Dispatchers.Main.immediate) {
                                     position = lastPosition
-                                    model.progress(item, lastPosition, length)
+                                    model.progress(item, if (completed && length > 0) length else lastPosition, length)
                                 }
                             }
                         } finally {
@@ -216,7 +228,7 @@ internal fun VlcScreen(
         )
         if (!panel) FullscreenOverlay(model, item, group, fullscreen, select, { panel = true },
             { player?.time ?: 0 }, { player?.length ?: 0 },
-            if (item.kind == "EPISODE" && group.getOrNull(group.indexOfFirst { it.id == item.id } + 1) != null) next else null)
+            if (item.kind == "EPISODE" && group.nextItem(item) != null) next else null)
         Reconnecting(retry)
         numbers?.let { NumberEntry(it) }
         if (panel) {
