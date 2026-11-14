@@ -11,6 +11,8 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -73,8 +75,32 @@ class Repository private constructor(private val context: Context) {
         hidden.flatMapLatest { library.liveCategoryCounts(source, it) }
     fun liveByIds(source: String, ids: List<String>) =
         hidden.flatMapLatest { library.liveByIds(source, ids, it) }
-    fun liveChannelOrder(source: String) =
-        hidden.flatMapLatest { library.liveChannelOrder(source, it) }
+    private val liveScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val liveOrders = mutableMapOf<String, StateFlow<List<LiveChannelId>>>()
+    // Room invalidation refreshes imports/deletions; hidden changes restart the filtered query.
+    // Keep the flow alive between screens, so each source is queried just once per invalidation.
+    fun liveChannelOrder(source: String): StateFlow<List<LiveChannelId>> = synchronized(liveOrders) {
+        liveOrders.getOrPut(source) {
+            hidden.flatMapLatest { library.liveChannelOrder(source, it) }
+                .distinctUntilChanged().stateIn(liveScope, SharingStarted.Lazily, emptyList())
+        }
+    }
+    suspend fun liveChannel(number: Int, source: String): Item? {
+        if (number < 1) return null
+        val visible = hidden.first()
+        val selectedSource = source.ifEmpty {
+            library.snapshot().firstOrNull {
+                library.liveAtOffset(it.id, 0, visible) != null
+            }?.id ?: return null
+        }
+        return library.liveAtOffset(selectedSource, number - 1, visible)
+    }
+    fun livePage(source: String, category: String, query: String, shelf: String, limit: Int, offset: Int) =
+        hidden.flatMapLatest { library.livePage(source, category, query, shelf, limit, offset, it) }
+    fun liveCount(source: String, category: String = "", query: String = "", shelf: String = "") =
+        hidden.flatMapLatest { library.liveCount(source, category, query, shelf, it) }
+    suspend fun liveIndex(source: String, id: String, category: String = "", query: String = "", shelf: String = "") =
+        library.liveIndex(source, id, category, query, shelf, hidden.first())
     fun episodes(id: String) = hidden.flatMapLatest { library.episodes(id, it) }
     suspend fun episodeSnapshot(id: String) = library.episodeSnapshot(id, hidden.first())
     fun continueWatching(source: String) =

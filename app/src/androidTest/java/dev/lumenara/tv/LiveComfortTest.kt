@@ -85,7 +85,7 @@ class LiveComfortTest {
                     prefs.set("recent_live", "")
                     repo.add(name, SourceSpec(server.url("/list").toString(), true))
                     val source = repo.library.snapshot().single { it.name == name }
-                    repo.library.browse(source.id, "LIVE", "", "", "", Int.MAX_VALUE).first()
+                    repo.livePage(source.id, "", "", "", 80, 0).first()
                 }
                 screen.runOnUiThread {
                     val model = ViewModelProvider(screen.activity)[LibraryModel::class.java]
@@ -106,6 +106,20 @@ class LiveComfortTest {
                 await(hasTestTag("live-reconnecting"), false)
                 assertTrue(requests.get() >= 3)
                 await(hasContentDescription("Tam ekran oynatıcı") and isFocused())
+                fun findVideo(view: android.view.View): androidx.media3.ui.PlayerView? {
+                    if (view is androidx.media3.ui.PlayerView) return view
+                    if (view is android.view.ViewGroup) for (index in 0 until view.childCount) {
+                        findVideo(view.getChildAt(index))?.let { return it }
+                    }
+                    return null
+                }
+                var originalView: androidx.media3.ui.PlayerView? = null
+                var originalPlayer: androidx.media3.common.Player? = null
+                if (engine == "Media3") screen.runOnIdle {
+                    originalView = findVideo(screen.activity.window.decorView)
+                    originalPlayer = originalView?.player
+                    assertNotNull(originalPlayer)
+                }
                 screen.dpad(Key.Two)
                 await(hasText("2") and hasAnyAncestor(hasTestTag("live-number-entry")))
                 // No OK: the last digit must commit automatically after 1.5 seconds.
@@ -114,6 +128,11 @@ class LiveComfortTest {
                 await(hasTestTag("fullscreen-banner"))
                 screen.onNode(hasText("2") and hasAnyAncestor(hasTestTag("fullscreen-banner"))).assertExists()
                 screen.waitUntil(30_000) { runBlocking { prefs.recentLive.first().take(2) == listOf(channels[1].id, channels[0].id) } }
+                if (engine == "Media3") screen.runOnIdle {
+                    val currentView = findVideo(screen.activity.window.decorView)
+                    assertSame("Channel switches keep the video view", originalView, currentView)
+                    assertSame("Channel switches reuse ExoPlayer", originalPlayer, currentView?.player)
+                }
                 shot("u1-channel-two-$engine")
                 screen.dpad(Key.Zero)
                 await(hasTestTag("u1-host") and SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, channels[0].id))

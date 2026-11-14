@@ -163,17 +163,16 @@ private fun MiniGuide(model: LibraryModel, playing: Item, state: FullscreenState
     var category by remember { mutableStateOf("") }
     val categories by remember(playing.source) { model.repo.categories("LIVE", playing.source) }
         .collectAsStateWithLifecycle(emptyList())
-    val rows by key(playing.source, category) {
-        remember(playing.source, category) {
-            model.repo.browse(playing.source, "LIVE", category, "", "", Int.MAX_VALUE)
-        }.collectAsStateWithLifecycle(emptyList())
-    }
+    val channels = rememberLivePages(model, playing.source, category, returnId = playing.id)
     val list = rememberLazyListState()
     val currentFocus = remember(category) { FocusRequester() }
-    val target = rows.indexOfFirst { it.id == playing.id }.coerceAtLeast(0)
+    val target = channels.anchor ?: 0
     var positioned by remember(category) { mutableStateOf(false) }
-    LaunchedEffect(rows, category) {
-        if (rows.isNotEmpty() && !positioned) { list.scrollToItem(target); positioned = true }
+    LaunchedEffect(channels[target], category) {
+        if (channels[target] != null && !positioned) { list.scrollToItem(target); positioned = true }
+    }
+    LaunchedEffect(channels, positioned) {
+        if (positioned) snapshotFlow { list.firstVisibleItemIndex }.collect { channels.focused(it) }
     }
     GlassPanel(Modifier.fillMaxWidth(.42f).padding(start = 12.dp, top = 12.dp, bottom = 12.dp)
         .fillMaxHeight().testTag("mini-guide").onPreviewKeyEvent {
@@ -196,13 +195,18 @@ private fun MiniGuide(model: LibraryModel, playing: Item, state: FullscreenState
                 val rowHeight = minOf(80.dp, (maxHeight - 16.dp - 4.dp * 7) / 8)
                 LazyColumn(Modifier.fillMaxSize().testTag("mini-guide-channels"), state = list,
                     verticalArrangement = Arrangement.spacedBy(4.dp), contentPadding = PaddingValues(8.dp)) {
-                    itemsIndexed(rows, key = { _, row -> row.id }) { index, row ->
+                    items(channels.count, key = { it }) { index ->
+                        val row = channels[index]
+                        if (row == null) {
+                            Box(Modifier.fillMaxWidth().height(rowHeight))
+                            return@items
+                        }
                         val isTarget = index == target
                         if (isTarget && positioned) LaunchedEffect(category, positioned) { currentFocus.requestFocus() }
                         LiveChannelRow(model, row, numbers[row.id] ?: 1, state.now / 30_000 * 30_000,
-                            { state.guide = false; state.showBanner(); select(row, rows) },
+                            { Perf.mark("channel"); state.guide = false; state.showBanner(); select(row, channels.loaded()) },
                             { state.guide = false; options() },
-                            { state.activity = System.currentTimeMillis() },
+                            { channels.focused(index); state.activity = System.currentTimeMillis() },
                             if (isTarget) Modifier.focusRequester(currentFocus) else Modifier,
                             selected = row.id == playing.id, compactHeight = rowHeight)
                     }

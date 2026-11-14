@@ -98,6 +98,37 @@ data class LiveChannelId(val id: String, val source: String)
 
 @Dao
 interface LibraryDao {
+    @Query("""SELECT * FROM items WHERE kind='LIVE' AND source=:source
+        AND category NOT IN (:hidden) ORDER BY title,id LIMIT 1 OFFSET :offset""")
+    suspend fun liveAtOffset(source: String, offset: Int, hidden: List<String> = emptyList()): Item?
+
+    @Query("""SELECT items.* FROM items LEFT JOIN marks USING(id)
+        WHERE kind='LIVE' AND (:source='' OR source=:source) AND category NOT IN (:hidden)
+        AND (:category='' OR category=:category) AND instr(search,:query)>0
+        AND (:shelf!='favorite' OR favorite=1)
+        ORDER BY title,items.id LIMIT :limit OFFSET :offset""")
+    fun livePage(source: String, category: String, query: String, shelf: String, limit: Int,
+        offset: Int, hidden: List<String> = emptyList()): Flow<List<Item>>
+
+    @Query("""SELECT COUNT(*) FROM items LEFT JOIN marks USING(id)
+        WHERE kind='LIVE' AND (:source='' OR source=:source) AND category NOT IN (:hidden)
+        AND (:category='' OR category=:category) AND instr(search,:query)>0
+        AND (:shelf!='favorite' OR favorite=1)""")
+    fun liveCount(source: String, category: String, query: String, shelf: String,
+        hidden: List<String> = emptyList()): Flow<Int>
+
+    // The same BINARY title/id order as livePage; missing/hidden targets have no index.
+    @Query("""SELECT (SELECT COUNT(*) FROM items i LEFT JOIN marks m ON m.id=i.id
+        WHERE i.kind='LIVE' AND (:source='' OR i.source=:source) AND i.category NOT IN (:hidden)
+        AND (:category='' OR i.category=:category) AND instr(i.search,:query)>0
+        AND (:shelf!='favorite' OR m.favorite=1) AND (i.title,i.id)<(t.title,t.id))
+        FROM items t LEFT JOIN marks tm ON tm.id=t.id WHERE t.id=:id AND t.kind='LIVE'
+        AND (:source='' OR t.source=:source) AND t.category NOT IN (:hidden)
+        AND (:category='' OR t.category=:category) AND instr(t.search,:query)>0
+        AND (:shelf!='favorite' OR tm.favorite=1)""")
+    suspend fun liveIndex(source: String, id: String, category: String = "", query: String = "",
+        shelf: String = "", hidden: List<String> = emptyList()): Int?
+
     @Query("""SELECT id,source FROM items WHERE kind='LIVE' AND category NOT IN (:hidden) AND (:source='' OR source=:source)
         ORDER BY source,title,id""")
     fun liveChannelOrder(source: String, hidden: List<String> = emptyList()): Flow<List<LiveChannelId>>

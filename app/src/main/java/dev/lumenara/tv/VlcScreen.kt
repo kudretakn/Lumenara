@@ -55,7 +55,19 @@ internal fun VlcScreen(
     var panel by remember { mutableStateOf(false) }
     var position by remember(item.id) { mutableLongStateOf(initial) }
     val fullscreen = rememberFullscreenState(item)
+    val moveScope = rememberCoroutineScope()
+    var moveJob by remember { mutableStateOf<Job?>(null) }
+    val activeId by rememberUpdatedState(item.id)
     fun move(delta: Int) {
+        if (item.kind == "LIVE" && group is LiveChannelGroup) {
+            moveJob?.cancel()
+            moveJob = moveScope.launch {
+                liveNeighbor(model, item, group, delta)?.let { (channel, rows) ->
+                    if (activeId == item.id) { Perf.mark("channel"); select(channel, rows) }
+                }
+            }
+            return
+        }
         val rows = if (item.kind == "EPISODE") group.seriesOrder() else group
         val target = if (item.kind == "EPISODE" && delta == 1) rows.nextItem(item)
             else rows.indexOfFirst { it.id == item.id }.takeIf { it >= 0 }?.let { rows.getOrNull(it + delta) }
@@ -280,6 +292,7 @@ internal fun VlcScreen(
                                     }
                                 }
                                 MediaPlayer.Event.Vout -> {
+                                    if (event.voutCount > 0) Perf.since("channel", "channel_first_frame_vlc")
                                     slaveRetryEvent++
                                     refreshCurrentSlave(p)
                                 }

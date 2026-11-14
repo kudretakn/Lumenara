@@ -87,7 +87,10 @@ internal fun CategoryGrid(title: String, entries: List<CategoryEntry>, choose: (
                     Modifier.fillMaxWidth().height(120.dp).testTag("category-${entry.name}")
                         .semantics { contentDescription = "${entry.name} · ${entry.count}" }
                         .then(if (index == target) Modifier.focusRequester(focus) else Modifier)
-                        .onFocusChanged { if (it.isFocused) last = entry.id }) { choose(entry) }
+                        .onFocusChanged { if (it.isFocused) last = entry.id }) {
+                    Perf.mark("category")
+                    choose(entry)
+                }
             }
         }
     }
