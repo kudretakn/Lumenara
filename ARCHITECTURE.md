@@ -1,4 +1,4 @@
-# Streamora mimarisi
+# Lumenara mimarisi
 TV arayüzü küçük durum modellerini gözlemler. Kumanda odağı ve geçici panel durumu Compose katmanında, katalog ve kullanıcı tercihleri veri katmanında yaşar. Disk ve ağ işlemleri ana iş parçacığı dışında çalışır.
 
 | Modül | Sorumluluk |

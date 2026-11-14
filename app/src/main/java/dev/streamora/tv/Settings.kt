@@ -71,7 +71,7 @@ internal fun SettingsScreen(
                             .bufferedWriter()
                             .use {
                                 it.write(
-                                    "Streamora · API ${android.os.Build.VERSION.SDK_INT}\n$codecs\nKaynak sayısı: ${sources.size}\n$log"
+                                    "Lumenara · API ${android.os.Build.VERSION.SDK_INT}\n$codecs\nKaynak sayısı: ${sources.size}\n$log"
                                 )
                             }
                     }
@@ -105,7 +105,7 @@ internal fun SettingsScreen(
                 Text("IPTV Kaynakları")
             }
         }
-        item { Text("Türkçe   ·   Antrasit tema   ·   Streamora 0.1", color = Ink.muted) }
+        item { Text("Türkçe   ·   Antrasit tema   ·   Lumenara 0.1", color = Ink.muted) }
         item { Text("Oynatıcı", fontSize = 20.sp) }
         item { Choice(model, "engine", "Varsayılan motor", listOf("Media3", "VLC")) }
         item { Choice(model, "fallback", "Codec hatasında VLC", listOf("Açık", "Kapalı")) }
@@ -218,7 +218,7 @@ internal fun SettingsScreen(
                 Button(
                     enabled = !busy,
                     onClick = {
-                        runCatching { download.launch("Streamora-${info.version}.apk") }
+                        runCatching { download.launch("Lumenara-${info.version}.apk") }
                             .onFailure {
                                 model.notice.value = "Bu TV’de dosya kaydetme hizmeti bulunamadı."
                             }
@@ -269,7 +269,7 @@ internal fun SettingsScreen(
             item {
                 Button(
                     onClick = {
-                        runCatching { export.launch("streamora-tanilama.txt") }
+                        runCatching { export.launch("lumenara-tanilama.txt") }
                             .onFailure {
                                 model.notice.value = "Bu TV’de belge seçici bulunamadı."
                             }

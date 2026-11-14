@@ -1,4 +1,4 @@
-# Streamora 0.2.0 kapsamı
+# Lumenara 0.2.0 kapsamı
 
 | Aşama | Bu sürümde | Kalan doğrulama veya geliştirme |
 |---|---|---|

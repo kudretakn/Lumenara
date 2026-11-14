@@ -177,8 +177,8 @@ internal class PairSession(address: Inet4Address) : Closeable {
 
     companion object {
         private const val FORM =
-            """<!doctype html><html lang="tr"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Streamora</title>
-        <h1>Streamora</h1><form method="post"><p><label>TV eşleştirme kodu <input name="code" required inputmode="numeric"></label></p>
+            """<!doctype html><html lang="tr"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Lumenara</title>
+        <h1>Lumenara</h1><form method="post"><p><label>TV eşleştirme kodu <input name="code" required inputmode="numeric"></label></p>
         <p><label>Liste adı <input name="name" required></label></p><p><label>M3U veya Xtream sunucu adresi <input type="url" name="address" required></label></p>
         <p><label>Xtream kullanıcı adı <input name="user"></label></p><p><label>Xtream şifre <input type="password" name="password"></label></p>
         <p><label><input type="checkbox" name="http"> Bu kaynak için HTTP erişimine izin ver</label></p><button>TV’ye aktar</button></form></html>"""

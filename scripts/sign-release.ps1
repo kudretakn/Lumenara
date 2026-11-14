@@ -44,8 +44,8 @@ try {
     New-Item -ItemType Directory -Force -Path $dist | Out-Null
     $metadata = Get-Content -Raw -LiteralPath (Join-Path (Split-Path $unsigned) 'output-metadata.json') | ConvertFrom-Json
     $version = $metadata.elements[0].versionName
-    $outputFile = Join-Path $dist "Streamora-$version-release.apk"
-    $staging = Join-Path $dist "Streamora-$version-pending.apk"
+    $outputFile = Join-Path $dist "Lumenara-$version-release.apk"
+    $staging = Join-Path $dist "Lumenara-$version-pending.apk"
     & $signTool sign --v4-signing-enabled false --ks $keyFile --ks-key-alias streamora --ks-pass env:STREAMORA_SIGN_PASS --out $staging $unsigned
     if ($LASTEXITCODE -ne 0) { throw 'APK imzalanamadı.' }
     & $signTool verify --verbose --print-certs $staging

@@ -1,6 +1,8 @@
-# Sürüm kaydı
+# Lumenara sürüm kaydı
 
 ## 0.3.0 (geliştiriliyor)
+
+- Uygulama adı Lumenara oldu; uygulama kimliği ve veriler korunur.
 
 - Filmler/Diziler için kategori Pill satırı, filtre sayılı sağ cam panel ve altı sütunlu afiş ızgarası; Listem için favori/liste sekmeleri ve EPG bilgili kanal kartları eklendi. Ara, metin/ses girişi ve türe göre boş olmayan raflara ayrıldı. Detayda ilk odak oynat düğmesinde, sezon sekmeleri ve ilerlemeli yatay bölüm kartları gösterilir. Sinema yolculuğu filtre paneli, arama rafları ve `screens/movies.png`, `screens/details.png`, `screens/search.png` çekim adımlarıyla güncellendi.
 

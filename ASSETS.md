@@ -1,4 +1,10 @@
-# Streamora görsel kaynakları
+# Lumenara görsel kaynakları
+
+## Başlatıcı bannerı ve simgesi
+
+`app/src/main/res/drawable-xhdpi/banner.png`, FFmpeg ve sistemdeki DejaVu Sans Bold yazı tipiyle 320×180 PNG olarak çizildi: `#14171C` koyu zemin, solda beyaz kalın Lumenara yazısı ve altında `#8299C8` vurgu çizgisi.
+
+`app/src/main/res/drawable/mark.xml`, 48×48 vektör olarak çizildi: koyu zemin üzerinde sıcak ışık kaynağı, mavi ışık huzmesi ve sahne çizgisi.
 
 ## Uygulamadaki ortam görseli
 
