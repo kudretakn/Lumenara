@@ -238,76 +238,80 @@ internal fun Browse(
     LaunchedEffect(Unit) { wallClockTicks(30_000).collect { now = it } }
     BackHandler(advanced) { closeFilters() }
     val panelFocus = remember { FocusRequester() }
-    Column(Modifier.fillMaxSize().focusProperties {
-        if (advanced) canFocus = false
-    }.focusGroup(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        if (section == "Listem") {
-            LazyRow(contentPadding = PaddingValues(6.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                items(listOf("Favoriler", "İzleme Listem")) { tab ->
-                    Pill(tab, listTab == tab, onClick = { listTab = tab })
-                }
-            }
-        }
-        if (kind == "MOVIE" || kind == "SERIES") {
-            Row(verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                LazyRow(Modifier.weight(1f).focusRestorer().focusGroup(),
-                    contentPadding = PaddingValues(6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(listOf("") + groups, key = { it }) { group ->
-                        Pill(group.ifEmpty { "Tümü" }, category == group,
-                            onClick = { category = group })
+    // Keep the filter layer over the content instead of consuming another Column slot.
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().focusProperties {
+            if (advanced) canFocus = false
+        }.focusGroup(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (section == "Listem") {
+                LazyRow(contentPadding = PaddingValues(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    items(listOf("Favoriler", "İzleme Listem")) { tab ->
+                        Pill(tab, listTab == tab, onClick = { listTab = tab })
                     }
                 }
-                val count = listOf(year, genre, language).count { it.isNotEmpty() } +
-                    if (rating > 0) 1 else 0
-                Button(onClick = { advanced = true },
-                    modifier = Modifier.testTag("filter-button")
-                        .focusRequester(filterButton)) {
-                    Text(if (count == 0) "Filtrele" else "Filtrele ($count)")
+            }
+            if (kind == "MOVIE" || kind == "SERIES") {
+                Row(verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    LazyRow(Modifier.weight(1f).focusRestorer().focusGroup(),
+                        contentPadding = PaddingValues(6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(listOf("") + groups, key = { it }) { group ->
+                            Pill(group.ifEmpty { "Tümü" }, category == group,
+                                onClick = { category = group })
+                        }
+                    }
+                    val count = listOf(year, genre, language).count { it.isNotEmpty() } +
+                        if (rating > 0) 1 else 0
+                    Button(onClick = { advanced = true },
+                        modifier = Modifier.testTag("filter-button")
+                            .focusRequester(filterButton)) {
+                        Text(if (count == 0) "Filtrele" else "Filtrele ($count)")
+                    }
+                }
+            }
+            androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+                columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(6),
+                modifier = Modifier.weight(1f).testTag("poster-grid").focusRestorer().focusGroup(),
+                contentPadding = PaddingValues(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
+            ) {
+                if (rows.isEmpty()) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(6) }) {
+                    Text("Eşleşen içerik yok.", color = Ink.muted)
+                }
+                items(rows.size, key = { rows[it].id }, span = { index ->
+                    androidx.compose.foundation.lazy.grid.GridItemSpan(if (rows[index].kind == "LIVE") 2 else 1)
+                }) { index ->
+                    val entry = rows[index]
+                    if (entry.kind == "LIVE")
+                        ChannelCard(model, entry, now, { play(entry, rows.filter { it.kind == "LIVE" }) }, {})
+                    else MovieCard(model, entry, true, open, modifier = Modifier.fillMaxWidth())
+                }
+                if (rows.size >= limit) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(6) }) {
+                    Button(onClick = { limit += 80 }) { Text("Devamını göster") }
                 }
             }
         }
-        androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
-            columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(6),
-            modifier = Modifier.weight(1f).testTag("poster-grid").focusRestorer().focusGroup(),
-            contentPadding = PaddingValues(8.dp),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp),
-        ) {
-            if (rows.isEmpty()) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(6) }) {
-                Text("Eşleşen içerik yok.", color = Ink.muted)
-            }
-            items(rows.size, key = { rows[it].id }, span = { index ->
-                androidx.compose.foundation.lazy.grid.GridItemSpan(if (rows[index].kind == "LIVE") 2 else 1)
-            }) { index ->
-                val entry = rows[index]
-                if (entry.kind == "LIVE")
-                    ChannelCard(model, entry, now, { play(entry, rows.filter { it.kind == "LIVE" }) }, {})
-                else MovieCard(model, entry, true, open, modifier = Modifier.fillMaxWidth())
-            }
-            if (rows.size >= limit) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(6) }) {
-                Button(onClick = { limit += 80 }) { Text("Devamını göster") }
-            }
-        }
-    }
-    if (advanced) {
-        LaunchedEffect(advanced) { panelFocus.requestFocus() }
-        Box(Modifier.fillMaxSize().focusGroup()) {
-            Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black.copy(alpha = .48f)))
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterEnd) {
-                GlassPanel(
-                    Modifier.width(360.dp).fillMaxHeight().testTag("filter-panel")) {
-                    LazyColumn(Modifier.fillMaxSize().focusRequester(panelFocus).focusGroup()
-                        .padding(horizontal = 28.dp, vertical = 27.dp),
-                        verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                        item { Text("İçerik filtreleri", fontSize = 24.sp) }
-                        item { Field("Yıl", year, { year = it.take(4) }) }
-                        item { Field("Tür", genre, { genre = it }) }
-                        item { Field("Dil", language, { language = it }) }
-                        item { Button(onClick = { rating = (rating + 1) % 10 }) { Text("Puan ≥ $rating") } }
-                        item { Button(onClick = closeFilters) { Text("Sonuçları göster") } }
+        if (advanced) {
+            LaunchedEffect(advanced) { panelFocus.requestFocus() }
+            Box(Modifier.fillMaxSize().focusGroup()) {
+                Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black.copy(alpha = .48f)))
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterEnd) {
+                    GlassPanel(
+                        Modifier.width(360.dp).fillMaxHeight().testTag("filter-panel")) {
+                        LazyColumn(Modifier.fillMaxSize().testTag("filter-fields")
+                            .focusRequester(panelFocus).focusGroup()
+                            .padding(horizontal = 28.dp, vertical = 27.dp),
+                            verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                            item { Text("İçerik filtreleri", fontSize = 24.sp) }
+                            item { Field("Yıl", year, { year = it.take(4) }) }
+                            item { Field("Tür", genre, { genre = it }) }
+                            item { Field("Dil", language, { language = it }) }
+                            item { Button(onClick = { rating = (rating + 1) % 10 }) { Text("Puan ≥ $rating") } }
+                            item { Button(onClick = closeFilters) { Text("Sonuçları göster") } }
+                        }
                     }
                 }
             }

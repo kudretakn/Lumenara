@@ -77,38 +77,40 @@ internal fun VlcScreen(
             withContext(Dispatchers.IO) {
                 input = VlcInput.open(context, address, source.allowHttp)
             }
-            val lib = LibVLC(context, arrayListOf("--quiet", "--no-video-title-show"))
-            library = lib
-            val p = MediaPlayer(lib)
-            engine = p
-            player = p
-            p.attachViews(surface, null, true, false)
-            val media = Media(lib, input!!.descriptor.fileDescriptor)
-            media.addOption(":demux=" + input!!.demux)
-            if (start > 0 && item.kind != "LIVE") media.addOption(":start-time=${start/1000.0}")
-            p.media = media
-            media.release()
-            var recorded = false
-            p.setEventListener {
-                when (it.type) {
-                    MediaPlayer.Event.Playing -> if (!recorded) {
-                        recorded = true
-                        model.started(item)
-                    }
-                    MediaPlayer.Event.EncounteredError -> {
-                        message = "VLC bu yayını oynatamadı."
-                        panel = true
-                    }
-                    MediaPlayer.Event.EndReached -> {
-                        model.progress(item, p.length, p.length)
-                        if (item.kind == "EPISODE")
-                            fullscreen.finished = group.getOrNull(group.indexOfFirst { row -> row.id == item.id } + 1) != null
+            withContext(Dispatchers.Main.immediate) {
+                val lib = LibVLC(context, arrayListOf("--quiet", "--no-video-title-show"))
+                library = lib
+                val p = MediaPlayer(lib)
+                engine = p
+                player = p
+                p.attachViews(surface, null, true, false)
+                val media = Media(lib, input!!.descriptor.fileDescriptor)
+                media.addOption(":demux=" + input!!.demux)
+                if (start > 0 && item.kind != "LIVE") media.addOption(":start-time=${start/1000.0}")
+                p.media = media
+                media.release()
+                var recorded = false
+                p.setEventListener {
+                    when (it.type) {
+                        MediaPlayer.Event.Playing -> if (!recorded) {
+                            recorded = true
+                            model.started(item)
+                        }
+                        MediaPlayer.Event.EncounteredError -> {
+                            message = "VLC bu yayını oynatamadı."
+                            panel = true
+                        }
+                        MediaPlayer.Event.EndReached -> {
+                            model.progress(item, p.length, p.length)
+                            if (item.kind == "EPISODE")
+                                fullscreen.finished = group.getOrNull(group.indexOfFirst { row -> row.id == item.id } + 1) != null
+                        }
                     }
                 }
-            }
-            p.play()
-            wallClockTicks(5000).collect {
-                if (p.isPlaying) model.progress(item, p.time, p.length)
+                p.play()
+                wallClockTicks(5000).collect {
+                    if (p.isPlaying) model.progress(item, p.time, p.length)
+                }
             }
         } catch (e: CancellationException) {
             throw e
@@ -117,17 +119,19 @@ internal fun VlcScreen(
             message = "VLC bu kaynakta TS, MKV veya konumlandırılabilir MP4 dosyası gerektirir."
             panel = true
         } finally {
-            player = null
-            engine?.let {
-                position = it.time
-                model.progress(item, position, it.length)
-                it.setEventListener(null)
-                withContext(NonCancellable + Dispatchers.IO) { input?.close() }
-                it.stop()
-                it.detachViews()
-                it.release()
-            } ?: withContext(NonCancellable + Dispatchers.IO) { input?.close() }
-            library?.release()
+            withContext(NonCancellable + Dispatchers.Main.immediate) {
+                player = null
+                engine?.let {
+                    position = it.time
+                    model.progress(item, position, it.length)
+                    it.setEventListener(null)
+                    withContext(NonCancellable + Dispatchers.IO) { input?.close() }
+                    it.stop()
+                    it.detachViews()
+                    it.release()
+                } ?: withContext(NonCancellable + Dispatchers.IO) { input?.close() }
+                library?.release()
+            }
         }
     }
     Box(

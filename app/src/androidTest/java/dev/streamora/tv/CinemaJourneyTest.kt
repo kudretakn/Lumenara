@@ -133,6 +133,12 @@ class CinemaJourneyTest {
             waitFor(button)
             focus(screen.onNode(button))
         }
+        fun filterYear() {
+            waitFor(hasTestTag("filter-panel"))
+            screen.onNodeWithTag("filter-panel").assertIsDisplayed()
+            screen.onNodeWithTag("filter-fields").performScrollToNode(hasText("Yıl"))
+            node("Yıl").assertIsDisplayed()
+        }
         fun capture(name: String) {
             // A real device screenshot includes GPU-composited image transitions and TV focus
             // rings.
@@ -325,8 +331,7 @@ class CinemaJourneyTest {
                 capture("cinema-movies")
                 capture("screens/movies")
                 screen.ok()
-                waitFor(hasTestTag("filter-panel"))
-                node("Yıl").assertExists()
+                filterYear()
                 val movieResult = describedIn("Açık Deniz", "section-Filmler")
                 waitFor(movieResult)
                 screen.onAllNodes(hasSetTextAction())[0].performTextReplacement("1999")
@@ -335,7 +340,7 @@ class CinemaJourneyTest {
                 screen.onNodeWithTag("filter-panel").assertDoesNotExist()
                 node("Eşleşen içerik yok.").assertExists()
                 select("Filtrele (1)")
-                node("Yıl").assertExists()
+                filterYear()
                 screen.onAllNodes(hasSetTextAction())[0].performTextReplacement("2025")
                 screen.waitUntil(30_000) {
                     screen
@@ -350,7 +355,7 @@ class CinemaJourneyTest {
                 screen.onNodeWithText("Yıl").assertDoesNotExist()
                 focusFilters()
                 screen.ok()
-                node("Yıl").assertExists()
+                filterYear()
                 screen.onAllNodes(hasSetTextAction())[0].assertTextEquals("")
                 screen.back()
                 node("Eşleşen içerik yok.").assertExists()
@@ -373,7 +378,7 @@ class CinemaJourneyTest {
                 screen.onNode(describedIn("Açık Deniz", "section-Listem")).assertDoesNotExist()
                 section("Filmler")
                 select("Filtrele (1)")
-                node("Yıl").assertExists()
+                filterYear()
                 screen.onAllNodes(hasSetTextAction())[0].assertTextEquals("2025")
                 screen.back()
                 section("Ara")
