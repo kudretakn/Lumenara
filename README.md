@@ -47,7 +47,7 @@ Android Studio’da `settings.gradle.kts` dosyasının bulunduğu klasörü aç�
 .\gradlew.bat :app:assembleRelease
 ```
 
-GitHub Actions, `main` dalına gönderimlerde ve pull request’lerde birim testlerini, lint’i ve debug derlemesini çalıştırır. Ardından Android TV API 34 emülatöründe cihaz testlerini yürütür; APK, test raporları ve ekran görüntüleri iş akışı artifact’ları olarak saklanır.
+GitHub Actions, `main` dalına gönderimlerde ve pull request’lerde birim testlerini, lint’i ve debug derlemesini çalıştırır. Ardından Android TV API 36 emülatöründe cihaz testlerini yürütür; APK, test raporları ve ekran görüntüleri iş akışı artifact’ları olarak saklanır.
 
 Cihaz testleri bağlı bir Android TV veya Android TV AVD gerektirir. Varsayılan debug çıktısı `app/build/outputs/apk/debug/app-debug.apk`, imzalanacak release çıktısı `app/build/outputs/apk/release/app-release-unsigned.apk` konumundadır. Test APK’sında yerel sahte sağlayıcı ve Streamora ekranından oluşturulan iki saniyelik MP4 vardır.
 
