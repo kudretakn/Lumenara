@@ -47,10 +47,7 @@ internal fun LiveScreen(
     val categoryState = rememberLazyListState()
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
-        while (true) {
-            now = System.currentTimeMillis()
-            delay(30_000)
-        }
+        wallClockTicks(30_000).collect { now = it }
     }
     val groups by remember(source) { model.repo.library.liveCategoryCounts(source) }
         .collectAsStateWithLifecycle(emptyList())

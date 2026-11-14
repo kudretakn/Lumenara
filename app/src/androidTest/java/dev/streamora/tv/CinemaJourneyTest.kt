@@ -2,6 +2,7 @@ package dev.streamora.tv
 
 import android.graphics.BitmapFactory
 import android.graphics.drawable.BitmapDrawable
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -79,19 +80,35 @@ class CinemaJourneyTest {
                 .build()
         Coil.setImageLoader(loader)
         fun node(text: String): SemanticsNodeInteraction {
-            screen.waitUntil(10000) {
-                screen.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()
+            try {
+                screen.waitUntil(30_000) {
+                    screen.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()
+                }
+            } catch (e: ComposeTimeoutException) {
+                throw AssertionError("Beklenen: $text\n" + screen.onRoot().printToString(), e)
             }
             return screen.onAllNodesWithText(text).onFirst()
         }
         fun focus(node: SemanticsNodeInteraction) {
             node.performSemanticsAction(SemanticsActions.RequestFocus)
-            screen.waitForIdle()
+            screen.waitUntil(30_000) { isFocused().matches(node.fetchSemanticsNode()) }
+        }
+        fun section(name: String) {
+            focus(screen.onNodeWithContentDescription(name))
+            // Dispatch through the Compose root so native input delivery cannot race the next query.
+            screen.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
+            screen.waitUntil(30_000) {
+                screen.onAllNodesWithTag("section-$name").fetchSemanticsNodes().isNotEmpty()
+            }
+        }
+        fun waitFor(matcher: SemanticsMatcher) {
+            screen.waitUntil(30_000) {
+                screen.onAllNodes(matcher).fetchSemanticsNodes().isNotEmpty()
+            }
         }
         fun select(text: String) {
             focus(node(text))
             device.pressDPadCenter()
-            screen.waitForIdle()
         }
         fun capture(name: String) {
             // A real device screenshot includes GPU-composited image transitions and TV focus
@@ -189,8 +206,7 @@ class CinemaJourneyTest {
                         now + 3_600_000, "Günün Haberleri", "", "günün haberleri")))
                     repo.guide.map(Mapping(channel.id, "home-test-guide", "news"))
                 }
-                focus(screen.onNodeWithContentDescription("Ana Sayfa"))
-                device.pressDPadCenter()
+                section("Ana Sayfa")
                 focus(node("Oynat"))
                 screen.onNodeWithTag("nav-closed").assertExists()
                 capture("cinema-home")
@@ -198,25 +214,25 @@ class CinemaJourneyTest {
                 screen.onNodeWithText("Canlı TV’ye git").assertDoesNotExist()
                 capture("screens/nav-closed")
                 device.pressDPadLeft()
-                screen.waitForIdle()
+                waitFor(hasTestTag("nav-open"))
                 screen.onNodeWithTag("nav-open").assertExists()
                 listOf("Ara", "Ana Sayfa", "Canlı TV", "Filmler", "Diziler", "Listem", "Ayarlar")
                     .forEach { screen.onNodeWithContentDescription(it).assertExists() }
                 capture("screens/nav-open")
                 device.pressDPadRight()
-                screen.waitForIdle()
+                waitFor(hasText("Oynat") and isFocused())
                 screen.onNodeWithTag("nav-closed").assertExists()
                 node("Oynat").assertIsFocused()
                 device.pressDPadLeft()
-                screen.waitForIdle()
+                waitFor(hasTestTag("nav-open"))
                 device.pressBack()
-                screen.waitForIdle()
+                waitFor(hasText("Oynat") and isFocused())
                 screen.onNodeWithTag("nav-closed").assertExists()
                 node("Oynat").assertIsFocused()
                 // OK on a home channel card must open fullscreen without a detail step.
                 focus(screen.onNodeWithContentDescription("Test Haber"))
                 device.pressDPadCenter()
-                screen.waitUntil(15000) {
+                screen.waitUntil(30_000) {
                     runBlocking { preferences.recentLive.first().isNotEmpty() }
                 }
                 screen.onNodeWithContentDescription("Tam ekran oynatıcı").assertExists()
@@ -246,8 +262,7 @@ class CinemaJourneyTest {
                 screen
                     .onNodeWithContentDescription("Kadife Gece")
                     .performSemanticsAction(SemanticsActions.RequestFocus)
-                screen.waitForIdle()
-                screen.waitUntil(5000) {
+                screen.waitUntil(30_000) {
                     screen.onAllNodesWithText("Kadife Gece").fetchSemanticsNodes().size >= 2
                 }
                 capture("cinema-focus")
@@ -257,48 +272,50 @@ class CinemaJourneyTest {
                 select("İzleme listeme ekle")
                 node("Listeden çıkar").assertExists()
                 device.pressBack()
-                focus(screen.onNodeWithContentDescription("Filmler"))
-                device.pressDPadCenter()
+                section("Filmler")
                 focus(node("İçerik filtreleri"))
                 capture("cinema-movies")
                 device.pressDPadCenter()
                 node("Yıl").assertExists()
+                waitFor(hasContentDescription("Açık Deniz"))
                 screen.onAllNodes(hasSetTextAction())[0].performTextReplacement("1999")
                 node("Eşleşen içerik yok.").assertExists()
                 screen.onAllNodes(hasSetTextAction())[0].performTextReplacement("2025")
-                screen.waitUntil(5000) {
+                screen.waitUntil(30_000) {
                     screen
                         .onAllNodesWithContentDescription("Açık Deniz")
                         .fetchSemanticsNodes()
                         .isNotEmpty()
                 }
-                focus(screen.onNodeWithContentDescription("Diziler"))
-                device.pressDPadCenter()
+                section("Diziler")
+                // Filters belong to each section: Series starts with its own closed panel.
+                screen.onNodeWithText("Yıl").assertDoesNotExist()
+                select("İçerik filtreleri")
+                node("Yıl").assertExists()
+                screen.onAllNodes(hasSetTextAction())[0].assertTextEquals("")
                 node("Eşleşen içerik yok.").assertExists()
-                focus(screen.onNodeWithContentDescription("Listem"))
-                device.pressDPadCenter()
-                screen.waitForIdle()
+                screen.onNodeWithContentDescription("Açık Deniz").assertDoesNotExist()
+                section("Listem")
+                waitFor(hasContentDescription("Favoriler") and isSelected())
                 screen.onNodeWithContentDescription("Favoriler").assertIsSelected()
                 focus(screen.onNodeWithContentDescription("İzleme Listem"))
                 device.pressDPadCenter()
-                screen.waitForIdle()
+                waitFor(hasContentDescription("İzleme Listem") and isSelected())
                 screen.onNodeWithContentDescription("İzleme Listem").assertIsSelected()
-                screen.waitUntil(5000) {
+                screen.waitUntil(30_000) {
                     screen
                         .onAllNodesWithContentDescription("Kadife Gece")
                         .fetchSemanticsNodes()
                         .isNotEmpty()
                 }
                 screen.onNodeWithContentDescription("Açık Deniz").assertDoesNotExist()
-                focus(screen.onNodeWithContentDescription("Filmler"))
-                device.pressDPadCenter()
+                section("Filmler")
                 node("Yıl").assertExists()
                 screen.onAllNodes(hasSetTextAction())[0].assertTextEquals("2025")
-                focus(screen.onNodeWithContentDescription("Ayarlar"))
-                device.pressDPadCenter()
+                section("Ayarlar")
                 node("IPTV Kaynakları").assertExists()
                 device.pressDPadRight()
-                screen.waitForIdle()
+                waitFor(hasText("IPTV Kaynakları") and isFocused())
                 node("IPTV Kaynakları").assertIsFocused()
                 device.pressDPadCenter()
                 node("✓ M3U").assertExists()

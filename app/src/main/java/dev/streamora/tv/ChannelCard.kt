@@ -23,7 +23,7 @@ import dev.streamora.data.Item
 import dev.streamora.design.FocusCard
 import dev.streamora.design.Ink
 import dev.streamora.design.ProgressLine
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 
 /** Collected only by composed channel cards/rows, never for the whole catalog. */
 @Composable
@@ -88,10 +88,7 @@ internal fun ChannelShelf(
     if (rows.isEmpty()) return
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
-        while (true) {
-            now = System.currentTimeMillis()
-            delay(30_000)
-        }
+        wallClockTicks(30_000).collect { now = it }
     }
     Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
         Text(title, fontSize = 19.sp)

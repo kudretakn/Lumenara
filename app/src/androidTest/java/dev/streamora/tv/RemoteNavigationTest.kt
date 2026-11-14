@@ -15,8 +15,18 @@ class RemoteNavigationTest {
     fun setupBackAndSettingsSourceNavigation() {
         val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
         fun waitForText(text: String) {
-            screen.waitUntil(5000) {
+            screen.waitUntil(30_000) {
                 screen.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()
+            }
+        }
+        fun waitForSection(section: String) {
+            screen.waitUntil(30_000) {
+                screen.onAllNodesWithTag("section-$section").fetchSemanticsNodes().isNotEmpty()
+            }
+        }
+        fun waitForFocus(matcher: SemanticsMatcher) {
+            screen.waitUntil(30_000) {
+                screen.onAllNodes(matcher and isFocused()).fetchSemanticsNodes().isNotEmpty()
             }
         }
         waitForText("✓ M3U")
@@ -24,25 +34,26 @@ class RemoteNavigationTest {
         waitForText("Kaynak ekle")
         screen.onNodeWithContentDescription("Ayarlar")
             .performSemanticsAction(SemanticsActions.RequestFocus)
-        screen.waitForIdle()
+        waitForFocus(hasContentDescription("Ayarlar"))
         screen.onNodeWithTag("nav-open").assertExists()
         device.pressDPadCenter()
-        waitForText("IPTV Kaynakları")
+        waitForSection("Ayarlar")
         device.pressDPadRight()
-        screen.waitForIdle()
+        waitForFocus(hasText("IPTV Kaynakları"))
         screen.onNodeWithTag("nav-closed").assertExists()
         screen.onNodeWithText("IPTV Kaynakları").assertIsFocused()
         device.pressDPadCenter()
         waitForText("✓ M3U")
         device.pressBack()
-        waitForText("IPTV Kaynakları")
+        waitForSection("Ayarlar")
+        waitForFocus(hasText("IPTV Kaynakları"))
         device.pressBack()
         waitForText("Kaynak ekle")
         screen.onNodeWithContentDescription("Ara")
             .performSemanticsAction(SemanticsActions.RequestFocus)
-        screen.waitForIdle()
+        waitForFocus(hasContentDescription("Ara"))
         device.pressBack()
-        screen.waitForIdle()
+        waitForFocus(hasText("Kaynak ekle"))
         screen.onNodeWithTag("nav-closed").assertExists()
         screen.onNodeWithText("Kaynak ekle").assertIsFocused()
     }

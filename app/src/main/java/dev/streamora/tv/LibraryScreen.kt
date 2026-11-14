@@ -117,6 +117,7 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
             pages.SaveableStateProvider(section) {
                 Column(
                     Modifier.fillMaxSize()
+                        .semantics { testTag = "section-$section" }
                         .focusRequester(contentFocus)
                         .focusRestorer()
                         .focusGroup()

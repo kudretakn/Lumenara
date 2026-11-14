@@ -10,9 +10,9 @@ import androidx.tv.material3.*
 import dev.streamora.catalog.searchable
 import dev.streamora.data.*
 import dev.streamora.design.Ink
+import kotlinx.coroutines.flow.collect
 import java.time.*
 import java.time.format.DateTimeFormatter
-import kotlinx.coroutines.delay
 
 @Composable
 internal fun GuidePanel(model: LibraryModel, channel: Item, playReplay: (Item) -> Unit) {
@@ -25,10 +25,7 @@ internal fun GuidePanel(model: LibraryModel, channel: Item, playReplay: (Item) -
             .collectAsStateWithLifecycle(null)
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
-        while (true) {
-            now = System.currentTimeMillis()
-            delay(60_000)
-        }
+        wallClockTicks(60_000).collect { now = it }
     }
     val slots by
         remember(day, channel.id, query, mapping) {

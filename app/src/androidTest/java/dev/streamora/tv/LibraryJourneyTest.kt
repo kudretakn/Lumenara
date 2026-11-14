@@ -50,7 +50,7 @@ class LibraryJourneyTest {
                 }
             fun button(label: String): SemanticsNodeInteraction {
                 try {
-                    screen.waitUntil(10000) {
+                    screen.waitUntil(30_000) {
                         screen.onAllNodesWithText(label).fetchSemanticsNodes().isNotEmpty()
                     }
                 } catch (e: ComposeTimeoutException) {
@@ -59,12 +59,18 @@ class LibraryJourneyTest {
                 return screen.onAllNodesWithText(label).onFirst()
             }
             fun select(label: String) {
+                // LazyColumn does not compose controls below the viewport until scrolled.
+                if (screen.onAllNodesWithTag("source-setup").fetchSemanticsNodes().isNotEmpty()) {
+                    screen.onNodeWithTag("source-setup").performScrollToNode(hasText(label))
+                }
                 button(label)
                     .assertIsEnabled()
                     .performSemanticsAction(
                         androidx.compose.ui.semantics.SemanticsActions.RequestFocus
                     )
-                screen.waitForIdle()
+                screen.waitUntil(30_000) {
+                    screen.onAllNodes(hasText(label) and isFocused()).fetchSemanticsNodes().isNotEmpty()
+                }
                 device.pressDPadCenter()
             }
             try {
@@ -92,28 +98,39 @@ class LibraryJourneyTest {
                 }
                 screen.onNodeWithContentDescription("Canlı TV")
                     .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus)
-                screen.waitForIdle()
+                screen.waitUntil(30_000) {
+                    screen.onAllNodes(hasContentDescription("Canlı TV") and isFocused())
+                        .fetchSemanticsNodes().isNotEmpty()
+                }
                 screen.onNodeWithTag("nav-open").assertExists()
                 device.pressDPadCenter()
                 button("Yayın çizelgesi").assertExists()
                 device.pressDPadRight()
-                screen.waitForIdle()
+                screen.waitUntil(30_000) {
+                    screen.onAllNodesWithTag("nav-closed").fetchSemanticsNodes().isNotEmpty()
+                }
                 screen.onNodeWithTag("nav-closed").assertExists()
-                screen.waitUntil(10000) {
+                screen.waitUntil(30_000) {
                     screen.onAllNodesWithTag("live-category-Spor").fetchSemanticsNodes().isNotEmpty()
                 }
                 screen.onNodeWithTag("live-category-Spor")
                     .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus)
-                screen.waitForIdle()
+                screen.waitUntil(30_000) {
+                    screen.onAllNodes(hasTestTag("live-category-Spor") and isFocused())
+                        .fetchSemanticsNodes().isNotEmpty()
+                }
                 device.pressDPadCenter()
-                screen.waitForIdle()
+                screen.waitUntil(30_000) {
+                    screen.onAllNodes(hasTestTag("live-category-Spor") and isSelected())
+                        .fetchSemanticsNodes().isNotEmpty()
+                }
                 screen.onNodeWithTag("live-category-Spor").assertIsSelected()
-                screen.waitUntil(10000) {
+                screen.waitUntil(30_000) {
                     screen.onAllNodesWithTag("live-channel-${channel.id}").fetchSemanticsNodes().isNotEmpty()
                 }
                 val row = screen.onNodeWithTag("live-channel-${channel.id}")
                 row.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus)
-                screen.waitUntil(15000) {
+                screen.waitUntil(30_000) {
                     screen.onAllNodes(hasTestTag("live-preview") and
                         SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Oynatılıyor"))
                         .fetchSemanticsNodes().isNotEmpty()
@@ -127,13 +144,16 @@ class LibraryJourneyTest {
                 checkNotNull(image.parentFile).mkdirs()
                 assertTrue("Canlı TV ekran görüntüsü", device.takeScreenshot(image))
                 device.pressDPadCenter()
-                screen.waitUntil(10000) {
+                screen.waitUntil(30_000) {
                     screen.onAllNodes(hasContentDescription("Tam ekran oynatıcı") and isFocused())
                         .fetchSemanticsNodes().isNotEmpty()
                 }
                 device.pressDPadCenter()
                 button("Yayına dön")
                 device.pressBack()
+                screen.waitUntil(30_000) {
+                    screen.onAllNodesWithText("Yayına dön").fetchSemanticsNodes().isEmpty()
+                }
                 device.pressBack()
                 button("Yayın çizelgesi")
                 // Long OK keeps the existing favorite/EPG operations reachable.

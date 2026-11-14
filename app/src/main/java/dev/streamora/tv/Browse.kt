@@ -24,7 +24,6 @@ import coil.compose.AsyncImage
 import dev.streamora.data.*
 import dev.streamora.design.Ink
 import dev.streamora.design.Pill
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 
 @Composable
@@ -132,8 +131,7 @@ internal fun Home(
     val hero = if (shelvesFocused) focused ?: rotating else rotating
     LaunchedEffect(source, candidates, shelvesFocused, interaction) {
         if (!shelvesFocused && candidates.size > 1) {
-            while (true) {
-                delay(9_000)
+            wallClockTicks(9_000).drop(1).collect {
                 page = (page + 1) % candidates.size
             }
         }
