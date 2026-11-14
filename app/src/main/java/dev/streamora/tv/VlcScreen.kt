@@ -112,7 +112,8 @@ internal fun VlcScreen(
             }
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            android.util.Log.w("StreamoraVlc", "VLC playback failed", e)
             message = "VLC bu kaynakta TS, MKV veya konumlandırılabilir MP4 dosyası gerektirir."
             panel = true
         } finally {

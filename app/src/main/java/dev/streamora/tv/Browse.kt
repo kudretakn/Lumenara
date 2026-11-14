@@ -1,5 +1,6 @@
 package dev.streamora.tv
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
@@ -13,6 +14,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.focusRestorer
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.unit.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.*
@@ -234,7 +236,11 @@ internal fun Browse(
         .collectAsStateWithLifecycle(emptyList())
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { wallClockTicks(30_000).collect { now = it } }
-    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    BackHandler(advanced) { closeFilters() }
+    val panelFocus = remember { FocusRequester() }
+    Column(Modifier.fillMaxSize().focusProperties {
+        if (advanced) canFocus = false
+    }.focusGroup(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (section == "Listem") {
             LazyRow(contentPadding = PaddingValues(6.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -287,10 +293,9 @@ internal fun Browse(
         }
     }
     if (advanced) {
-        androidx.compose.ui.window.Dialog(onDismissRequest = closeFilters,
-            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
-            val panelFocus = remember { FocusRequester() }
-            LaunchedEffect(Unit) { panelFocus.requestFocus() }
+        LaunchedEffect(advanced) { panelFocus.requestFocus() }
+        Box(Modifier.fillMaxSize().focusGroup()) {
+            Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black.copy(alpha = .48f)))
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterEnd) {
                 GlassPanel(
                     Modifier.width(360.dp).fillMaxHeight().testTag("filter-panel")) {
