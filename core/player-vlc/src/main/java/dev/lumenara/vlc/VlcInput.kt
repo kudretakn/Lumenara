@@ -7,6 +7,7 @@ import android.system.ErrnoException
 import android.system.OsConstants
 import dev.lumenara.data.Transport
 import java.io.Closeable
+import java.io.DataInputStream
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
@@ -123,9 +124,11 @@ private constructor(
                                     }
                                 next = offset
                             }
-                            val read =
-                                response!!.body!!.byteStream().read(data, 0, minOf(size, data.size))
-                            if (read < 0) throw IOException()
+                            // ProxyFileDescriptorCallback requires a full read unless at EOF.
+                            // A socket read can return only one packet; returning that short
+                            // count lets FUSE treat the rest as EOF/zeroes, corrupting the MP4.
+                            val read = minOf(size.toLong(), length - offset).toInt()
+                            DataInputStream(response!!.body!!.byteStream()).readFully(data, 0, read)
                             next += read
                             return read
                         } catch (_: IOException) {

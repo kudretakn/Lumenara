@@ -151,8 +151,11 @@ internal fun rememberLiveNumberControl(model: LibraryModel, source: String,
     LaunchedEffect(state, state.input.deadline, state.input.missingUntil) {
         val deadline = if (state.input.digits.isNotEmpty()) state.input.deadline else state.input.missingUntil
         if (deadline > 0) {
-            delay((deadline - System.currentTimeMillis()).coerceAtLeast(0))
-            state.apply(state.input.tick(System.currentTimeMillis()))
+            // A Compose delay can finish before this wall-clock deadline (notably
+            // when tests advance the frame clock). A single early tick changes no
+            // state, so the keyed effect would never run again to clear the badge.
+            val now = wallClockTicks(100).first { it >= deadline }
+            state.apply(state.input.tick(now))
         }
     }
     return state
