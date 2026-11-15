@@ -37,6 +37,11 @@ class CatalogQueryTest {
             assertTrue(dao.browse("a", "MOVIE", "", "", "", 120, minRating = 9.0).first().isEmpty())
             assertEquals(2, dao.categoryCounts("MOVIE", "a", safe).first().single().count)
             assertEquals(mapOf("Adult" to 1, "Film" to 2), dao.categoryCounts("MOVIE", "a").first().associate { it.category to it.count })
+            for (source in listOf("", "a")) for (hidden in listOf(emptyList(), safe)) {
+                assertEquals(dao.categoryCounts("MOVIE", source, hidden).first(),
+                    dao.sourceCategoryCounts(source, hidden).first().filter { it.kind == "MOVIE" }
+                        .map { LiveCategoryCount(it.category, it.count) })
+            }
             assertEquals(listOf("Film"), dao.categories("MOVIE", "a", safe).first())
             assertEquals(2, dao.shelfCount("a", "MOVIE", "", safe).first())
 
@@ -204,6 +209,90 @@ class CatalogQueryTest {
                 assertFalse(plan, plan.contains("USE TEMP B-TREE FOR ORDER BY"))
                 assertFalse(plan, plan.contains("FOR GROUP BY"))
             }
+        } finally { db.close() }
+    }
+
+    @Test fun allSourceCountsCategoriesAndSmallCategoryGridsUseCategoryIndexes() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val captured = AtomicReference<Pair<String, List<Any?>>>()
+        val db = Room.inMemoryDatabaseBuilder(context, LibraryDb::class.java)
+            .setQueryCallback({ sql, args ->
+                if (sql.trimStart().startsWith("SELECT i.kind,i.category,") ||
+                    sql.trimStart().startsWith("SELECT i.category,") ||
+                    sql.trimStart().startsWith("SELECT DISTINCT i.category") ||
+                    sql.trimStart().startsWith("SELECT i.* FROM items i")) captured.set(sql to args.toList())
+            }, Executor { it.run() }).build()
+        try {
+            val dao = db.library()
+            for (source in listOf("a", "b")) dao.save(Source(source, source, "sealed", false, 0, 0))
+            val kinds = listOf("LIVE", "MOVIE", "SERIES")
+            val rows = kinds.flatMap { kind ->
+                (0 until 2000).map { item("$kind:$it", "$kind title $it", kind = kind) } +
+                    (0 until 5).map { item("$kind:rare:$it", "$kind rare $it", "Rare", kind,
+                        source = if (it < 3) "a" else "b") }
+            }
+            dao.save(rows)
+            dao.assignVersions(rows.versionAssignments())
+            fun assertCategoryPlan(source: String) {
+                val (sql, args) = captured.get()
+                val plan = db.openHelper.readableDatabase.query(
+                    SimpleSQLiteQuery("EXPLAIN QUERY PLAN $sql", args.toTypedArray())
+                ).use { cursor ->
+                    buildList { while (cursor.moveToNext()) add(cursor.getString(3)) }.joinToString("\n")
+                }
+                val index = if (source.isEmpty()) "index_items_kind_category_title"
+                    else "index_items_source_kind_category_title"
+                assertTrue(plan, plan.contains(index))
+                assertFalse(plan, Regex("\\bSCAN (?:TABLE )?(?:items|i)(?:\\s|$)").containsMatchIn(plan))
+                assertFalse(plan, plan.contains("TEMP B-TREE FOR GROUP BY"))
+                assertFalse(plan, plan.contains("USE TEMP B-TREE FOR ORDER BY"))
+            }
+            for (source in listOf("", "a")) {
+                val allGroups = dao.sourceCategoryCounts(source, listOf("Adult")).first()
+                assertEquals(6, allGroups.size)
+                assertCategoryPlan(source)
+                for (kind in kinds) {
+                    val groups = dao.categoryCounts(kind, source, listOf("Adult")).first()
+                    assertEquals(groups, allGroups.filter { it.kind == kind }.map { LiveCategoryCount(it.category, it.count) })
+                    assertEquals(2000, groups.single { it.category == "Film" }.count)
+                    assertEquals(if (source.isEmpty()) 5 else 3, groups.single { it.category == "Rare" }.count)
+                    assertCategoryPlan(source)
+                    assertEquals(listOf("Film", "Rare"), dao.categories(kind, source, listOf("Adult")).first())
+                    assertCategoryPlan(source)
+                    // LIVE retains its multi-source dedup policy; movie/series grids never GROUP BY.
+                    if (kind != "LIVE") for (category in listOf("Film", "Rare")) {
+                        val grid = dao.browse(source, kind, category, "", "", 120, hidden = listOf("Adult")).first()
+                        assertEquals(if (category == "Film") 120 else if (source.isEmpty()) 5 else 3, grid.size)
+                        assertCategoryPlan(source)
+                    }
+                }
+            }
+        } finally { db.close() }
+    }
+
+    @Test fun visibilityNamesOnlyReadLiveMovieAndSeriesWithoutVersionCounting() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val captured = AtomicReference<Pair<String, List<Any?>>>()
+        val db = Room.inMemoryDatabaseBuilder(context, LibraryDb::class.java)
+            .setQueryCallback({ sql, args ->
+                if (sql.trimStart().startsWith("SELECT DISTINCT category FROM items")) captured.set(sql to args.toList())
+            }, Executor { it.run() }).build()
+        try {
+            val dao = db.library()
+            dao.save(Source("a", "Test", "sealed", false, 0, 0))
+            dao.save(listOf(item("live", "Live", "News", "LIVE"),
+                item("movie", "Movie", "Film"), item("series", "Series", "Film", "SERIES"),
+                item("hidden", "Adult movie", "For Adults"),
+                item("episode", "Episode", "Episode-only", "EPISODE")))
+            assertEquals(listOf("Film", "For Adults", "News"), dao.categoryNames().first())
+            val (sql, args) = captured.get()
+            assertFalse(sql, sql.contains("COUNT(") || sql.contains("versionKey"))
+            val plan = db.openHelper.readableDatabase.query(
+                SimpleSQLiteQuery("EXPLAIN QUERY PLAN $sql", args.toTypedArray())
+            ).use { cursor ->
+                buildList { while (cursor.moveToNext()) add(cursor.getString(3)) }.joinToString("\n")
+            }
+            assertTrue(plan, plan.contains("COVERING INDEX index_items_kind_category_title"))
         } finally { db.close() }
     }
 }

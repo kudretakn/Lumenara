@@ -54,18 +54,16 @@ data class SourceSpec(
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class Repository private constructor(private val context: Context) {
     private val db = Room.databaseBuilder(context, LibraryDb::class.java, "lumenara.db")
-        .addMigrations(LibraryDb.MIGRATION_7_8).build()
+        .addMigrations(LibraryDb.MIGRATION_7_8, LibraryDb.MIGRATION_8_9).build()
     val library = db.library()
     val guide = db.guide()
     private val vault = Vault(context)
     private val metadata = Metadata(context, vault)
     private val preferences = Preferences(context)
-    // Resolve names from the complete catalog, before applying any visibility filter.
-    val hidden: Flow<List<String>> = combine(
-        preferences.showAdult, library.categoryCounts("", ""),
-    ) { show, groups ->
-        if (show) emptyList() else groups.map { it.category }.filter(::isAdultCategory)
-    }.distinctUntilChanged().flowOn(Dispatchers.Default)
+    private val catalogScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val catalog = CatalogStreams(library.categoryNames(), library::categoryCounts,
+        library::sourceCategoryCounts, preferences.showAdult, catalogScope)
+    val hidden: Flow<List<String>> = catalog.hidden
 
     fun browse(source: String, kind: String, category: String, query: String, shelf: String, limit: Int,
                year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0) =
@@ -74,12 +72,9 @@ class Repository private constructor(private val context: Context) {
     fun shelfCount(source: String, kind: String, shelf: String) =
         hidden.flatMapLatest { library.shelfCount(source, kind, shelf, it) }
 
-    fun categoryCounts(kind: String, source: String) =
-        hidden.flatMapLatest { library.categoryCounts(kind, source, it) }
-    fun categories(kind: String, source: String) =
-        hidden.flatMapLatest { library.categories(kind, source, it) }
-    fun liveCategoryCounts(source: String) =
-        hidden.flatMapLatest { library.liveCategoryCounts(source, it) }
+    fun categoryCounts(kind: String, source: String) = catalog.categoryCounts(kind, source)
+    fun categories(kind: String, source: String) = categoryCounts(kind, source).map { groups -> groups.map { it.category } }
+    fun liveCategoryCounts(source: String) = categoryCounts("LIVE", source)
     fun liveByIds(source: String, ids: List<String>) =
         hidden.flatMapLatest { library.liveByIds(source, ids, it) }
     private val liveScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)

@@ -18,6 +18,9 @@ class MigrationTest {
     @Test
     fun versionSevenDefaultsKeepUnrefreshedVersionsAndMarksVisible() = verifyUpgrade(7)
 
+    @Test
+    fun versionEightCatalogSurvivesCategoryAndProgrammeIndexes() = verifyUpgrade(8)
+
     private fun verifyUpgrade(from: Int) {
         val test = InstrumentationRegistry.getInstrumentation()
         val context = test.targetContext
@@ -55,10 +58,14 @@ class MigrationTest {
                         VALUES (?, 'local', ?, 'Film', 'MOVIE', '', 'opaque', 'film', 1, '', '')""", arrayOf(id, title))
                 }
                 db.execSQL("INSERT INTO marks VALUES ('item',1,0,250,1000,1)")
+                if (from >= 7) {
+                    db.execSQL("INSERT INTO feeds VALUES ('guide','local','opaque')")
+                    db.execSQL("INSERT INTO programmes VALUES ('guide','1',100,200,'Program','Description','program')")
+                }
                 db.version = from
             }
             val db = Room.databaseBuilder(context, LibraryDb::class.java, name)
-                .addMigrations(LibraryDb.MIGRATION_7_8).build()
+                .addMigrations(LibraryDb.MIGRATION_7_8, LibraryDb.MIGRATION_8_9).build()
             try {
                 runBlocking {
                     assertEquals(250L, db.library().mark("item")?.position)
@@ -75,7 +82,22 @@ class MigrationTest {
                 db.openHelper.readableDatabase.query("PRAGMA index_list(items)").use { cursor ->
                     val names = buildSet { while (cursor.moveToNext()) add(cursor.getString(cursor.getColumnIndexOrThrow("name"))) }
                     assertTrue(names.containsAll(listOf("index_items_source_kind_category_title",
-                        "index_items_kind_isRepresentative_title", "index_items_parent", "index_items_versionKey")))
+                        "index_items_kind_category_title", "index_items_kind_isRepresentative_title",
+                        "index_items_parent", "index_items_versionKey")))
+                }
+                db.openHelper.readableDatabase.query("PRAGMA index_info(index_items_kind_category_title)").use { cursor ->
+                    val columns = buildList { while (cursor.moveToNext()) add(cursor.getString(2)) }
+                    assertEquals(listOf("kind", "category", "title"), columns)
+                }
+                db.openHelper.readableDatabase.query("PRAGMA index_info(index_programmes_start)").use { cursor ->
+                    val columns = buildList { while (cursor.moveToNext()) add(cursor.getString(2)) }
+                    assertEquals(listOf("start"), columns)
+                }
+                assertEquals(9, db.openHelper.readableDatabase.version)
+                if (from >= 7) db.openHelper.readableDatabase.query("SELECT title,start FROM programmes").use { cursor ->
+                    assertTrue(cursor.moveToFirst())
+                    assertEquals("Program", cursor.getString(0))
+                    assertEquals(100L, cursor.getLong(1))
                 }
             } finally {
                 db.close()

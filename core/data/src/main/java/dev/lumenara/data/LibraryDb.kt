@@ -29,11 +29,13 @@ data class Source(
             )
         ],
     // EQP: source/kind/category equality leaves title ordered; source alone also covers the FK.
+    // kind/category/title covers category counts and selected categories across all sources.
     // kind/representative/title serves the unfiltered movie/series grid. Keep kind/title for
     // filtered fallback: the representative OR cannot constrain that index's middle column.
     // parent serves episodes, progress and orphan checks; versionKey serves bounded sibling probes.
     // No tvgId index: guide resolution is in Kotlin and multi-source LIVE dedup groups by more than tvgId.
     indices = [Index("source", "kind", "category", "title"),
+        Index("kind", "category", "title"),
         Index("kind", "isRepresentative", "title"), Index("kind", "title"),
         Index("parent"), Index("versionKey")],
 )
@@ -106,6 +108,7 @@ data class Mark(
 data class Member(@PrimaryKey val id: String, val name: String)
 
 data class LiveCategoryCount(val category: String, val count: Int)
+data class KindCategoryCount(val kind: String, val category: String, val count: Int)
 
 /** Lightweight projection; this is not a persisted entity or schema change. */
 data class LiveChannelId(val id: String, val source: String)
@@ -122,7 +125,14 @@ interface LibraryDao {
     fun catalogCategoryCounts(query: SupportSQLiteQuery): Flow<List<LiveCategoryCount>>
 
     @RawQuery(observedEntities = [Item::class])
+    fun catalogKindCategoryCounts(query: SupportSQLiteQuery): Flow<List<KindCategoryCount>>
+
+    @RawQuery(observedEntities = [Item::class])
     fun catalogCategories(query: SupportSQLiteQuery): Flow<List<String>>
+
+    // Visibility only needs names, never representative selection or counts over the catalog.
+    @Query("SELECT DISTINCT category FROM items WHERE kind IN ('LIVE','MOVIE','SERIES') ORDER BY category")
+    fun categoryNames(): Flow<List<String>>
     @Query("""SELECT * FROM items WHERE kind='LIVE' AND source=:source
         AND category NOT IN (:hidden) ORDER BY title,id LIMIT 1 OFFSET :offset""")
     suspend fun liveAtOffset(source: String, offset: Int, hidden: List<String> = emptyList()): Item?
@@ -182,6 +192,9 @@ interface LibraryDao {
 
     fun categoryCounts(kind: String, source: String, hidden: List<String> = emptyList()): Flow<List<LiveCategoryCount>> =
         catalogCategoryCounts(categoryCountsQuery(CatalogFilter(source = source, kind = kind, hidden = hidden)))
+
+    fun sourceCategoryCounts(source: String, hidden: List<String> = emptyList()): Flow<List<KindCategoryCount>> =
+        catalogKindCategoryCounts(sourceCategoryCountsQuery(source, hidden))
 
     fun shelfCount(source: String, kind: String, shelf: String, hidden: List<String> = emptyList()): Flow<Int> =
         catalogCount(shelfCountQuery(CatalogFilter(source = source, kind = kind,
@@ -337,7 +350,7 @@ interface LibraryDao {
             Mapping::class,
             Member::class,
         ],
-    version = 8,
+    version = 9,
     exportSchema = true,
     autoMigrations =
         [
@@ -351,6 +364,13 @@ interface LibraryDao {
 )
 abstract class LibraryDb : RoomDatabase() {
     companion object {
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE INDEX index_items_kind_category_title ON items(kind,category,title)")
+                db.execSQL("CREATE INDEX index_programmes_start ON programmes(start)")
+            }
+        }
+
         // Do not run Kotlin normalization while opening a large v7 database. Defaults keep every
         // legacy row visible (including marks); the next successful import atomically groups it.
         val MIGRATION_7_8 = object : Migration(7, 8) {

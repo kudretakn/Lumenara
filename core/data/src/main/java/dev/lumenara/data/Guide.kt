@@ -34,7 +34,7 @@ data class Feed(@PrimaryKey val id: String, val source: String, val encryptedAdd
                 onDelete = ForeignKey.CASCADE,
             )
         ],
-    indices = [Index("feed", "channel", "end")],
+    indices = [Index("feed", "channel", "end"), Index("start")],
 )
 data class Slot(
     val feed: String,
