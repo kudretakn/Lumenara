@@ -290,7 +290,10 @@ internal fun Playback(
     select: (Item) -> Unit,
     back: () -> Unit,
     changeGroup: (List<Item>) -> Unit,
+    sleepTimer: dev.lumenara.catalog.SleepTimer? = null,
+    sleepTimerExpired: () -> Unit = back,
 ) {
+    val activeSleepTimer = sleepTimer ?: remember { dev.lumenara.catalog.SleepTimer() }
     var panel by remember { mutableStateOf(false) }
     var multi by remember { mutableStateOf(emptyList<Item>()) }
     var hint by remember { mutableStateOf("") }
@@ -300,6 +303,14 @@ internal fun Playback(
     var limit by remember { mutableIntStateOf(80) }
     val slots = remember { decoderSlots() }
     val scope = rememberCoroutineScope()
+    var sleepTimerVersion by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(1000)
+            sleepTimerVersion++
+            if (activeSleepTimer.poll()) sleepTimerExpired()
+        }
+    }
     if (multi.isNotEmpty()) {
         MultiView(
             model,
@@ -319,6 +330,10 @@ internal fun Playback(
     val composeView = LocalView.current
     val live = item.kind == "LIVE"
     val fullscreen = rememberFullscreenState(item)
+    fun episodeEnded() {
+        if (activeSleepTimer.episodeEnded()) sleepTimerExpired()
+        else if (item.kind == "EPISODE") fullscreen.finished = group.nextItem(item) != null
+    }
     var subtitle by remember(item.id) { mutableStateOf<MediaItem.SubtitleConfiguration?>(null) }
     var preferenceKey by remember(item.id) { mutableStateOf("") }
     var delayMs by remember(item.id) { mutableLongStateOf(0) }
@@ -365,9 +380,12 @@ internal fun Playback(
             subtitle = subtitle,
             attachSubtitle = { subtitle = it },
             select = { channel, rows -> changeGroup(rows); select(channel) },
-        ) {
-            if (item.kind == "EPISODE") move(1)
-        }
+            next = { if (item.kind == "EPISODE") move(1) },
+            sleepTimer = activeSleepTimer,
+            sleepTimerVersion = sleepTimerVersion,
+            onSleepTimerChanged = { sleepTimerVersion++ },
+            episodeEnded = ::episodeEnded,
+        )
         return
     }
     val numbers = if (live) rememberLiveNumberControl(model, item.source, item.id) { channel, rows ->
@@ -442,8 +460,7 @@ internal fun Playback(
                 }
             },
             ended = {
-                if (item.kind == "EPISODE")
-                    fullscreen.finished = group.nextItem(item) != null
+                if (item.kind == "EPISODE") episodeEnded()
             },
         )
         if (!panel) FullscreenOverlay(model, item, group, fullscreen,
@@ -454,6 +471,10 @@ internal fun Playback(
                 ({ move(1) }) else null)
         numbers?.let { NumberEntry(it) }
         SubtitleNotice(subtitleNotice) { subtitleNotice = "" }
+        SleepTimerCard(activeSleepTimer, sleepTimerVersion) {
+            activeSleepTimer.cancel()
+            sleepTimerVersion++
+        }
         if (panel) {
             val candidates by
                 remember(item.source, category, channelQuery, limit) {
@@ -484,6 +505,7 @@ internal fun Playback(
                     Text(item.title, fontSize = 20.sp)
                     Text(item.category, color = Ink.muted)
                 }
+                item { SleepTimerChoices(activeSleepTimer, item.kind == "EPISODE") { sleepTimerVersion++ } }
                 item {
                     Button(onClick = { panel = false }, modifier = Modifier.focusRequester(close)) {
                         Text("Yayına dön")
@@ -656,6 +678,47 @@ internal fun Playback(
             }
         }
         SubtitleResults(subtitleSearch, panel, focus)
+    }
+}
+
+@Composable
+internal fun SleepTimerChoices(
+    timer: dev.lumenara.catalog.SleepTimer,
+    episodeAvailable: Boolean,
+    changed: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("Uyku zamanlayıcısı")
+        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            val choices = dev.lumenara.catalog.SleepTimer.Choice.values().filter {
+                it != dev.lumenara.catalog.SleepTimer.Choice.EPISODE || episodeAvailable
+            }
+            choices.forEach { choice ->
+                Button(onClick = { timer.select(choice); changed() }) {
+                    Text((if (timer.choice == choice) "✓ " else "") + choice.label)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun androidx.compose.foundation.layout.BoxScope.SleepTimerCard(
+    timer: dev.lumenara.catalog.SleepTimer,
+    version: Int,
+    cancel: () -> Unit,
+) {
+    @Suppress("UNUSED_VARIABLE") val refresh = version
+    if (!timer.showCountdown()) return
+    val seconds = ((timer.remainingMs() ?: 0L) + 999) / 1000
+    Row(
+        Modifier.align(Alignment.TopCenter).padding(top = 36.dp).glass().padding(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Lumenara $seconds sn sonra duracak")
+        Button(onClick = cancel) { Text("İptal (OK)") }
+        Button(onClick = { timer.addFifteenMinutes() }) { Text("+15 dk") }
     }
 }
 

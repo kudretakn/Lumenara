@@ -56,12 +56,17 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
         }
     }
     val item = playing
+    val sleepTimer = remember { dev.lumenara.catalog.SleepTimer() }
     if (item != null) {
         key(item.id, item.encryptedUrl) {
             Playback(model, item, siblings, { playing = it }, {
                 if (section == "Canlı TV") returnToChannel = item.id
                 playing = null
-            }, { siblings = it })
+            }, { siblings = it }, sleepTimer) {
+                sleepTimer.cancel()
+                playing = null
+                section = "Ana Sayfa"
+            }
         }
         return
     }
