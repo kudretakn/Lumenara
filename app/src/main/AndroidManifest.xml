@@ -12,7 +12,10 @@
         android:banner="@drawable/banner" android:icon="@drawable/mark" android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules" android:usesCleartextTraffic="true">
         <receiver android:name=".UpdateInstallReceiver" android:exported="false"/>
-        <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="landscape" android:launchMode="singleTop">
+        <!-- TV home/search links must return to our existing task, even from another task.
+             Keep the default application task affinity; singleTop alone only reuses the top
+             activity in the selected task. -->
+        <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="landscape" android:launchMode="singleTask">
             <meta-data android:name="android.app.searchable" android:resource="@xml/searchable"/>
             <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>

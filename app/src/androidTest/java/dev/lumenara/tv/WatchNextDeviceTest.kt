@@ -7,6 +7,7 @@ import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.uiautomator.UiDevice
 import androidx.tvprovider.media.tv.TvContractCompat
 import androidx.tvprovider.media.tv.WatchNextProgram
 import dev.lumenara.data.*
@@ -82,10 +83,16 @@ class WatchNextDeviceTest {
                 assertEquals(1234L, row.lastEngagementTimeUtcMillis)
                 assertEquals(movie.title, row.title)
                 assertEquals(WatchNextPlayback(movie.id, 1_000), parseWatchNextLink(row.intentUri.toString()))
-                val link = Intent(Intent.ACTION_VIEW, row.intentUri, context, MainActivity::class.java)
-                // Use the real VIEW intent for both launches: ActivityScenario matches lifecycle
-                // callbacks against its launch intent, while onNewIntent calls setIntent.
-                val playback = ActivityScenario.launch<MainActivity>(link)
+                // Resolve the published URI through the manifest, as the TV launcher does.
+                val component = Intent(Intent.ACTION_VIEW, row.intentUri)
+                    .setPackage(context.packageName).resolveActivity(context.packageManager)
+                assertEquals(MainActivity::class.java.name, checkNotNull(component).className)
+                fun playbackIntent() = Intent(Intent.ACTION_VIEW, row.intentUri)
+                    .setComponent(component).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                // ActivityScenario mutates its argument with NEW_TASK | CLEAR_TASK. Never copy
+                // that intent for a warm launch. Keep action/data/component identical so its
+                // lifecycle monitor still matches after MainActivity.onNewIntent calls setIntent.
+                val playback = ActivityScenario.launch<MainActivity>(playbackIntent())
                 playback.use { scenario ->
                     fun awaitVideo() {
                         // A blocking latch await starves Compose's test clock and LaunchedEffects.
@@ -95,7 +102,13 @@ class WatchNextDeviceTest {
                     }
                     awaitVideo() // Cold launch: onCreate.
                     lateinit var firstActivity: MainActivity
-                    scenario.onActivity { firstActivity = it }
+                    var firstTask = -1
+                    scenario.onActivity {
+                        firstActivity = it
+                        firstTask = it.taskId
+                        assertEquals(row.intentUri, it.intent.data)
+                        assertEquals(Lifecycle.State.RESUMED, it.lifecycle.currentState)
+                    }
                     // Back dismisses the initial playback banner before exiting the player.
                     repeat(2) {
                         if (screen.onAllNodesWithContentDescription("Tam ekran oynatıcı").fetchSemanticsNodes().isNotEmpty()) {
@@ -107,14 +120,25 @@ class WatchNextDeviceTest {
                         screen.onAllNodesWithContentDescription("Tam ekran oynatıcı").fetchSemanticsNodes().isEmpty()
                     }
                     screen.waitForIdle()
+                    // Exercise a stopped app behind TV Home, not a self-launch from the player.
+                    assertTrue(UiDevice.getInstance(test).pressHome())
+                    screen.waitUntil(30_000) { scenario.state == Lifecycle.State.CREATED }
                     videoRequested.set(java.util.concurrent.CountDownLatch(1))
-                    scenario.onActivity {
-                        it.startActivity(Intent(link).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP))
+                    val warmIntent = playbackIntent().putExtra("watch-next-test-warm", true)
+                    assertEquals(0, warmIntent.flags and Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                    context.startActivity(warmIntent)
+                    screen.waitUntil(30_000) {
+                        scenario.state == Lifecycle.State.RESUMED || scenario.state == Lifecycle.State.DESTROYED
                     }
+                    // Fail on replacement before attempting to access a destroyed scenario.
+                    assertEquals(Lifecycle.State.RESUMED, scenario.state)
                     awaitVideo() // Warm launch: onNewIntent must reuse the existing activity.
                     scenario.onActivity {
                         assertSame(firstActivity, it)
+                        assertEquals(firstTask, it.taskId)
+                        assertTrue(it.intent.getBooleanExtra("watch-next-test-warm", false))
                         assertEquals(row.intentUri, it.intent.data)
+                        assertEquals(WatchNextPlayback(movie.id, 1_000), parseWatchNextLink(it.intent.dataString!!))
                         assertEquals(Lifecycle.State.RESUMED, it.lifecycle.currentState)
                     }
                 }
