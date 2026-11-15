@@ -60,6 +60,10 @@ class Repository private constructor(private val context: Context) {
     private val vault = Vault(context)
     private val metadata = Metadata(context, vault)
     private val preferences = Preferences(context)
+    private val seriesExpansionCache = SeriesExpansionCache(
+        readStamp = { preferences.text("series_expanded_$it").first().toLongOrNull() ?: 0L },
+        writeStamp = { id, stamp -> preferences.set("series_expanded_$id", stamp.toString()) },
+    )
     // Resolve names from the complete catalog, before applying any visibility filter.
     val hidden: Flow<List<String>> = combine(
         preferences.showAdult, library.categoryCounts("", ""),
@@ -488,32 +492,41 @@ class Repository private constructor(private val context: Context) {
                 val source = library.source(series.source) ?: return@withLock emptyList()
                 val spec = SourceSpec.decode(vault.decrypt(source.endpoint))
                 if (spec.user.isEmpty()) return@withLock library.episodeSnapshot(series.id)
-                val token = System.currentTimeMillis()
-                val listings =
-                    Xtream(spec)
+                seriesExpansionCache.get(series.id, cached = { library.episodeSnapshot(series.id) }) {
+                    val token = System.currentTimeMillis()
+                    val listings = Xtream(spec)
                         .episodes(vault.decrypt(series.encryptedUrl), series.title)
                         .distinctBy { it.url }
-                val entries = listings.map { item(source.id, token, it).copy(parent = series.id) }
-                db.withTransaction {
-                    library.save(entries)
-                    listings.zip(entries).forEach { (listing, episode) ->
-                        val mark = library.mark(episode.id) ?: Mark(episode.id)
-                        if (mark.duration <= 0 && listing.durationMs > 0)
-                            library.save(mark.copy(duration = listing.durationMs))
+                    val entries = listings.map { item(source.id, token, it).copy(parent = series.id) }
+                    db.withTransaction {
+                        library.save(entries)
+                        val siblings = if (entries.isEmpty()) emptyList() else allVersions(series)
+                            .filter { it.id != series.id }.flatMap { library.episodeSnapshot(it.id) }
+                        // Android 9 SQLite allows 999 binds: normally one IN query, bounded for
+                        // very long series. Read current and sibling marks together, never per episode.
+                        val marks = (entries + siblings).map { it.id }.distinct().chunked(900)
+                            .flatMap { library.marksByIds(it) }.associateBy { it.id }
+                        val shared = siblings.groupBy { it.seriesEpisode().let { n -> n.season to n.episode } }
+                            .mapValues { (_, episodes) -> episodes.mapNotNull { marks[it.id] }.maxByOrNull { it.updated } }
+                        listings.zip(entries).forEach { (listing, episode) ->
+                            val existing = marks[episode.id]
+                            var mark = existing ?: Mark(episode.id)
+                            var changed = false
+                            if (mark.duration <= 0 && listing.durationMs > 0)
+                                mark = mark.copy(duration = listing.durationMs).also { changed = true }
+                            if (mark.updated == 0L) {
+                                val number = episode.seriesEpisode()
+                                shared[number.season to number.episode]?.let {
+                                    mark = it.copy(id = episode.id)
+                                    changed = true
+                                }
+                            }
+                            if (changed) library.save(mark)
+                        }
+                        library.pruneEpisodes(series.id, token)
                     }
-                    library.pruneEpisodes(series.id, token)
+                    entries
                 }
-                for (entry in entries) {
-                    if (library.mark(entry.id)?.updated == 0L || library.mark(entry.id) == null) {
-                        val number = entry.seriesEpisode()
-                        val shared = allVersions(series).filter { it.id != series.id }
-                            .flatMap { library.episodeSnapshot(it.id) }.filter {
-                                val n = it.seriesEpisode(); n.season == number.season && n.episode == number.episode
-                            }.mapNotNull { library.mark(it.id) }.maxByOrNull { it.updated }
-                        if (shared != null) library.save(shared.copy(id = entry.id))
-                    }
-                }
-                entries
             }
         }
 

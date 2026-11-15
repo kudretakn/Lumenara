@@ -21,7 +21,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Button
 import androidx.tv.material3.Text
-import dev.lumenara.catalog.searchable
+import dev.lumenara.data.debouncedSearchQuery
 import dev.lumenara.data.Item
 import dev.lumenara.data.ProgramHit
 import dev.lumenara.design.Ink
@@ -50,7 +50,10 @@ internal fun SearchScreen(
         }
     }
     var query by rememberSaveable { mutableStateOf("") }
-    var limit by rememberSaveable(source, query) { mutableIntStateOf(80) }
+    val settledQuery by remember(source) {
+        snapshotFlow { query }.debouncedSearchQuery()
+    }.collectAsStateWithLifecycle("")
+    var limit by rememberSaveable(source, settledQuery) { mutableIntStateOf(80) }
     val voice = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         if (it.resultCode == Activity.RESULT_OK) {
             it.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
@@ -72,16 +75,17 @@ internal fun SearchScreen(
         }
     }
     val shelves = listOf("Kanallar" to "LIVE", "Filmler" to "MOVIE", "Diziler" to "SERIES").map { (title, kind) ->
-        val rows by remember(source, kind, query, limit) {
-            model.repo.browse(source, kind, "", searchable(query), "", limit)
+        val rows by remember(source, kind, settledQuery, limit) {
+            if (settledQuery.isEmpty()) flowOf(emptyList())
+            else model.repo.browse(source, kind, "", settledQuery, "", limit)
         }.collectAsStateWithLifecycle(emptyList())
         title to rows
     }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { wallClockTicks(30_000).collect { now = it } }
-    val programs by remember(source, query, now) {
-        if (query.isBlank()) flowOf(emptyList())
-        else model.repo.searchPrograms(source, searchable(query), now - 7 * 86_400_000L, now)
+    val programs by remember(source, settledQuery, now) {
+        if (settledQuery.isEmpty()) flowOf(emptyList())
+        else model.repo.searchPrograms(source, settledQuery, now - 7 * 86_400_000L, now)
             .flatMapLatest { hits ->
                 val ids = hits.map { it.itemId }.distinct()
                 if (ids.isEmpty()) flowOf(emptyList())
