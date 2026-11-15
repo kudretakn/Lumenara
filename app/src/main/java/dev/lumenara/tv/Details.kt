@@ -182,12 +182,11 @@ internal fun Details(
                                             color = Ink.accent,
                                         )
                                         if (person.portrait.isNotBlank())
-                                            coil.compose.AsyncImage(
-                                                person.portrait,
-                                                null,
+                                            Artwork(model, item, person.portrait,
                                                 Modifier.fillMaxSize(),
                                                 contentScale =
                                                     androidx.compose.ui.layout.ContentScale.Crop,
+                                                role = "person",
                                             )
                                     }
                                     Text(

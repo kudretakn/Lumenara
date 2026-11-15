@@ -19,7 +19,6 @@ import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.*
-import coil.compose.AsyncImage
 import dev.lumenara.data.*
 import dev.lumenara.design.Ink
 import dev.lumenara.design.GlassPanel
@@ -31,7 +30,7 @@ internal fun Poster(model: LibraryModel, item: Item, modifier: Modifier) {
     Box(modifier.background(Ink.surface), contentAlignment = Alignment.Center) {
         Text(item.title.take(1), color = Ink.accent, fontSize = 30.sp)
         if (image != null)
-            AsyncImage(image, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            Artwork(model, item, image, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
     }
 }
 
@@ -79,12 +78,20 @@ internal fun Home(
     lastCard: String = "Canlı TV",
     navigate: (String) -> Unit,
 ) {
-    val recent by remember(source) { model.repo.recentLive(source) }.collectAsStateWithLifecycle(emptyList())
-    val resume by remember(source) { model.repo.continueWatching(source) }.collectAsStateWithLifecycle(emptyList())
+    val recentResult by remember(source) { model.repo.recentLive(source) }.collectAsLoadingState()
+    val resumeResult by remember(source) { model.repo.continueWatching(source) }.collectAsLoadingState()
+    val recent = recentResult.orEmpty()
+    val resume = resumeResult.orEmpty()
     val counts = listOf("LIVE", "MOVIE", "SERIES").map { kind ->
         val groups by remember(source, kind) { model.repo.categoryCounts(kind, source) }
-            .collectAsStateWithLifecycle(emptyList())
-        groups.sumOf { it.count }
+            .collectAsLoadingState()
+        groups?.sumOf { it.count }
+    }
+    LaunchedEffect(counts.all { it != null }) {
+        if (counts.all { it != null }) {
+            withFrameNanos { }; withFrameNanos { }
+            Perf.since("startup", "startup_hub_first_draw")
+        }
     }
     val update by model.update.collectAsStateWithLifecycle()
     var focused by rememberSaveable { mutableStateOf(lastCard) }
@@ -94,8 +101,9 @@ internal fun Home(
     val target = if (focused in cards) focused else lastCard
     val returnShelf = remember { focused.takeIf { it == "recent" || it == "resume" } }
     var restored by remember { mutableStateOf(false) }
-    LaunchedEffect(recent, resume) {
+    LaunchedEffect(recentResult, resumeResult) {
         if (!restored) {
+            if (returnShelf != null && (recentResult == null || resumeResult == null)) return@LaunchedEffect
             when {
                 returnShelf == "recent" && recent.isNotEmpty() -> list.scrollToItem(3)
                 returnShelf == "resume" && resume.isNotEmpty() -> list.scrollToItem(if (recent.isEmpty()) 3 else 4)
@@ -118,9 +126,9 @@ internal fun Home(
                 repeat(3) { column ->
                     val index = row * 3 + column
                     val name = cards[index]
-                    val caption = if (index < 3) {
+                    val caption = if (index < 3 && counts[index] != null) {
                         val number = java.text.NumberFormat.getIntegerInstance(java.util.Locale.forLanguageTag("tr"))
-                            .format(counts[index])
+                            .format(counts[index] ?: 0)
                         "$number " + listOf("kanal", "film", "dizi")[index]
                     } else ""
                     NavigationCard(name, caption,
@@ -132,8 +140,14 @@ internal fun Home(
                             .onFocusChanged { if (it.isFocused) focused = name },
                         update = name == "Ayarlar" && update != null,
                         icon = listOf(2, 3, 4, 5, 0, 6)[index],
+                        loadingCaption = index < 3 && counts[index] == null,
                     ) { navigate(name) }
                 }
+            }
+        }
+        if (recentResult == null || resumeResult == null) item {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(15.dp)) {
+                items(8) { LoadingCard(Modifier.width(210.dp).height(140.dp)) }
             }
         }
         if (recent.isNotEmpty()) item(key = "recent-live") {
@@ -183,18 +197,22 @@ internal fun Browse(
     }.orEmpty()
     val shelf = if (section == "Listem") selectedCategory.orEmpty() else ""
     val groups by remember(kind, source) { model.repo.categoryCounts(kind, source) }
-        .collectAsStateWithLifecycle(emptyList())
+        .collectAsLoadingState()
     val favoriteCount by remember(source) { model.repo.shelfCount(source, "", "favorite") }
-        .collectAsStateWithLifecycle(0)
+        .collectAsLoadingState()
     val listedCount by remember(source) { model.repo.shelfCount(source, "", "list") }
-        .collectAsStateWithLifecycle(0)
+        .collectAsLoadingState()
     val cardPages = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
     BackHandler(selectedCategory != null) { selectedCategory = null }
     if (selectedCategory == null) {
-        val entries = if (section == "Listem")
-            listOf(CategoryEntry("favorite", "Favoriler", favoriteCount), CategoryEntry("list", "İzleme listem", listedCount))
-        else listOf(CategoryEntry("all", "Tümü", groups.sumOf { it.count })).filter { it.count > 0 } +
-            providerCategories(groups)
+        val entries = if (section == "Listem") {
+            if (favoriteCount == null || listedCount == null) null
+            else listOf(CategoryEntry("favorite", "Favoriler", favoriteCount ?: 0),
+                CategoryEntry("list", "İzleme listem", listedCount ?: 0))
+        } else groups?.let {
+            listOf(CategoryEntry("all", "Tümü", it.sumOf { group -> group.count }))
+                .filter { entry -> entry.count > 0 } + providerCategories(it)
+        }
         cardPages.SaveableStateProvider("categories") {
             CategoryGrid(section, entries) { selectedCategory = it.id; categoryTitle = it.name }
         }
@@ -227,9 +245,17 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
             restoreFilterFocus = false
         }
     }
-    val rows by remember(source, kind, shelf, category, limit, year, genre, language, rating) {
+    val result by remember(source, kind, shelf, category, limit, year, genre, language, rating) {
         model.repo.browse(source, kind, category, "", shelf, limit, year, genre, language, rating.toDouble())
-    }.collectAsStateWithLifecycle(emptyList())
+    }.collectAsLoadingState()
+    val rows = result.orEmpty()
+    val loading = result == null
+    LaunchedEffect(rows.isNotEmpty()) {
+        if (rows.isNotEmpty()) {
+            withFrameNanos { }; withFrameNanos { }
+            Perf.since("category", "category_grid_first_draw")
+        }
+    }
     val grid = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
     var lastPoster by rememberSaveable(source, category, shelf) { mutableStateOf<String?>(null) }
     val posterFocus = remember { FocusRequester() }
@@ -243,14 +269,15 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
             positioned = true
         }
     }
+    PrefetchArtwork(model, grid, rows)
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { wallClockTicks(30_000).collect { now = it } }
     BackHandler(advanced) { closeFilters() }
-    LaunchedEffect(rows) {
-        if (rows.isEmpty() && kind in listOf("MOVIE", "SERIES") && !advanced) filterButton.requestFocus()
+    LaunchedEffect(rows, loading) {
+        if (!loading && rows.isEmpty() && kind in listOf("MOVIE", "SERIES") && !advanced) filterButton.requestFocus()
     }
     val emptyFocus = remember { FocusRequester() }
-    LaunchedEffect(rows) { if (rows.isEmpty() && kind.isEmpty()) emptyFocus.requestFocus() }
+    LaunchedEffect(rows, loading) { if (!loading && rows.isEmpty() && kind.isEmpty()) emptyFocus.requestFocus() }
     val panelFocus = remember { FocusRequester() }
     // Keep the filter layer over the content instead of consuming another Column slot.
     Box(Modifier.fillMaxSize()) {
@@ -279,7 +306,8 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
                 verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
-                if (rows.isEmpty()) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(6) }) {
+                if (loading) loadingCards(240.dp)
+                if (!loading && rows.isEmpty()) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(6) }) {
                     Column {
                         Text("Eşleşen içerik yok.", color = Ink.muted)
                         if (kind.isEmpty()) {

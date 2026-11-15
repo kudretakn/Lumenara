@@ -253,7 +253,13 @@ internal fun SettingsScreen(
             }
         }
         setting {
-            AsyncImage(R.raw.tmdb, "TMDB", Modifier.width(75.dp).height(14.dp))
+            val density = androidx.compose.ui.platform.LocalDensity.current
+            val tmdbRequest = remember(context, density) {
+                coil.request.ImageRequest.Builder(context).data(R.raw.tmdb)
+                    .size(with(density) { 75.dp.roundToPx() }, with(density) { 14.dp.roundToPx() })
+                    .allowRgb565(true).crossfade(false).build()
+            }
+            AsyncImage(tmdbRequest, "TMDB", Modifier.width(75.dp).height(14.dp))
             Text(
                 "This product uses the TMDB API but is not endorsed or certified by TMDB.",
                 fontSize = 12.sp,

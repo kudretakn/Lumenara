@@ -152,7 +152,7 @@ internal class SubtitleSearchState(
             open = true
             return
         }
-        scope.launch {
+        scope.launch(Dispatchers.Main.immediate) {
             loading = true
             results = emptyList()
             message = ""
@@ -176,7 +176,9 @@ internal class SubtitleSearchState(
 
     fun select(result: SubtitleResult) {
         if (loading) return
-        scope.launch {
+        // DataStore completes on its worker. Keep the UI continuation on Main,
+        // including when Compose tests supply an unconfined effect dispatcher.
+        scope.launch(Dispatchers.Main.immediate) {
             loading = true
             try {
                 val key = model.repo.preferenceKey(item)

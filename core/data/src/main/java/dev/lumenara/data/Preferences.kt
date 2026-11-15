@@ -30,6 +30,15 @@ class Preferences(context: Context) {
         set("secret_$key", if (value.isEmpty()) "" else vault.encrypt(value))
     }
 
+    internal suspend fun fetchState(key: String): FetchState {
+        val value = secret("refresh_$key")
+        return FetchState.decode(value)
+    }
+
+    // Only commit after a successful import; failed parsing must never acknowledge new validators.
+    internal suspend fun setFetchState(key: String, state: FetchState) =
+        setSecret("refresh_$key", state.encode())
+
     fun text(key: String, fallback: String = "") =
         store.data.map { it[stringPreferencesKey(key)] ?: fallback }
 

@@ -20,7 +20,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.*
-import coil.compose.AsyncImage
 import dev.lumenara.data.*
 import dev.lumenara.design.Ink
 import dev.lumenara.design.FocusCard
@@ -65,17 +64,16 @@ internal fun CinemaBackdrop(
             }
         }
     Box(Modifier.fillMaxSize().background(Ink.background)) {
-        Crossfade(address, animationSpec = tween(600), label = "Sinema arka planı") { art ->
+        Crossfade(address, animationSpec = tween(100), label = "Sinema arka planı") { art ->
             if (art != null) {
                 Box(Modifier.fillMaxSize()) {
-                    AsyncImage(
-                        art.first,
-                        null,
+                    Artwork(model, item, art.first,
                         Modifier.align(Alignment.CenterEnd)
                             .fillMaxHeight()
                             .fillMaxWidth(if (art.second) .62f else 1f),
                         contentScale = if (art.second) ContentScale.Fit else ContentScale.Crop,
                         alignment = Alignment.CenterEnd,
+                        role = if (art.second) "poster" else "backdrop",
                     )
                 }
             } else

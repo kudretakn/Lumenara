@@ -71,15 +71,15 @@ internal fun SearchScreen(
             listen()
         }
     }
-    val shelves = listOf("Kanallar" to "LIVE", "Filmler" to "MOVIE", "Diziler" to "SERIES").map { (title, kind) ->
+    val shelfResults = listOf("Kanallar" to "LIVE", "Filmler" to "MOVIE", "Diziler" to "SERIES").map { (title, kind) ->
         val rows by remember(source, kind, query, limit) {
             model.repo.browse(source, kind, "", searchable(query), "", limit)
-        }.collectAsStateWithLifecycle(emptyList())
+        }.collectAsLoadingState()
         title to rows
     }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { wallClockTicks(30_000).collect { now = it } }
-    val programs by remember(source, query, now) {
+    val programResult by remember(source, query, now) {
         if (query.isBlank()) flowOf(emptyList())
         else model.repo.searchPrograms(source, searchable(query), now - 7 * 86_400_000L, now)
             .flatMapLatest { hits ->
@@ -90,9 +90,12 @@ internal fun SearchScreen(
                     hits.mapNotNull { hit -> byId[hit.itemId]?.let { hit to it } }
                 }
             }
-    }.collectAsStateWithLifecycle(emptyList())
-    LaunchedEffect(shelves, programs) {
-        if (restoring && lastShelf != null) {
+    }.collectAsLoadingState()
+    val loading = shelfResults.any { it.second == null } || programResult == null
+    val shelves = shelfResults.map { it.first to it.second.orEmpty() }
+    val programs = programResult.orEmpty()
+    LaunchedEffect(shelves, programs, loading) {
+        if (restoring && lastShelf != null && !loading) {
             val visible = shelves.filter { it.second.isNotEmpty() }.map { it.first } +
                 if (programs.isNotEmpty()) listOf("Programlar") else emptyList()
             val index = visible.indexOf(lastShelf)
@@ -111,7 +114,12 @@ internal fun SearchScreen(
         }
         LazyColumn(Modifier.weight(1f).testTag("search-results").focusRestorer().focusGroup(), state = resultsState,
             contentPadding = PaddingValues(8.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-            if (programs.isEmpty() && shelves.all { it.second.isEmpty() }) item { Text("Eşleşen içerik yok.", color = Ink.muted) }
+            if (loading) item {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(15.dp)) {
+                    items(8) { LoadingCard(Modifier.width(150.dp).height(240.dp)) }
+                }
+            }
+            if (!loading && programs.isEmpty() && shelves.all { it.second.isEmpty() }) item { Text("Eşleşen içerik yok.", color = Ink.muted) }
             items(shelves.filter { it.second.isNotEmpty() }, key = { it.first }) { (title, rows) ->
                 if (title == "Kanallar") ChannelShelf(model, title, rows, play, { lastShelf = title })
                 else Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {

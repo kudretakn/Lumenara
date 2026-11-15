@@ -66,15 +66,21 @@ internal fun Video(
     val currentFailure by rememberUpdatedState(failure)
     LaunchedEffect(error) { currentFailure(error.isNotEmpty()) }
     var player by remember { mutableStateOf<ExoPlayer?>(null) }
-    var resume by remember { mutableLongStateOf(initial) }
+    var listener by remember { mutableStateOf<Player.Listener?>(null) }
+    var configuration by remember { mutableStateOf<Triple<Boolean, Boolean, String>?>(null) }
+    val allowedHttp = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+    val allowedSubtitle = remember { java.util.concurrent.atomic.AtomicReference<android.net.Uri?>(null) }
+    var resume by remember(item.id) { mutableLongStateOf(initial) }
     val size by remember { model.prefs.text("size", "Orta") }.collectAsStateWithLifecycle("Orta")
     val color by remember {
         model.prefs.text("color", "Beyaz")
     }
         .collectAsStateWithLifecycle("Beyaz")
-    LaunchedEffect(item.id, attempt, subtitle) {
+    LaunchedEffect(item.id, item.encryptedUrl, attempt, subtitle) {
         withContext(Dispatchers.Main.immediate) {
             error = ""
+            playbackActive = false
+            subtitleText = ""
             try {
                 val source = model.repo.library.source(item.source) ?: error("Kaynak kaldırıldı")
                 val url = model.repo.address(item)
@@ -86,31 +92,45 @@ internal fun Video(
                             if (item.kind == "EPISODE") dev.lumenara.catalog.resumePosition(it.position, it.duration)
                             else it.position.takeIf { position -> it.duration <= 0 || position < it.duration * .95 } ?: 0
                         } ?: 0
-                val engine =
-                    createPlayer(
+                val profile = model.prefs.text("buffer", "Dengeli").first()
+                val config = Triple(item.kind == "LIVE", multi, profile)
+                allowedHttp.set(source.allowHttp)
+                allowedSubtitle.set(subtitle?.uri)
+                if (configuration != config) {
+                    player?.release()
+                    player = null
+                }
+                val engine = player ?: createPlayer(
                         context,
                         source.allowHttp,
                         !multi,
-                        model.prefs.text("buffer", "Dengeli").first(),
+                        profile,
                         subtitle?.uri,
                         automaticRetries = item.kind != "LIVE",
                         subtitleDelayUs = subtitleDelayUs,
+                        live = item.kind == "LIVE",
+                        httpAllowed = { allowedHttp.get() },
+                        permittedSubtitle = { allowedSubtitle.get() },
                     )
+                configuration = config
+                player = engine
                 val preferenceKey = model.repo.preferenceKey(item)
                 val audioPreference = model.prefs.playbackChoice("audio", preferenceKey)
                 val textPreference = model.prefs.playbackChoice("text", preferenceKey)
                 val dubbed = dev.lumenara.catalog.productionName(item.title, item.year).version == dev.lumenara.catalog.AudioVersion.DUBBED
                 engine.trackSelectionParameters = engine.trackSelectionParameters.buildUpon()
+                    .clearOverrides()
                     .setPreferredAudioLanguages(audioPreference.ifBlank { "tr" }, "tur")
                     .setPreferredTextLanguages("tr", "tur")
                     .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, textPreference == "off" || textPreference.isBlank() && dubbed)
                     .build()
-                player = engine
                 currentReady(engine)
                 var recorded = false
                 var formats = ""
-                engine.addListener(
-                    object : Player.Listener {
+                val mediaListener = object : Player.Listener {
+                        override fun onRenderedFirstFrame() {
+                            if (!preview && !multi) Perf.since("channel", "channel_first_frame_media3")
+                        }
                         override fun onCues(cueGroup: androidx.media3.common.text.CueGroup) {
                             subtitleText = cueGroup.cues.mapNotNull { it.text }.joinToString(" ")
                         }
@@ -187,7 +207,8 @@ internal fun Video(
                             }
                         }
                     }
-                )
+                listener = mediaListener
+                engine.addListener(mediaListener)
                 val media = MediaItem.Builder().setUri(url)
                 if (subtitle != null) media.setSubtitleConfigurations(listOf(subtitle))
                 engine.setMediaItem(media.build(), if (item.kind == "LIVE") 0 else start)
@@ -208,19 +229,26 @@ internal fun Video(
             }
         }
     }
-    DisposableEffect(item.id, attempt, subtitle) {
+    DisposableEffect(item.id, item.encryptedUrl, attempt, subtitle) {
         onDispose {
             player?.let { engine ->
                 resume = if (engine.playbackState == Player.STATE_ENDED && engine.duration > 0)
                     engine.duration else engine.currentPosition
                 model.progress(item, resume, engine.duration)
-                engine.release()
-                player = null
-                currentReady(null)
+                listener?.let(engine::removeListener)
+                listener = null
+                engine.stop()
             }
         }
     }
-    LaunchedEffect(player) {
+    DisposableEffect(Unit) {
+        onDispose {
+            player?.release()
+            player = null
+            currentReady(null)
+        }
+    }
+    LaunchedEffect(player, item.id) {
         val engine = player ?: return@LaunchedEffect
         withContext(Dispatchers.Main.immediate) {
             wallClockTicks(5000).collect {
@@ -246,7 +274,7 @@ internal fun Video(
                 it.isFocusable = false
                 it.isFocusableInTouchMode = false
                 it.descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS
-                it.player = player
+                if (it.player !== player) it.player = player
                 it.subtitleView?.setFractionalTextSize(
                     when (size) {
                         "Küçük" -> 0.04f
@@ -300,6 +328,9 @@ internal fun Playback(
     var limit by remember { mutableIntStateOf(80) }
     val slots = remember { decoderSlots() }
     val scope = rememberCoroutineScope()
+    var moveJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    val activeId by rememberUpdatedState(item.id)
+    DisposableEffect(item.id) { onDispose { moveJob?.cancel() } }
     if (multi.isNotEmpty()) {
         MultiView(
             model,
@@ -322,7 +353,7 @@ internal fun Playback(
     var subtitle by remember(item.id) { mutableStateOf<MediaItem.SubtitleConfiguration?>(null) }
     var preferenceKey by remember(item.id) { mutableStateOf("") }
     var delayMs by remember(item.id) { mutableLongStateOf(0) }
-    val subtitleDelay = remember(item.id) { java.util.concurrent.atomic.AtomicLong() }
+    val subtitleDelay = remember { java.util.concurrent.atomic.AtomicLong() }
     LaunchedEffect(item.id) {
         preferenceKey = model.repo.preferenceKey(item)
         delayMs = model.prefs.text("delay_$preferenceKey", "0").first().toLongOrNull() ?: 0
@@ -331,6 +362,15 @@ internal fun Playback(
         if (cached != null && model.prefs.playbackChoice("text", preferenceKey) != "off") subtitle = subtitleConfiguration(cached)
     }
     fun move(delta: Int) {
+        if (item.kind == "LIVE" && group is LiveChannelGroup) {
+            moveJob?.cancel()
+            moveJob = scope.launch {
+                liveNeighbor(model, item, group, delta)?.let { (channel, rows) ->
+                    if (activeId == item.id) { Perf.mark("channel"); changeGroup(rows); select(channel) }
+                }
+            }
+            return
+        }
         if (item.kind == "EPISODE" && delta == 1) group.nextItem(item)?.let(select)
         else {
             val rows = if (item.kind == "EPISODE") group.seriesOrder() else group
@@ -347,9 +387,9 @@ internal fun Playback(
     }
         .collectAsStateWithLifecycle("Açık")
     if (preferred == null) return
-    var vlc by remember { mutableStateOf(preferred == "VLC") }
+    var vlc by remember(item.id) { mutableStateOf(preferred == "VLC") }
     var transferred by remember(item.id) { mutableLongStateOf(-1) }
-    var switched by remember { mutableStateOf(false) }
+    var switched by remember(item.id) { mutableStateOf(false) }
     if (vlc) {
         VlcScreen(
             model,

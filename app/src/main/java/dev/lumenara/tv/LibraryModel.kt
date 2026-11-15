@@ -26,7 +26,7 @@ internal class LibraryModel
 constructor(val repo: Repository, val prefs: Preferences) : androidx.lifecycle.ViewModel() {
     val startInSetup: StateFlow<Boolean?> = MutableStateFlow<Boolean?>(null).also { state ->
         viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
-            state.value = repo.library.snapshot().isEmpty()
+            state.value = repo.sourceSnapshot().isEmpty()
         }
     }.asStateFlow()
     val sources = repo.library.sources().stateIn(viewModelScope, SharingStarted.Eagerly, null)

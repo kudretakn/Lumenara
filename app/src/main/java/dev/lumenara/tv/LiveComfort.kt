@@ -57,15 +57,6 @@ internal fun BoxScope.Reconnecting(retry: LiveRetry) {
 }
 
 @Composable
-internal fun liveChannels(model: LibraryModel, source: String): List<Item> {
-    // Numbering follows the visible source's Tümü order, including in the mini guide.
-    val rows by remember(source) {
-        model.repo.browse(source, "LIVE", "", "", "", Int.MAX_VALUE)
-    }.collectAsStateWithLifecycle(emptyList())
-    return rows
-}
-
-@Composable
 internal fun liveChannelNumbers(model: LibraryModel, source: String): Map<String, Int> {
     val order by remember(source) { model.repo.liveChannelOrder(source) }
         .collectAsStateWithLifecycle(emptyList())
@@ -80,16 +71,13 @@ internal fun liveChannelNumbers(model: LibraryModel, source: String): Map<String
 internal class LiveNumberControl {
     var input by mutableStateOf(NumberInput())
         private set
-    var channels by mutableStateOf<List<Item>>(emptyList())
-    var current: String? = null
     var selectPrevious: () -> Unit = {}
-    var selectNumber: (Item) -> Unit = {}
+    var selectNumber: (Int) -> Unit = {}
     fun apply(transition: NumberTransition) {
         input = transition.state
         when (val command = transition.command) {
             NumberCommand.Previous -> selectPrevious()
-            is NumberCommand.Select -> resolveChannel(command.number, channels)?.let(selectNumber)
-                ?: run { input = input.missing(System.currentTimeMillis()) }
+            is NumberCommand.Select -> selectNumber(command.number)
             null -> Unit
         }
     }
@@ -118,41 +106,38 @@ internal class LiveNumberControl {
 internal fun rememberLiveNumberControl(model: LibraryModel, source: String,
     currentId: String? = null, select: (Item, List<Item>) -> Unit): LiveNumberControl {
     val state = remember(source) { LiveNumberControl() }
-    val allChannels = liveChannels(model, source)
-    val channels = if (source.isNotEmpty()) allChannels else
-        allChannels.filter { it.source == allChannels.firstOrNull()?.source }
     val scope = rememberCoroutineScope()
+    var selection by remember { mutableStateOf<Job?>(null) }
+    DisposableEffect(state) { onDispose { selection?.cancel() } }
     val currentSelect by rememberUpdatedState(select)
     val currentIdState by rememberUpdatedState(currentId)
     SideEffect {
-        state.channels = channels
-        state.current = currentIdState
         state.selectPrevious = {
-            scope.launch {
+            selection?.cancel()
+            selection = scope.launch {
                 val target = model.repo.recentLive("").first()
                     .firstOrNull { currentIdState != null && it.id != currentIdState }
                 if (target == null) state.markMissing()
-                else {
-                    val rows = if (target.source == source) channels else
-                        model.repo.browse(target.source, "LIVE", "", "", "", Int.MAX_VALUE).first()
-                    currentSelect(target, rows)
-                }
+                else { Perf.mark("channel"); currentSelect(target, LiveChannelGroup(listOf(target), target.source)) }
             }
         }
-        state.selectNumber = { target ->
-            val rows = if (channels.any { it.id == target.id }) channels else listOf(target)
-            scope.launch {
-                val group = if (target.source == source) rows else
-                    model.repo.browse(target.source, "LIVE", "", "", "", Int.MAX_VALUE).first()
-                currentSelect(target, group)
+        state.selectNumber = { number ->
+            selection?.cancel()
+            selection = scope.launch {
+                Perf.mark("channel")
+                val target = model.repo.liveChannel(number, source)
+                if (target == null) state.markMissing()
+                else currentSelect(target, LiveChannelGroup(listOf(target), target.source))
             }
         }
     }
     LaunchedEffect(state, state.input.deadline, state.input.missingUntil) {
         val deadline = if (state.input.digits.isNotEmpty()) state.input.deadline else state.input.missingUntil
         if (deadline > 0) {
-            delay((deadline - System.currentTimeMillis()).coerceAtLeast(0))
-            state.apply(state.input.tick(System.currentTimeMillis()))
+            // NumberInput deadlines use wall time. A Compose/test-clock delay can
+            // finish early, leaving the same deadline with no effect to restart.
+            val now = wallClockTicks(50).first { it >= deadline }
+            state.apply(state.input.tick(now))
         }
     }
     return state

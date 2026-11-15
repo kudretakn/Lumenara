@@ -20,7 +20,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
-import coil.compose.AsyncImage
 import dev.lumenara.catalog.searchable
 import dev.lumenara.data.Item
 import dev.lumenara.design.FocusCard
@@ -80,7 +79,7 @@ internal fun ChannelCard(
         Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (logo != null)
-                    AsyncImage(logo, null, Modifier.size(36.dp), contentScale = ContentScale.Fit)
+                    Artwork(model, item, logo, Modifier.size(36.dp), contentScale = ContentScale.Fit)
                 Text((number?.let { "$it · " } ?: "") + item.title, Modifier.weight(1f), fontSize = 15.sp, maxLines = 1,
                     overflow = TextOverflow.Ellipsis)
             }

@@ -52,6 +52,10 @@ Devam yöntemi:
 5. Tek PR, CI yeşil, merge, `v0.4.1`. CHANGELOG'a ölçülen kazançları yaz.
 6. Kullanıcıdan TV'de güncelleyip `adb logcat -s LumenaraPerf` çıktısı ya da gözlem iste.
 
+## 0.4.1 (PR #19)
+- Performans paketi + yüklenme iskeletleri + Android 9 güncelleme imza düzeltmesi + açıklayıcı hata mesajları + VLC kısa okuma (altyazı düşmesi) düzeltmesi. Kullanıcının TV saati yanlıştı (GitHub TLS hatası); 0.4.0 ADB ile kuruldu.
+- Sonraki: 0.4.2 derin performans (ajanlar P1–P6, dallar `perf2/p1..p6`, Opus taraması bulguları; şema 8→9 → U3 artık 9→10).
+
 ## Paralel dallar (Codex, hepsi yerelde derlendi ve birim testleri geçti; cihaz testi henüz yok)
 - PR #19 `perf/0.4.1`: CI'da LivePagesTest ve LiveComfortTest (VLC) düşüyor; Codex düzeltiyor.
 - Özellik dalları (9519d9e tabanlı, `docs/FEATURES-0.4.md`): `feat/f-watchnext`, `feat/f-assistant`, `feat/f-framerate`, `feat/f-sleep`, `feat/f-backup`, `feat/f-subfix`. #19 merge olunca tek `feat/0.4.2` dalında birleştirilecek. Çakışma beklenen dosyalar: Playback.kt, VlcScreen.kt, Settings.kt, MainActivity.kt.
