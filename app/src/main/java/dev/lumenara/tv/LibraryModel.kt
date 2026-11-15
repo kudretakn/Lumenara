@@ -53,6 +53,13 @@ constructor(val repo: Repository, val prefs: Preferences) : androidx.lifecycle.V
     val notice = MutableStateFlow("")
     val update = MutableStateFlow<Update?>(null)
     val remoteSearch = MutableStateFlow(0)
+    val searchIntent = MutableStateFlow<Pair<Int, dev.lumenara.catalog.SearchRequest>?>(null)
+    val searchPrefill = MutableStateFlow<Pair<Int, String>?>(null)
+    private var searchIntentId = 0
+
+    fun receiveSearchIntent(request: dev.lumenara.catalog.SearchRequest) {
+        searchIntent.value = (++searchIntentId) to request
+    }
 
     init {
         viewModelScope.launch {

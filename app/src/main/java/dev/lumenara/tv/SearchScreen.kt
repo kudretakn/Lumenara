@@ -54,6 +54,11 @@ internal fun SearchScreen(
         snapshotFlow { query }.debouncedSearchQuery()
     }.collectAsStateWithLifecycle("")
     var limit by rememberSaveable(source, settledQuery) { mutableIntStateOf(80) }
+    val searchPrefill by model.searchPrefill.collectAsStateWithLifecycle()
+    LaunchedEffect(searchPrefill) {
+        searchPrefill?.let { query = it.second; model.searchPrefill.value = null }
+    }
+
     val voice = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         if (it.resultCode == Activity.RESULT_OK) {
             it.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()

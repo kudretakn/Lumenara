@@ -16,7 +16,10 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.*
 import dev.lumenara.data.*
 import dev.lumenara.design.Ink
+import dev.lumenara.catalog.exactChannelIndex
+import dev.lumenara.catalog.searchable
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 
 @Composable
 internal fun LibraryScreen(model: LibraryModel = viewModel()) {
@@ -40,13 +43,6 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
     var siblings by remember { mutableStateOf(emptyList<Item>()) }
     val pages = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
     val request by model.remoteSearch.collectAsStateWithLifecycle()
-    LaunchedEffect(request) {
-        if (request > 0) {
-            playing = null
-            detail = null
-            section = "Ara"
-        }
-    }
     val open: (Item) -> Unit = { detail = it }
     val playbackScope = rememberCoroutineScope()
     val play: (Item, List<Item>) -> Unit = { item, group ->
@@ -60,6 +56,37 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
                 playing = chosen
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (_: Exception) { model.notice.value = "Seçilen sürüm açılamadı." }
+        }
+    }
+    val searchIntent by model.searchIntent.collectAsStateWithLifecycle()
+    LaunchedEffect(searchIntent) {
+        val (id, search) = searchIntent ?: return@LaunchedEffect
+        playing = null
+        detail = null
+        if (search.playFromSearch) {
+            try {
+                val candidates = model.repo.browse("", "LIVE", "", searchable(search.query), "", 500)
+                    .first()
+                val index = exactChannelIndex(search.query, candidates.map { it.title })
+                if (index != null) {
+                    section = "Canlı TV"
+                    play(candidates[index], candidates)
+                    return@LaunchedEffect
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Fall back to the search screen if catalog lookup fails.
+            }
+        }
+        section = "Ara"
+        model.searchPrefill.value = id to search.query
+    }
+    LaunchedEffect(request) {
+        if (request > 0) {
+            playing = null
+            detail = null
+            section = "Ara"
         }
     }
     val item = playing
