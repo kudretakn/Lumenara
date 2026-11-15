@@ -20,7 +20,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
-import dev.lumenara.catalog.searchable
 import dev.lumenara.data.Item
 import dev.lumenara.design.FocusCard
 import dev.lumenara.design.Ink
@@ -35,15 +34,12 @@ internal fun liveProgrammes(
     now: Long,
     horizon: Long = 1,
 ): List<dev.lumenara.data.Slot> {
-    val mapping by remember(item.id) { model.repo.guide.mapping(item.id) }
-        .collectAsStateWithLifecycle(null)
-    val slots by remember(item, mapping, now, horizon) {
-        model.repo.guide.guide(
-            item.source, mapping?.channel ?: item.tvgId, searchable(item.title),
-            now, now + horizon, "", mapping?.feed.orEmpty(),
-        )
+    val slots by remember(model.repo, item.source, item.id) {
+        model.repo.cardProgrammes(item.source, item.id)
     }.collectAsStateWithLifecycle(emptyList())
-    return slots
+    return remember(slots, now, horizon) {
+        slots.filter { it.end > now && it.start < now + horizon }.take(160)
+    }
 }
 
 @Composable

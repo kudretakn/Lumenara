@@ -55,16 +55,15 @@ internal fun LiveScreen(
         .collectAsLoadingState()
     val favorites by remember(source) { model.repo.shelfCount(source, "LIVE", "favorite") }
         .collectAsLoadingState()
-    val airing by remember(source, now) { model.repo.nowAiring(source, now) }
-        .collectAsLoadingState()
+    var airingCount by remember(source) { mutableStateOf<Int?>(null) }
     val total = groups.orEmpty().sumOf { it.count }
-    val entries = if (groups == null || recent == null || favorites == null || airing == null) null else listOf(
+    val entries = if (groups == null || recent == null || favorites == null) null else listOf(
         CategoryEntry("all", "Tüm kanallar", total),
         CategoryEntry("recent", "Son izlenenler", recent.orEmpty().size),
         CategoryEntry("favorite", "Favoriler", favorites ?: 0),
-        CategoryEntry("airing", "Şu an yayında", airing.orEmpty().size),
+        CategoryEntry("airing", "Şu an yayında", airingCount ?: total, countKnown = airingCount != null),
         CategoryEntry("timeline", "Yayın akışı", total),
-    ).filter { it.count > 0 } + providerCategories(groups.orEmpty())
+    ).filter { it.count > 0 || (it.id == "airing" && total > 0) } + providerCategories(groups.orEmpty())
     androidx.activity.compose.BackHandler(category != null) { category = null }
     LaunchedEffect(source, returnToChannel) {
         val target = returnToChannel ?: return@LaunchedEffect
@@ -95,8 +94,9 @@ internal fun LiveScreen(
             val paged = if (category !in listOf("airing", "recent"))
                 rememberLivePages(model, source, provider, searchable(query),
                     if (category == "favorite") "favorite" else "", restoreId) else null
-            val rows by remember(source, category, query, limit, if (category == "airing") now else 0L) {
-                if (category == "airing") model.repo.nowAiring(source, now, searchable(query)).flatMapLatest { hits ->
+            val rows by remember(source, category, query, limit) {
+                if (category == "airing") model.repo.nowAiring(source, snapshotFlow { now }, searchable(query))
+                    .onEach { if (query.isBlank()) airingCount = it.size }.flatMapLatest { hits ->
                     val ids = hits.take(limit).map { it.itemId }
                     model.repo.liveByIds(source, ids).map { items ->
                         val byId = items.associateBy { it.id }

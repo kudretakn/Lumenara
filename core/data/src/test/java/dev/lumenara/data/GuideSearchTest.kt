@@ -123,4 +123,22 @@ class GuideSearchTest {
         assertTrue(resolver.itemIds(slot("a", feed = "f2")).isEmpty())
     }
 
+    @Test fun hiddenChannelsAreExcludedBeforeTheSixtyHitLimit() {
+        save((0 until 65).map { channel("%02d".format(it), tvg = "shared").copy(
+            category = if (it < 60) "Adult" else "News") })
+        slots(listOf(slot("shared")))
+        assertEquals(5, resolver().searchPrograms(programmes, "", from, now, listOf("Adult")).size)
+    }
+
+    @Test fun cardTargetsUseTheSameMappingPriorityAndDoNotCrossSources() {
+        val resolver = GuideResolver(listOf(channel("manual").copy(source = "s1"),
+            channel("direct", "Named", "tvg").copy(source = "s1"),
+            channel("named", "Named", "absent").copy(source = "s1")),
+            listOf(Mapping("manual", "f1", "chosen")), listOf(GuideName("f1", "name", "named")),
+            setOf(ProgrammeChannel("f1", "tvg", "s1"), ProgrammeChannel("f2", "tvg", "s2")))
+        assertEquals(listOf(GuideTarget("f1", "chosen")), resolver.targets("manual"))
+        assertEquals(listOf(GuideTarget("f1", "tvg")), resolver.targets("direct"))
+        assertEquals(listOf(GuideTarget("f1", "name")), resolver.targets("named"))
+    }
+
 }
