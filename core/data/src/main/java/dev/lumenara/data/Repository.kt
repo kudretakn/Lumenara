@@ -57,12 +57,37 @@ data class LiveWindow(val rows: List<Item>, val revision: Long, val hidden: List
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class Repository private constructor(private val context: Context) {
     private val db = Room.databaseBuilder(context, LibraryDb::class.java, "lumenara.db")
-        .addMigrations(LibraryDb.MIGRATION_7_8, LibraryDb.MIGRATION_8_9).build()
+        .addMigrations(LibraryDb.MIGRATION_7_8, LibraryDb.MIGRATION_8_9, LibraryDb.MIGRATION_9_10)
+        .build()
     val library = db.library()
     val guide = db.guide()
     private val vault = Vault(context)
     private val metadata = Metadata(context, vault)
     private val preferences = Preferences(context)
+    private val restoreTransaction = RestoreTransaction(object : RestoreStorage {
+        override suspend fun pending() = db.restoreJournal().pending()
+        override suspend fun snapshot(): String = vault.encrypt(JSONObject()
+            .put("settings", preferences.snapshotSettings())
+            .put("tmdb", metadata.encryptedToken() ?: JSONObject.NULL).toString())
+        override suspend fun savePending(snapshot: String) {
+            db.restoreJournal().save(RestorePending(snapshot = snapshot))
+            // Android WAL normally uses synchronous=NORMAL. A FULL checkpoint fsyncs the undo
+            // record before DataStore can publish anything, even if power is lost before Room
+            // commits. A busy checkpoint aborts before restore writes; the journal remains safe.
+            db.openHelper.writableDatabase.query("PRAGMA wal_checkpoint(FULL)").use {
+                check(it.moveToFirst() && it.getInt(0) == 0) { "Geri yükleme günlüğü kaydedilemedi." }
+            }
+        }
+        override suspend fun restoreSnapshot(snapshot: String) {
+            val old = JSONObject(vault.decrypt(snapshot))
+            preferences.restoreSnapshot(old.getString("settings"))
+            metadata.restoreEncryptedToken(if (old.isNull("tmdb")) null else old.getString("tmdb"))
+        }
+        override suspend fun clearPending() = db.restoreJournal().clear()
+        override suspend fun <T> transaction(block: suspend () -> T): T = db.withTransaction { block() }
+    })
+    // Constructors and workers must not expose Room/preferences until crash recovery finishes.
+    init { kotlinx.coroutines.runBlocking(Dispatchers.IO) { restoreTransaction.recover() } }
     private val catalogScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val catalog = CatalogStreams(library.categoryNames(), library::categoryCounts,
         library::sourceCategoryCounts, preferences.showAdult, catalogScope)
@@ -308,7 +333,8 @@ class Repository private constructor(private val context: Context) {
     suspend fun sourceSnapshot(): List<Source> = db.withTransaction { library.snapshot() }
 
     private val backups by lazy {
-        BackupStore(db, vault, preferences, metadata, ::import, { expandUnlocked(it, force = true) }) { source ->
+        BackupStore(db, vault, preferences, metadata, restoreTransaction,
+            { source, spec -> import(source, spec, updatePreferences = false) }, { expandUnlocked(it, force = true) }) { source ->
             for (feed in guide.feeds(source.id)) syncGuide(source, feed)
         }
     }
@@ -324,7 +350,10 @@ class Repository private constructor(private val context: Context) {
     suspend fun restoreBackup(preview: BackupPreview): BackupRestoreResult = withContext(Dispatchers.IO) {
         lock.withLock {
             val result = backups.restore(preview.data)
-            schedule(preferences.text("hours", "12").first().toLongOrNull()?.coerceIn(1L, 168L) ?: 12L)
+            // Scheduling is follow-up work; its failure must not report a committed restore as failed.
+            try { schedule(preferences.text("hours", "12").first().toLongOrNull()?.coerceIn(1L, 168L) ?: 12L) }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (_: Exception) { /* The saved interval will be scheduled on the next launch. */ }
             result
         }
     }
@@ -421,7 +450,7 @@ class Repository private constructor(private val context: Context) {
         }
     }
 
-    private suspend fun import(source: Source, spec: SourceSpec) {
+    private suspend fun import(source: Source, spec: SourceSpec, updatePreferences: Boolean = true) {
         val token = maxOf(System.currentTimeMillis(), source.refreshed + 1)
         val key = "source_${source.id}"
         val previous = if (source.refreshed > 0) preferences.fetchState(key) else FetchState()
@@ -448,8 +477,11 @@ class Repository private constructor(private val context: Context) {
                 library.save(source.copy(refreshed = token))
             }
             val providerLimit = catalog?.account?.optJSONObject("user_info")?.optInt("max_connections", 0) ?: 0
-            if (providerLimit > 0) preferences.set("provider_${source.id}", providerLimit.toString())
-            if (state != null) preferences.setFetchState(key, state)
+            // Restore publishes all settings in one edit, after every source has imported.
+            if (updatePreferences) {
+                if (providerLimit > 0) preferences.set("provider_${source.id}", providerLimit.toString())
+                if (state != null) preferences.setFetchState(key, state)
+            }
         } finally {
             snapshot?.close()
             downloaded?.close()

@@ -133,14 +133,16 @@ internal fun BackupScreen(model: LibraryModel, restore: Boolean, finishLabel: St
         scope.launch {
             try { action() }
             catch (e: CancellationException) { throw e }
+            catch (e: dev.lumenara.data.BackupRecoveryException) { message = e.message.orEmpty() }
             catch (e: IllegalArgumentException) {
                 message = when (e.message) {
                     "Bu yedek sürümü desteklenmiyor.", "Parola yanlış veya yedek dosyası bozuk.",
                     "Yedek dosyası çok büyük.", "Yedek boyutu sınırı aşıldı." -> e.message.orEmpty()
-                    else -> "Yedek işlenemedi. Dosyayı ve parolayı kontrol edin."
+                    else -> if (restore) "Geri yüklenemedi. Önceki durum korundu. Dosyayı ve parolayı kontrol edin."
+                        else "Yedek işlenemedi. Dosyayı ve parolayı kontrol edin."
                 }
             } catch (_: Exception) {
-                message = if (restore) "Geri yüklenemedi. Kaynak erişimini ve bağlantıyı kontrol edin; yeniden deneyin."
+                message = if (restore) "Geri yüklenemedi. Önceki durum korundu. Kaynak erişimini, bağlantıyı ve depolama alanını kontrol edip yeniden deneyin."
                     else "Yedek kaydedilemedi. Depolama alanını ve izinleri kontrol edin."
             } finally { busy = false }
         }

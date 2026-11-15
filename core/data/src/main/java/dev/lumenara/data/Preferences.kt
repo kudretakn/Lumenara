@@ -12,9 +12,14 @@ import org.json.JSONArray
 
 private val Context.settings by preferencesDataStore(name = "preferences")
 
-class Preferences(context: Context) {
-    private val store = context.applicationContext.settings
-    private val vault = Vault(context.applicationContext)
+class Preferences internal constructor(
+    private val store: androidx.datastore.core.DataStore<androidx.datastore.preferences.core.Preferences>,
+    private val encrypt: (String) -> String,
+    private val decrypt: (String) -> String,
+) {
+    constructor(context: Context) : this(context.applicationContext, Vault(context.applicationContext))
+
+    private constructor(context: Context, vault: Vault) : this(context.settings, vault::encrypt, vault::decrypt)
 
     val showAdult = store.data.map { it[booleanPreferencesKey("show_adult")] ?: false }
         .distinctUntilChanged()
@@ -24,11 +29,11 @@ class Preferences(context: Context) {
     }
 
     suspend fun secret(key: String): String = withContext(Dispatchers.IO) {
-        text("secret_$key").first().takeIf { it.isNotEmpty() }?.let(vault::decrypt).orEmpty()
+        text("secret_$key").first().takeIf { it.isNotEmpty() }?.let(decrypt).orEmpty()
     }
 
     suspend fun setSecret(key: String, value: String) = withContext(Dispatchers.IO) {
-        set("secret_$key", if (value.isEmpty()) "" else vault.encrypt(value))
+        set("secret_$key", if (value.isEmpty()) "" else encrypt(value))
     }
 
     internal suspend fun fetchState(key: String): FetchState {
@@ -51,23 +56,8 @@ class Preferences(context: Context) {
     private fun cacheSetting(name: String) = name.startsWith("secret_refresh_") || name.startsWith("series_expanded_")
 
     internal suspend fun backupSettings(): List<BackupSetting> = withContext(Dispatchers.IO) {
-        store.data.first().asMap().filterKeys { !cacheSetting(it.name) }.map { (key, value) ->
-            val type = when (value) {
-                is String -> "string"
-                is Boolean -> "boolean"
-                is Int -> "int"
-                is Long -> "long"
-                is Float -> "float"
-                is Double -> "double"
-                is Set<*> -> "strings"
-                else -> error("Desteklenmeyen ayar türü.")
-            }
-            val text = when {
-                key.name.startsWith("secret_") && value is String && value.isNotEmpty() -> vault.decrypt(value)
-                value is Set<*> -> JSONArray(value.toList()).toString()
-                else -> value.toString()
-            }
-            BackupSetting(key.name, type, text)
+        rawSettings().filterNot { cacheSetting(it.name) }.map {
+            if (it.name.startsWith("secret_") && it.value.isNotEmpty()) it.copy(value = decrypt(it.value)) else it
         }
     }
 
@@ -81,15 +71,46 @@ class Preferences(context: Context) {
             val name = sourcePattern?.replace(saved.name) { sources.getValue(it.value) } ?: saved.name
             val value = when {
                 saved.name == "recent_live" -> saved.value.lines().mapNotNull { items[it] }.distinct().take(20).joinToString("\n")
-                saved.name.startsWith("secret_") && saved.value.isNotEmpty() -> vault.encrypt(saved.value)
+                saved.name.startsWith("secret_") && saved.value.isNotEmpty() -> encrypt(saved.value)
                 else -> saved.value
             }
             saved.copy(name = name, value = value)
         }
+        require(prepared.map { it.name }.distinct().size == prepared.size) { "Yinelenen ayar adı." }
+        replaceSettings(prepared)
+    }
+
+    // Raw snapshots retain device-encrypted secret values and include cache/validator keys.
+    internal suspend fun snapshotSettings(): String = JSONArray().apply {
+        rawSettings().forEach { put(org.json.JSONObject().put("name", it.name).put("type", it.type).put("value", it.value)) }
+    }.toString()
+
+    internal suspend fun restoreSnapshot(snapshot: String) {
+        val rows = JSONArray(snapshot)
+        replaceSettings((0 until rows.length()).map { index ->
+            rows.getJSONObject(index).let { BackupSetting(it.getString("name"), it.getString("type"), it.getString("value")) }
+        })
+    }
+
+    private suspend fun rawSettings(): List<BackupSetting> = store.data.first().asMap().map { (key, value) ->
+        val type = when (value) {
+            is String -> "string"
+            is Boolean -> "boolean"
+            is Int -> "int"
+            is Long -> "long"
+            is Float -> "float"
+            is Double -> "double"
+            is Set<*> -> "strings"
+            else -> error("Desteklenmeyen ayar türü.")
+        }
+        BackupSetting(key.name, type, if (value is Set<*>) JSONArray(value.toList()).toString() else value.toString())
+    }
+
+    private suspend fun replaceSettings(settings: List<BackupSetting>) {
         store.edit { target ->
             // Missing keys represent defaults in the snapshot, including unset secrets.
             target.clear()
-            for ((name, type, value) in prepared) when (type) {
+            for ((name, type, value) in settings) when (type) {
                 "string" -> target[stringPreferencesKey(name)] = value
                 "boolean" -> target[booleanPreferencesKey(name)] = value.toBooleanStrict()
                 "int" -> target[intPreferencesKey(name)] = value.toInt()

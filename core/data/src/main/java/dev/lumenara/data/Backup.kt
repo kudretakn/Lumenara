@@ -77,10 +77,12 @@ internal object BackupCodec {
         try {
             require(bytes.size in 1..MAX_FILE_BYTES)
             val header = JSONObject(bytes.toString(Charsets.UTF_8))
+            require(header.get("version") is Int || header.get("version") is Long)
             require(header.getString("format") == "lumenara-backup")
-            if (header.getInt("version") != VERSION)
+            if (header.getLong("version") != VERSION.toLong())
                 throw IllegalArgumentException("Bu yedek sürümü desteklenmiyor.")
-            require(header.getString("kdf") == "PBKDF2-HMAC-SHA256" && header.getInt("iterations") == ROUNDS)
+            require(header.get("iterations") is Int || header.get("iterations") is Long)
+            require(header.getString("kdf") == "PBKDF2-HMAC-SHA256" && header.getLong("iterations") == ROUNDS.toLong())
             require(header.getString("cipher") == "AES-256-GCM")
             val base64 = Base64.getDecoder()
             val salt = base64.decode(header.getString("salt"))
@@ -122,7 +124,28 @@ internal object BackupCodec {
     }
 
     private fun decode(json: JSONObject): BackupData {
-        require(json.getInt("version") == VERSION) { "Bu yedek sürümü desteklenmiyor." }
+        require(json.get("version") is Int || json.get("version") is Long)
+        require(json.getLong("version") == VERSION.toLong()) { "Bu yedek sürümü desteklenmiyor." }
+        // org.json getters coerce strings/numbers on Android; enforce the wire schema first.
+        fun strings(row: JSONObject, vararg names: String) = names.forEach { require(row.get(it) is String) }
+        fun table(name: String, check: (JSONObject) -> Unit) { read(json, name) { check(it) } }
+        strings(json, "tmdb")
+        table("settings") { strings(it, "name", "type", "value") }
+        table("sources") {
+            strings(it, "id", "name")
+            val spec = it.getJSONObject("spec")
+            strings(spec, "address", "user", "pass")
+            require(spec.get("http") is Boolean)
+        }
+        table("feeds") { strings(it, "id", "source", "address") }
+        table("items") { strings(it, "id", "source", "address", "parent") }
+        table("marks") {
+            strings(it, "id")
+            require(it.get("favorite") is Boolean && it.get("listed") is Boolean)
+            for (name in listOf("position", "duration", "updated"))
+                require(it.get(name) is Int || it.get(name) is Long)
+        }
+        table("mappings") { strings(it, "item", "feed", "channel") }
         val data = BackupData(
             read(json, "settings") { BackupSetting(it.getString("name"), it.getString("type"), it.getString("value")) },
             read(json, "sources") { BackupSource(it.getString("id"), it.getString("name"), SourceSpec.decode(it.getJSONObject("spec").toString())) },
@@ -133,6 +156,13 @@ internal object BackupCodec {
             read(json, "mappings") { Mapping(it.getString("item"), it.getString("feed"), it.getString("channel")) },
             json.getString("tmdb"),
         )
+        validate(data)
+        return data
+    }
+
+    internal fun validate(data: BackupData) {
+        require(listOf(data.settings.size, data.sources.size, data.feeds.size, data.items.size,
+            data.marks.size, data.mappings.size).all { it <= 100_000 })
         fun unique(ids: List<String>) = ids.all { it.isNotBlank() } && ids.distinct().size == ids.size
         require(unique(data.sources.map { it.id }) && unique(data.feeds.map { it.id }) && unique(data.items.map { it.id }))
         require(unique(data.settings.map { it.name }) && unique(data.marks.map { it.id }) && unique(data.mappings.map { it.item }))
@@ -140,12 +170,13 @@ internal object BackupCodec {
         val items = data.items.associateBy { it.id }
         val feeds = data.feeds.associateBy { it.id }
         require(data.sources.all { it.name.isNotBlank() && it.spec.address.isNotBlank() })
-        require(data.items.all { it.source in sourceIds && it.id == contentKey(it.source, it.address) })
-        require(data.feeds.all { it.source in sourceIds && it.id == contentKey(it.source, it.address) })
+        require(data.items.all { it.address.isNotBlank() && it.source in sourceIds && it.id == contentKey(it.source, it.address) })
+        require(data.feeds.all { it.address.isNotBlank() && it.source in sourceIds && it.id == contentKey(it.source, it.address) })
         require(data.marks.all { it.id in items && it.position >= 0 && it.duration >= 0 && it.updated >= 0 })
-        require(data.mappings.all { items[it.item]?.source == feeds[it.feed]?.source && it.item in items && it.feed in feeds })
+        require(data.mappings.all { it.channel.isNotBlank() && items[it.item]?.source == feeds[it.feed]?.source && it.item in items && it.feed in feeds })
         data.settings.forEach { validateSetting(it) }
-        return data
+        val recent = data.settings.firstOrNull { it.name == "recent_live" }?.value.orEmpty()
+        require(recent.lines().filter(String::isNotBlank).all { it in items })
     }
 
     private fun validateSetting(setting: BackupSetting) {
@@ -172,6 +203,7 @@ internal class BackupStore(
     private val vault: Vault,
     private val preferences: Preferences,
     private val metadata: Metadata,
+    private val restoreTransaction: RestoreTransaction,
     private val refresh: suspend (Source, SourceSpec) -> Unit,
     private val expand: suspend (Item) -> List<Item>,
     private val refreshGuides: suspend (Source) -> Unit,
@@ -188,7 +220,11 @@ internal class BackupStore(
             BackupItem(item.id, item.source, vault.decrypt(item.encryptedUrl),
                 library.item(item.parent)?.let { vault.decrypt(it.encryptedUrl) }.orEmpty())
         }
-        BackupData(settings, sources.map {
+        val validItems = items.map { it.id }.toSet()
+        val validSettings = settings.map {
+            if (it.name == "recent_live") it.copy(value = it.value.lines().filter { id -> id in validItems }.joinToString("\n")) else it
+        }
+        BackupData(validSettings, sources.map {
             BackupSource(it.id, it.name, SourceSpec.decode(vault.decrypt(it.endpoint)))
         }, sources.flatMap { db.guide().feeds(it.id) }.map {
             BackupFeed(it.id, it.source, vault.decrypt(it.encryptedAddress))
@@ -196,14 +232,16 @@ internal class BackupStore(
     }
 
     suspend fun restore(data: BackupData): BackupRestoreResult {
+        // Revalidate at the write boundary as well as during decrypt/preview, before even journaling.
+        BackupCodec.validate(data)
         val library = db.library()
         val sourceIds = HashMap<String, String>()
         val itemIds = HashMap<String, String>()
         val feedIds = HashMap<String, String>()
         var skipped = 0
         var guideFailures = 0
-        // A failed source refresh rolls the entire database back. No credentials leave encrypted storage.
-        db.withTransaction {
+        // Every source/catalog/mark/feed/mapping write shares the coordinator's Room transaction.
+        restoreTransaction.run {
             val existing = library.snapshot().toMutableList()
             val usedTargets = HashSet<String>()
             for (saved in data.sources) {
@@ -237,9 +275,11 @@ internal class BackupStore(
             for (saved in data.mappings) itemIds[saved.item]?.let {
                 db.guide().map(saved.copy(item = it, feed = feedIds.getValue(saved.feed)))
             }
+            preferences.restoreSettings(data.settings, sourceIds, itemIds)
+            metadata.configure(data.tmdbToken)
         }
-        preferences.restoreSettings(data.settings, sourceIds, itemIds)
-        metadata.configure(data.tmdbToken)
+        // Programme listings are a rebuildable cache, excluded from the backup. Refresh them
+        // after the restore commits; guide failures are reported separately from restore failure.
         for (id in sourceIds.values.distinct()) {
             try { library.source(id)?.let { refreshGuides(it) } }
             catch (e: CancellationException) { throw e }

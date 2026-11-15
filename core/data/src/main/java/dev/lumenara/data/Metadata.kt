@@ -41,6 +41,14 @@ internal class Metadata(private val context: Context, private val vault: Vault) 
         check(edit.commit())
     }
 
+    internal fun encryptedToken(): String? = prefs.getString("access", null)
+
+    internal fun restoreEncryptedToken(token: String?) {
+        check(prefs.edit().apply {
+            if (token == null) remove("access") else putString("access", token)
+        }.commit())
+    }
+
     fun userConfigured() = prefs.contains("access")
 
     internal fun backupToken(): String = prefs.getString("access", null)?.let(vault::decrypt).orEmpty()

@@ -53,6 +53,7 @@ Ajan kuralları:
   1. `Download/Lumenara/lumenara-yedek-<tarih>.lmb` (MediaStore Downloads; API 28'de `WRITE_EXTERNAL_STORAGE` gerekiyorsa maxSdkVersion=28 ile).
   2. Ayrıca "Telefona gönder": mevcut `Pairing.kt` yerel ağ eşleştirme mekanizmasını incele; uygunsa yedeği aynı yolla telefona indirilebilir yap. Uygun değilse yalnız dosya yolu yeterli.
 - Geri yükleme önce özet gösterir ("3 kaynak, 120 izleme kaydı…") ve onay ister. Kimlikler kaynak adresine bağlı olduğundan izleme kayıtları kaynakla birlikte eşlenir.
+- Geri yükleme: tüm dosya bellekte doğrulanır (sürüm, türler ve kaynak/öğe/EPG referansları); Room yazımları tek işlemde yapılır. Eski ayarlar ve TMDB anahtarı cihaz anahtarıyla şifreli bir Room günlüğünde saklanır. Günlük yalnız başarılı Room işlemiyle silinir; hata veya kesinti sonrası açılışta önceki ayarlar geri alınır. DataStore ayarları tek atomik düzenlemeyle yazılır.
 - Testler: şifreleme gidiş-dönüş, yanlış parola, bozuk dosya, eski sürüm biçimi (JVM).
 - Dosyalar: yeni `core/data/.../Backup.kt`, `app/.../BackupScreen.kt`, `Settings.kt` (giriş satırı).
 

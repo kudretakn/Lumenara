@@ -98,4 +98,78 @@ class BackupTest {
         )
         invalid.forEach { rejected(BackupCodec.encrypt(it, password)) }
     }
+    @Test fun orphanedMarksMappingsFeedsAndRecentEntriesAreRejected() {
+        val otherSource = "source-b"
+        val otherFeed = contentKey(otherSource, "https://other.invalid/epg")
+        val invalid = listOf(
+            data.copy(sources = emptyList()),
+            data.copy(feeds = listOf(data.feeds.single().copy(source = "missing"))),
+            data.copy(items = emptyList()),
+            data.copy(marks = listOf(data.marks.single().copy(id = "missing"))),
+            data.copy(mappings = listOf(Mapping("missing", feed, "channel"))),
+            data.copy(mappings = listOf(Mapping(id, "missing", "channel"))),
+            data.copy(sources = data.sources + BackupSource(otherSource, "Other", SourceSpec("https://other.invalid", false)),
+                feeds = listOf(BackupFeed(otherFeed, otherSource, "https://other.invalid/epg")),
+                mappings = listOf(Mapping(id, otherFeed, "channel"))),
+            data.copy(settings = listOf(BackupSetting("recent_live", "string", "missing"))),
+        )
+        invalid.forEach { rejected(BackupCodec.encrypt(it, password)) }
+    }
+
+    @Test fun duplicateIdentitiesAndInvalidSettingTypesAreRejected() {
+        val invalid = listOf(
+            data.copy(sources = data.sources + data.sources),
+            data.copy(items = data.items + data.items),
+            data.copy(feeds = data.feeds + data.feeds),
+            data.copy(marks = data.marks + data.marks),
+            data.copy(mappings = data.mappings + data.mappings),
+            data.copy(settings = data.settings + data.settings),
+            data.copy(settings = listOf(BackupSetting("secret_test", "boolean", "true"))),
+            data.copy(settings = listOf(BackupSetting("number", "double", "NaN"))),
+            data.copy(settings = listOf(BackupSetting("list", "strings", "[1]"))),
+        )
+        invalid.forEach { rejected(BackupCodec.encrypt(it, password)) }
+    }
+
+    // Authenticate deliberately malformed payloads so schema checks, rather than GCM, reject them.
+    private fun malformedPayload(change: (JSONObject) -> Unit): ByteArray {
+        val header = JSONObject(BackupCodec.encrypt(data, password).toString(Charsets.UTF_8))
+        val base64 = Base64.getDecoder()
+        val keySpec = javax.crypto.spec.PBEKeySpec(password, base64.decode(header.getString("salt")), 210_000, 256)
+        val key = javax.crypto.spec.SecretKeySpec(javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+            .generateSecret(keySpec).encoded, "AES")
+        keySpec.clearPassword()
+        val aad = "Lumenara|1|PBKDF2-HMAC-SHA256|210000|AES-256-GCM".toByteArray()
+        fun cipher(mode: Int) = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding").apply {
+            init(mode, key, javax.crypto.spec.GCMParameterSpec(128, base64.decode(header.getString("iv"))))
+            updateAAD(aad)
+        }
+        val plain = cipher(javax.crypto.Cipher.DECRYPT_MODE).doFinal(base64.decode(header.getString("data")))
+        val json = try { JSONObject(plain.toString(Charsets.UTF_8)) } finally { plain.fill(0) }
+        change(json)
+        header.put("data", Base64.getEncoder().encodeToString(cipher(javax.crypto.Cipher.ENCRYPT_MODE)
+            .doFinal(json.toString().toByteArray())))
+        return header.toString().toByteArray()
+    }
+
+    @Test fun authenticatedMalformedSchemaIsRejectedBeforePreview() {
+        val invalid: List<(JSONObject) -> Unit> = listOf(
+            { it.remove("items"); Unit },
+            { it.getJSONArray("sources").getJSONObject(0).getJSONObject("spec").put("http", "false"); Unit },
+            { it.getJSONArray("marks").getJSONObject(0).put("listed", "true"); Unit },
+            { it.getJSONArray("marks").getJSONObject(0).put("position", 1.5); Unit },
+            { it.getJSONArray("settings").getJSONObject(0).put("value", false); Unit },
+        )
+        invalid.forEach { rejected(malformedPayload(it)) }
+    }
+
+    @Test fun innerVersionIsCheckedWithoutIntegerTruncation() {
+        for (version in listOf(2L, 4_294_967_297L)) {
+            assertEquals("Bu yedek sürümü desteklenmiyor.", rejected(malformedPayload { it.put("version", version) }).message)
+        }
+        val header = JSONObject(BackupCodec.encrypt(data, password).toString(Charsets.UTF_8))
+        header.put("version", 4_294_967_297L)
+        assertEquals("Bu yedek sürümü desteklenmiyor.", rejected(header.toString().toByteArray()).message)
+    }
+
 }
