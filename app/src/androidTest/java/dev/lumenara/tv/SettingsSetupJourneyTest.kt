@@ -51,6 +51,14 @@ class SettingsSetupJourneyTest {
         screen.waitUntil(30_000) { screen.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty() }
     }
 
+    private fun select(matcher: SemanticsMatcher) {
+        screen.onNode(matcher).assertIsDisplayed().performSemanticsAction(SemanticsActions.RequestFocus)
+        screen.waitUntil(30_000) {
+            screen.onAllNodes(matcher and isFocused()).fetchSemanticsNodes().isNotEmpty()
+        }
+        screen.ok()
+    }
+
     private fun capture(name: String) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
@@ -67,17 +75,17 @@ class SettingsSetupJourneyTest {
     @Test fun settingsGroupsVersionAndFocusRestore() {
         awaitTag("hub")
         screen.openHubCard("Ayarlar")
-        screen.onNodeWithTag("settings-group-Oynatıcı").performClick()
+        screen.openSettingsGroup("Oynatıcı")
         val choice = hasText("Kare hızını eşle", substring = true)
         screen.onNodeWithTag("settings-list").performScrollToNode(choice)
         screen.onNode(choice).performSemanticsAction(SemanticsActions.RequestFocus)
         capture("settings")
-        screen.onNodeWithTag("settings-group-Hakkında").performClick()
+        screen.openSettingsGroup("Hakkında")
         screen.onNodeWithTag("settings-list").performScrollToNode(hasText("Lumenara ${BuildConfig.VERSION_NAME}"))
         screen.onNodeWithText("Lumenara ${BuildConfig.VERSION_NAME}").assertIsDisplayed()
         screen.onNodeWithText("Türkçe   ·   Antrasit tema   ·   Lumenara 0.1").assertDoesNotExist()
-        screen.onNodeWithTag("settings-group-Kaynaklar").performClick()
-        screen.onNodeWithText("IPTV Kaynakları").performClick()
+        screen.openSettingsGroup("Kaynaklar")
+        select(hasText("IPTV Kaynakları"))
         awaitTag("setup-screen")
         screen.back()
         screen.waitUntil(5_000) {
@@ -88,15 +96,16 @@ class SettingsSetupJourneyTest {
     @Test fun welcomeFormAdvancedAndBack() {
         awaitTag("hub")
         screen.openHubCard("Ayarlar")
-        screen.onNodeWithText("IPTV Kaynakları").performClick()
+        screen.openSettingsGroup("Kaynaklar")
+        select(hasText("IPTV Kaynakları"))
         awaitTag("setup-screen")
         screen.onNodeWithText("Hoş geldiniz").assertIsDisplayed()
         screen.onNodeWithText("Liste adresi gir").performSemanticsAction(SemanticsActions.RequestFocus)
         capture("setup")
-        screen.onNodeWithText("Liste adresi gir").performClick()
+        select(hasText("Liste adresi gir"))
         screen.onNodeWithTag("source-setup").performScrollToNode(hasTestTag("setup-advanced"))
         screen.onNodeWithText("HTTP uyumluluğu · Kapalı").assertDoesNotExist()
-        screen.onNodeWithTag("setup-advanced").performClick()
+        select(hasTestTag("setup-advanced"))
         screen.onNodeWithTag("source-setup").performScrollToNode(hasText("HTTP uyumluluğu · Kapalı"))
         screen.onNodeWithText("HTTP uyumluluğu · Kapalı").assertIsDisplayed()
         screen.back()
