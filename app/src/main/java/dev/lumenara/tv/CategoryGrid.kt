@@ -27,7 +27,7 @@ internal fun providerCategories(groups: List<LiveCategoryCount>): List<CategoryE
 
 @Composable
 internal fun NavigationCard(name: String, caption: String, modifier: Modifier,
-                            update: Boolean = false, icon: Int? = null, click: () -> Unit) {
+                            update: Boolean = false, icon: Int? = null, loadingCaption: Boolean = false, click: () -> Unit) {
     val shape = RoundedCornerShape(12.dp)
     Surface(onClick = click, modifier = modifier,
         shape = ClickableSurfaceDefaults.shape(shape),
@@ -44,29 +44,31 @@ internal fun NavigationCard(name: String, caption: String, modifier: Modifier,
             }
             Text(if (update) "$name  •" else name, fontSize = 20.sp, maxLines = 2,
                 overflow = TextOverflow.Ellipsis)
-            if (caption.isNotEmpty()) Text(caption, color = Ink.muted, fontSize = 15.sp)
+            if (loadingCaption) LoadingCard(Modifier.padding(top = 4.dp).width(72.dp).height(15.dp))
+            else if (caption.isNotEmpty()) Text(caption, color = Ink.muted, fontSize = 15.sp)
         }
     }
 }
 
 @Composable
-internal fun CategoryGrid(title: String, entries: List<CategoryEntry>, choose: (CategoryEntry) -> Unit) {
+internal fun CategoryGrid(title: String, entries: List<CategoryEntry>?, choose: (CategoryEntry) -> Unit) {
     var last by rememberSaveable(title) { mutableStateOf<String?>(null) }
     val grid = rememberLazyGridState()
     val focus = remember { FocusRequester() }
     var positioned by remember { mutableStateOf(false) }
     var requestPending by remember { mutableStateOf(true) }
     val restoreId = remember { last }
-    val target = entries.indexOfFirst { it.id == restoreId }.coerceAtLeast(0)
+    val rows = entries.orEmpty()
+    val target = rows.indexOfFirst { it.id == restoreId }.coerceAtLeast(0)
     LaunchedEffect(entries) {
-        if (!positioned && entries.isNotEmpty()) {
+        if (!positioned && rows.isNotEmpty()) {
             grid.scrollToItem(target)
             positioned = true
         }
     }
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text(title, fontSize = 28.sp)
-        if (entries.isEmpty()) {
+        if (entries != null && entries.isEmpty()) {
             val back = androidx.activity.compose.LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
             LaunchedEffect(Unit) { withFrameNanos { }; focus.requestFocus() }
             Text("İçerik yok.", color = Ink.muted)
@@ -77,7 +79,8 @@ internal fun CategoryGrid(title: String, entries: List<CategoryEntry>, choose: (
             contentPadding = PaddingValues(10.dp),
             horizontalArrangement = Arrangement.spacedBy(18.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp)) {
-            itemsIndexed(entries, key = { _, it -> it.id }) { index, entry ->
+            if (entries == null) loadingCards(120.dp)
+            itemsIndexed(rows, key = { _, it -> it.id }) { index, entry ->
                 if (index == target && positioned && requestPending) LaunchedEffect(Unit) {
                     withFrameNanos { }
                     focus.requestFocus()

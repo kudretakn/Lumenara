@@ -25,10 +25,10 @@ import dev.lumenara.design.*
 @Composable
 internal fun SeriesDetails(model: LibraryModel, series: Item, play: (Item, List<Item>) -> Unit, back: () -> Unit) {
     val raw by remember(series.id) { model.repo.episodes(series.id) }
-        .collectAsStateWithLifecycle(emptyList())
+        .collectAsLoadingState()
     val marks by remember(series.id) { model.repo.library.episodeMarks(series.id) }
         .collectAsStateWithLifecycle(emptyList())
-    val episodes = remember(raw) { raw.seriesOrder() }
+    val episodes = remember(raw) { raw.orEmpty().seriesOrder() }
     val byId = remember(marks) { marks.associateBy { it.id } }
     var season by rememberSaveable(series.id) { mutableStateOf<Int?>(null) }
     var seriesFocus by rememberSaveable(series.id) { mutableStateOf("series-play") }
@@ -41,12 +41,13 @@ internal fun SeriesDetails(model: LibraryModel, series: Item, play: (Item, List<
             loaded = true
         }
     }
+    val loading = raw == null || (episodes.isEmpty() && busy)
     val pages = rememberSaveableStateHolder()
     val currentSeason = season
     if (currentSeason != null) {
         BackHandler { season = null }
         pages.SaveableStateProvider("season-$currentSeason") {
-            SeasonPage(model, series, currentSeason, episodes, byId, play, { season = null })
+            SeasonPage(model, series, currentSeason, episodes, loading, byId, play, { season = null })
         }
         return
     }
@@ -91,7 +92,7 @@ internal fun SeriesDetails(model: LibraryModel, series: Item, play: (Item, List<
                             },
                                 modifier = Modifier.testTag("series-play").focusRequester(focus)
                                     .onFocusChanged { if (it.isFocused) seriesFocus = "series-play" }) {
-                                Text(if (name == null) { if (busy) "Bölümler yükleniyor…" else "Bölümleri yükle" } else if (hasHistory)
+                                Text(if (name == null) { if (loading) "Oynat" else "Bölümleri yükle" } else if (hasHistory)
                                     "Devam et: S${name.season} B${name.episode}" else "Oynat (S${name.season} B${name.episode})")
                             }
                         }
@@ -111,6 +112,7 @@ internal fun SeriesDetails(model: LibraryModel, series: Item, play: (Item, List<
                 item {
                     LazyRow(Modifier.testTag("season-shelf").focusGroup(),
                         contentPadding = PaddingValues(12.dp), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                        if (loading) items(8) { LoadingCard(Modifier.width(210.dp).height(180.dp)) }
                         items(seasons.keys.toList(), key = { it }) { number ->
                             val rows = seasons.getValue(number)
                             val count = rows.count { ep -> byId[ep.id]?.let { watched(it.position, it.duration) } == true }
@@ -131,8 +133,8 @@ internal fun SeriesDetails(model: LibraryModel, series: Item, play: (Item, List<
                         }
                     }
                 }
-                if (episodes.isEmpty()) item {
-                    Text(if (busy) "Bölümler yükleniyor…" else if (loaded) "Sağlayıcı bölüm bildirmedi." else notice,
+                if (!loading && episodes.isEmpty()) item {
+                    Text(if (loaded) "Sağlayıcı bölüm bildirmedi." else notice,
                         color = Ink.muted)
                     if (!busy) Button(onClick = { model.job("Bölüm listesi güncellendi.") { model.repo.expand(series); loaded = true } }) { Text("Yeniden dene") }
                 }
@@ -157,7 +159,7 @@ internal fun SeriesDetails(model: LibraryModel, series: Item, play: (Item, List<
 }
 
 @Composable
-private fun SeasonPage(model: LibraryModel, series: Item, season: Int, all: List<Item>, marks: Map<String, Mark>,
+private fun SeasonPage(model: LibraryModel, series: Item, season: Int, all: List<Item>, loading: Boolean, marks: Map<String, Mark>,
                        play: (Item, List<Item>) -> Unit, back: () -> Unit) {
     val episodes = all.filter { it.seriesEpisode().season == season }
     var menu by remember { mutableStateOf<Item?>(null) }
@@ -184,12 +186,14 @@ private fun SeasonPage(model: LibraryModel, series: Item, season: Int, all: List
                 verticalAlignment = Alignment.CenterVertically) {
                 Column {
                     Text(series.title, fontSize = 28.sp, fontWeight = FontWeight.Bold)
-                    Text("Sezon $season · ${episodes.size} bölüm", color = Ink.muted, fontSize = 15.sp)
+                    Text(if (loading) "Sezon $season" else "Sezon $season · ${episodes.size} bölüm", color = Ink.muted, fontSize = 15.sp)
                 }
                 Button(onClick = back) { Text("Sezonlara dön") }
             }
             LazyColumn(Modifier.weight(1f).testTag("episode-list").focusGroup(), state = list,
                 contentPadding = PaddingValues(horizontal = 36.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+                if (loading) items(8) { LoadingCard(Modifier.fillMaxWidth().height(90.dp)) }
+                if (!loading && episodes.isEmpty()) item { Text("İçerik yok.", color = Ink.muted) }
                 items(episodes, key = { it.id }) { ep ->
                     val mark = marks[ep.id]
                     val duration = mark?.duration ?: 0

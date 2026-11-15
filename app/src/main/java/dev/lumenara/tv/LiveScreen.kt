@@ -51,21 +51,21 @@ internal fun LiveScreen(
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { wallClockTicks(30_000).collect { now = it } }
     val groups by remember(source) { model.repo.liveCategoryCounts(source) }
-        .collectAsStateWithLifecycle(emptyList())
+        .collectAsLoadingState()
     val recent by remember(source) { model.repo.recentLive(source) }
-        .collectAsStateWithLifecycle(emptyList())
+        .collectAsLoadingState()
     val favorites by remember(source) { model.repo.shelfCount(source, "LIVE", "favorite") }
-        .collectAsStateWithLifecycle(0)
+        .collectAsLoadingState()
     val airing by remember(source, now) { model.repo.nowAiring(source, now) }
-        .collectAsStateWithLifecycle(emptyList())
-    val total = groups.sumOf { it.count }
-    val entries = listOf(
+        .collectAsLoadingState()
+    val total = groups.orEmpty().sumOf { it.count }
+    val entries = if (groups == null || recent == null || favorites == null || airing == null) null else listOf(
         CategoryEntry("all", "Tüm kanallar", total),
-        CategoryEntry("recent", "Son izlenenler", recent.size),
-        CategoryEntry("favorite", "Favoriler", favorites),
-        CategoryEntry("airing", "Şu an yayında", airing.size),
+        CategoryEntry("recent", "Son izlenenler", recent.orEmpty().size),
+        CategoryEntry("favorite", "Favoriler", favorites ?: 0),
+        CategoryEntry("airing", "Şu an yayında", airing.orEmpty().size),
         CategoryEntry("timeline", "Yayın akışı", total),
-    ).filter { it.count > 0 } + providerCategories(groups)
+    ).filter { it.count > 0 } + providerCategories(groups.orEmpty())
     androidx.activity.compose.BackHandler(category != null) { category = null }
     LaunchedEffect(source, returnToChannel) {
         val target = returnToChannel ?: return@LaunchedEffect
@@ -106,7 +106,7 @@ internal fun LiveScreen(
                 } else if (category == "recent") model.repo.recentLive(source).map { rows ->
                     rows.filter { it.search.contains(searchable(query)) }.take(limit)
                 } else flowOf(emptyList())
-            }.collectAsStateWithLifecycle(emptyList())
+            }.collectAsLoadingState()
             pages.SaveableStateProvider("channels-$category") {
                 LiveChannelGrid(model, categoryTitle, rows, channelNumbers, now, query, { query = it },
                     limit, { limit += 80 }, returnToChannel ?: focusedId, { item ->
@@ -120,10 +120,12 @@ internal fun LiveScreen(
 }
 
 @Composable
-private fun LiveChannelGrid(model: LibraryModel, title: String, rows: List<Item>,
+private fun LiveChannelGrid(model: LibraryModel, title: String, result: List<Item>?,
     numbers: Map<String, Int>, now: Long, query: String, search: (String) -> Unit,
     limit: Int, more: () -> Unit, returnId: String?, focused: (Item) -> Unit,
     restored: () -> Unit, open: (Item) -> Unit, play: (Item, List<Item>) -> Unit, paged: LivePages? = null) {
+    val rows = result.orEmpty()
+    val loading = if (paged != null) !paged.countLoaded else result == null
     val grid = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
     PrefetchArtwork(model, grid, rows, columns = 4)
     val focus = remember { FocusRequester() }
@@ -136,8 +138,8 @@ private fun LiveChannelGrid(model: LibraryModel, title: String, rows: List<Item>
     val count = paged?.count ?: rows.size
     val target = paged?.anchor ?: rows.indexOfFirst { it.id == restoreId }.coerceAtLeast(0)
     val targetReady = if (paged != null) paged.anchor != null && paged[target] != null else rows.isNotEmpty()
-    LaunchedEffect(paged, target, targetReady, count, query) {
-        if (!positioned && count == 0) searchFocus.requestFocus()
+    LaunchedEffect(paged, target, targetReady, count, query, loading) {
+        if (!positioned && !loading && count == 0) searchFocus.requestFocus()
         if (!positioned && targetReady && target < count) {
             grid.scrollToItem(target)
             positioned = true
@@ -162,13 +164,14 @@ private fun LiveChannelGrid(model: LibraryModel, title: String, rows: List<Item>
             contentPadding = PaddingValues(10.dp),
             horizontalArrangement = Arrangement.spacedBy(18.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp)) {
-            if (count == 0) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(4) }) {
+            if (loading) loadingCards(140.dp)
+            if (!loading && count == 0) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(4) }) {
                 Text("Eşleşen içerik yok.", color = Ink.muted)
             }
             items(count, key = { it }) { index ->
                 val item = if (paged != null) paged[index] else rows[index]
                 if (item == null) {
-                    Box(Modifier.fillMaxWidth().height(140.dp))
+                    LoadingCard(Modifier.fillMaxWidth().height(140.dp))
                     return@items
                 }
                 if (index == target && positioned && requestPending) LaunchedEffect(Unit) {
