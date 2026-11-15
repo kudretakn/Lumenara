@@ -8,7 +8,6 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.DataSource
-import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 
@@ -24,15 +23,13 @@ fun createPlayer(
     live: Boolean = false,
     httpAllowed: () -> Boolean = { allowHttp },
     permittedSubtitle: () -> android.net.Uri? = { subtitleUri },
+    multi: Boolean = false,
 ): ExoPlayer {
-    val control = DefaultLoadControl.Builder()
-    if (live) {
-        val buffers = liveBuffers(profile)
-        control.setBufferDurationsMs(buffers.minMs, buffers.maxMs, buffers.playMs, buffers.rebufferMs)
-    } else when (profile) {
-        "Hızlı" -> control.setBufferDurationsMs(8000, 20000, 750, 1500)
-        "Kararlı" -> control.setBufferDurationsMs(30000, 60000, 3000, 5000)
-    }
+    val memory = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+    val largeHeap = context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_LARGE_HEAP != 0
+    val memoryClassMb = if (largeHeap) memory.largeMemoryClass else memory.memoryClass
+    val policy = bufferPolicy(profile, live, multi, memoryClassMb, memory.isLowRamDevice)
+    val control = AdaptiveLoadControl(policy.buffers, memoryClassMb, memory.isLowRamDevice, live, multi)
     val requests =
         androidx.media3.datasource.ResolvingDataSource.Factory(
             DataSource.Factory {
@@ -53,6 +50,7 @@ fun createPlayer(
             spec
         }
     val defaultRenderers = androidx.media3.exoplayer.DefaultRenderersFactory(context)
+        .setEnableDecoderFallback(true)
     val renderers = androidx.media3.exoplayer.RenderersFactory { handler, video, audio, text, metadata ->
         defaultRenderers.createRenderers(handler, video, audio, text, metadata).map { renderer ->
             if (renderer.trackType == androidx.media3.common.C.TRACK_TYPE_TEXT)
@@ -68,7 +66,7 @@ fun createPlayer(
         }.toTypedArray()
     }
     return ExoPlayer.Builder(context, renderers)
-        .setLoadControl(control.build())
+        .setLoadControl(control)
         .setMediaSourceFactory(DefaultMediaSourceFactory(requests).apply {
             if (!automaticRetries) setLoadErrorHandlingPolicy(
                 object : androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy(0) {
