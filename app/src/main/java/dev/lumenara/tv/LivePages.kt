@@ -43,16 +43,18 @@ internal fun rememberLivePages(model: LibraryModel, source: String, category: St
     val state = remember(source, category, query, shelf) { LivePages(source, category, query, shelf) }
     val count by remember(source, category, query, shelf) {
         model.repo.liveCount(source, category, query, shelf)
-    }.collectAsStateWithLifecycle(0)
-    SideEffect { state.count = count }
+    }.collectAsStateWithLifecycle(null)
+    SideEffect { state.count = count ?: 0 }
     LaunchedEffect(state, returnId) {
         val index = returnId?.let { model.repo.liveIndex(source, it, category, query, shelf) } ?: 0
         state.center = index / LIVE_PAGE_SIZE
         state.anchor = index
     }
-    if (state.anchor != null) {
-        val center = state.center.coerceIn(0, ((count - 1).coerceAtLeast(0) / LIVE_PAGE_SIZE))
-        val wanted = ((center - 1).coerceAtLeast(0)..center + 1).toSet()
+    val total = count
+    if (state.anchor != null && total != null) {
+        val lastPage = (total - 1).coerceAtLeast(0) / LIVE_PAGE_SIZE
+        val center = state.center.coerceIn(0, lastPage)
+        val wanted = ((center - 1).coerceAtLeast(0)..(center + 1).coerceAtMost(lastPage)).toSet()
         LaunchedEffect(state, wanted) { state.pages.keys.toList().filter { it !in wanted }.forEach { state.pages.remove(it) } }
         for (page in wanted) key(state, page) {
             LaunchedEffect(state, page) {

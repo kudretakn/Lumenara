@@ -44,19 +44,25 @@ internal fun Timeline(
     var selection by remember(window, query) { mutableStateOf<Pair<Item, Slot>?>(null) }
     val restoreId = remember { returnChannel }
     val channels = rememberLivePages(model, source, returnId = restoreId)
+    var positioned by remember(channels) { mutableStateOf(false) }
     LaunchedEffect(channels[channels.anchor ?: 0] != null) {
         if (channels[channels.anchor ?: 0] != null) {
             withFrameNanos { }; withFrameNanos { }
             Perf.since("category", "category_grid_first_draw")
         }
     }
-    LaunchedEffect(channels.anchor, channels.count) {
-        if (restorePending && returnChannel != null) {
-            channels.anchor?.let { if (it < channels.count) list.scrollToItem(it) }
+    LaunchedEffect(channels.anchor, channels.count, channels[channels.anchor ?: 0]) {
+        if (!positioned) {
+            channels.anchor?.let {
+                if (it < channels.count && channels[it] != null) {
+                    list.scrollToItem(it)
+                    positioned = true
+                }
+            }
         }
     }
-    LaunchedEffect(channels) {
-        snapshotFlow { list.firstVisibleItemIndex }.collect { channels.focused(it) }
+    LaunchedEffect(channels, positioned) {
+        if (positioned) snapshotFlow { list.firstVisibleItemIndex }.collect { channels.focused(it) }
     }
     val from = window.toInstant().toEpochMilli()
     val to = window.plusHours(2).toInstant().toEpochMilli()
@@ -128,7 +134,7 @@ internal fun Timeline(
                     return@items
                 }
                 val channelFocus = remember { FocusRequester() }
-                if (channel.id == returnChannel && restorePending) LaunchedEffect(Unit) {
+                if (channel.id == returnChannel && restorePending && positioned) LaunchedEffect(Unit) {
                     withFrameNanos { }; channelFocus.requestFocus(); restorePending = false
                 }
                 val mapping by
@@ -188,6 +194,8 @@ internal fun Timeline(
                             }
                         }
                     }
+                // Zero-height search misses would make LazyColumn compose the whole catalog.
+                else Spacer(Modifier.fillMaxWidth().height(35.dp))
             }
         }
     }

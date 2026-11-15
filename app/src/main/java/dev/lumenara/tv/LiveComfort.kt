@@ -108,6 +108,7 @@ internal fun rememberLiveNumberControl(model: LibraryModel, source: String,
     val state = remember(source) { LiveNumberControl() }
     val scope = rememberCoroutineScope()
     var selection by remember { mutableStateOf<Job?>(null) }
+    DisposableEffect(state) { onDispose { selection?.cancel() } }
     val currentSelect by rememberUpdatedState(select)
     val currentIdState by rememberUpdatedState(currentId)
     SideEffect {

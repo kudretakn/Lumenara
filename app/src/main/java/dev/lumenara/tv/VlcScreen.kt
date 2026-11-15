@@ -58,6 +58,7 @@ internal fun VlcScreen(
     val moveScope = rememberCoroutineScope()
     var moveJob by remember { mutableStateOf<Job?>(null) }
     val activeId by rememberUpdatedState(item.id)
+    DisposableEffect(item.id) { onDispose { moveJob?.cancel() } }
     fun move(delta: Int) {
         if (item.kind == "LIVE" && group is LiveChannelGroup) {
             moveJob?.cancel()

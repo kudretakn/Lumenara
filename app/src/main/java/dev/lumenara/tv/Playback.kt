@@ -76,7 +76,7 @@ internal fun Video(
         model.prefs.text("color", "Beyaz")
     }
         .collectAsStateWithLifecycle("Beyaz")
-    LaunchedEffect(item.id, attempt, subtitle) {
+    LaunchedEffect(item.id, item.encryptedUrl, attempt, subtitle) {
         withContext(Dispatchers.Main.immediate) {
             error = ""
             playbackActive = false
@@ -219,7 +219,7 @@ internal fun Video(
             }
         }
     }
-    DisposableEffect(item.id, attempt, subtitle) {
+    DisposableEffect(item.id, item.encryptedUrl, attempt, subtitle) {
         onDispose {
             player?.let { engine ->
                 resume = if (engine.playbackState == Player.STATE_ENDED && engine.duration > 0)
@@ -320,6 +320,7 @@ internal fun Playback(
     val scope = rememberCoroutineScope()
     var moveJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     val activeId by rememberUpdatedState(item.id)
+    DisposableEffect(item.id) { onDispose { moveJob?.cancel() } }
     if (multi.isNotEmpty()) {
         MultiView(
             model,
