@@ -86,12 +86,13 @@ class Repository private constructor(private val context: Context) {
         hidden.flatMapLatest { library.liveByIds(source, ids, it) }
     private val liveScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val liveOrders = mutableMapOf<String, StateFlow<List<LiveChannelId>>>()
-    // This compatibility stream runs only while explicitly requested. Channel badges use
-    // a demand-driven snapshot; opening a screen must not keep the full order subscribed.
+    // Channel badges use demand-driven snapshots. Keep explicit order subscribers warm
+    // briefly across navigation, then release the observed list and Room subscription.
     fun liveChannelOrder(source: String): StateFlow<List<LiveChannelId>> = synchronized(liveOrders) {
         liveOrders.getOrPut(source) {
             hidden.flatMapLatest { library.liveChannelOrder(source, it) }
-                .distinctUntilChanged().stateIn(liveScope, SharingStarted.WhileSubscribed(stopTimeoutMillis = 0, replayExpirationMillis = 0), emptyList())
+                .distinctUntilChanged().stateIn(liveScope, SharingStarted.WhileSubscribed(
+                    stopTimeoutMillis = 30_000, replayExpirationMillis = 0), emptyList())
         }
     }
     suspend fun liveChannel(number: Int, source: String): Item? {
@@ -136,7 +137,7 @@ class Repository private constructor(private val context: Context) {
     private fun liveWindowEpoch(shelf: String): Long =
         if (shelf == "favorite") liveFavoriteEpoch.get() else liveOrderEpoch.get()
     private data class NumberSnapshot(val epoch: Long, val hidden: List<String>, val numbers: Map<String, Int>)
-    private val liveNumberSnapshots = mutableMapOf<String, NumberSnapshot>()
+    private val liveNumberSnapshots = java.util.concurrent.ConcurrentHashMap<String, NumberSnapshot>()
     private val liveNumberMutex = Mutex()
     private val liveInvalidation = object : InvalidationTracker.Observer("items", "marks") {
         override fun onInvalidated(tables: Set<String>) {
@@ -199,6 +200,12 @@ class Repository private constructor(private val context: Context) {
 
     suspend fun production(item: Item): Item = if (item.kind == "EPISODE") library.item(item.parent) ?: item
         else library.item(item.id) ?: item
+
+    fun trim() {
+        synchronized(liveOrders) { liveOrders.clear() }
+        // P5 removed versionIndex; P2's channel-number snapshots are the remaining cache.
+        liveNumberSnapshots.clear()
+    }
 
     suspend fun versions(item: Item): List<Item> {
         val all = allVersions(item)

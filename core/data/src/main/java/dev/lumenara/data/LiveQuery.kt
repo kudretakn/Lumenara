@@ -48,7 +48,7 @@ internal fun livePageQuery(
             """AND (i.title,i.id)>(SELECT a.title,a.id FROM items a ${filter.liveOrderIndex()} WHERE ${anchor.sql}
                 ORDER BY a.title,a.id LIMIT 1 OFFSET ?)"""
         }
-        else -> "INDEXED BY index_items_kind_category_title"
+        else -> ""
     }
     args += limit
     val direction = if (backwards) "DESC" else "ASC"
@@ -79,4 +79,3 @@ internal fun liveChannelOrderQuery(filter: CatalogFilter): SimpleSQLiteQuery {
         ORDER BY i.title,i.id""",
         ((if (filter.source.isEmpty()) emptyList() else listOf(filter.source)) + eligible.args).toTypedArray())
 }
-
