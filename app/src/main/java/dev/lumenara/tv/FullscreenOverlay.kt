@@ -9,7 +9,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RectangleShape
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.foundation.lazy.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
@@ -168,11 +168,11 @@ internal fun BoxScope.FullscreenOverlay(
                 Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                     .padding(horizontal = Spacing.screenHorizontal, vertical = Spacing.screenVertical),
                     verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
-                    Text(item.title, style = LumenType.title, color = LumenColors.textPrimary, maxLines = 1)
+                    Text(playbackDisplayTitle(item), style = LumenType.title, color = LumenColors.textPrimary, maxLines = 1)
                     ProgressLine(if (total > 0) elapsed.toFloat() / total else 0f)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text(playbackTime(elapsed), style = LumenType.meta)
-                        Text("−${playbackTime((total - elapsed).coerceAtLeast(0))}", style = LumenType.meta)
+                        Text("${playbackTime((total - elapsed).coerceAtLeast(0))} kaldı", style = LumenType.meta)
                     }
                 }
             }

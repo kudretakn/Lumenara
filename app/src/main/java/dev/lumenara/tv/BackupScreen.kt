@@ -21,11 +21,9 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.tv.material3.Button
 import androidx.tv.material3.Text
 import dev.lumenara.data.BackupPreview
-import dev.lumenara.design.Ink
+import dev.lumenara.design.*
 import java.io.File
 import java.io.InputStream
 import java.text.SimpleDateFormat
@@ -186,11 +184,11 @@ internal fun BackupScreen(model: LibraryModel, restore: Boolean, finishLabel: St
 
     LazyColumn(
         modifier = Modifier.testTag("backup-screen").widthIn(max = 760.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-        contentPadding = PaddingValues(6.dp, 6.dp, 6.dp, 24.dp),
+        verticalArrangement = Arrangement.spacedBy(Spacing.cardGap),
+        contentPadding = PaddingValues(bottom = Spacing.titleGap),
     ) {
-        item { Text(if (restore) "Geri yükle" else "Yedekle", fontSize = 24.sp) }
-        item { Text("Ayarlar, kaynaklar, EPG, Listem, favoriler, izleme ilerlemesi ve son kanallar. Katalog dahil değildir.", color = Ink.muted) }
+        item { Text(if (restore) "Geri yükle" else "Yedekle", style = LumenType.headline) }
+        item { Text("Ayarlar, kaynaklar, EPG, Listem, favoriler, izleme ilerlemesi ve son kanallar. Katalog dahil değildir.", color = LumenColors.textSecondary) }
         item {
             Column(Modifier.focusRequester(first).testTag("backup-password")) {
                 Field("Yedek parolası · en az 6 karakter", password, {
@@ -202,9 +200,9 @@ internal fun BackupScreen(model: LibraryModel, restore: Boolean, finishLabel: St
         }
         if (!restore) {
             item { Field("Parolayı tekrar girin", repeatPassword, { if (available) repeatPassword = it }, true) }
-            item { Text("Parolayı saklayın; unutulursa yedek açılamaz.", color = Ink.muted) }
+            item { Text("Parolayı saklayın; unutulursa yedek açılamaz.", color = LumenColors.textSecondary) }
             item {
-                Button(enabled = available && (validPassword || encrypted != null), onClick = {
+                LumenButton(style = LumenButtonStyle.Secondary, enabled = available && (validPassword || encrypted != null), onClick = {
                     if (Build.VERSION.SDK_INT <= 28 && context.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
                         storageAction = "save"
                         permission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
@@ -212,14 +210,14 @@ internal fun BackupScreen(model: LibraryModel, restore: Boolean, finishLabel: St
                 }, modifier = Modifier.testTag("backup-save")) { Text("Yedeği kaydet") }
             }
             item {
-                Button(enabled = available && (validPassword || encrypted != null), onClick = {
+                LumenButton(style = LumenButtonStyle.Secondary, enabled = available && (validPassword || encrypted != null), onClick = {
                     run { prepare(); phone = true }
                 }) { Text("Telefona gönder") }
             }
             if (phone) item { BackupPhonePanel(checkNotNull(encrypted), filename) }
         } else {
             item {
-                Button(enabled = available, onClick = {
+                LumenButton(style = LumenButtonStyle.Secondary, enabled = available, onClick = {
                     if (Build.VERSION.SDK_INT <= 28 && context.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
                         storageAction = "list"
                         permission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
@@ -228,19 +226,20 @@ internal fun BackupScreen(model: LibraryModel, restore: Boolean, finishLabel: St
             }
             localBackups.forEach { backup ->
                 item {
-                    Button(enabled = available, onClick = {
+                    LumenButton(style = LumenButtonStyle.Secondary, enabled = available, onClick = {
                         selected = backup.uri; preview = null; completed = false; message = ""
-                    }) { Text((if (selected == backup.uri) "✓ " else "") + backup.name) }
+                    }) { if (selected == backup.uri) LumenIcon(LumenIcon.Check, null)
+                        Text(backup.name) }
                 }
             }
             item {
-                Button(enabled = available, onClick = {
+                LumenButton(style = LumenButtonStyle.Secondary, enabled = available, onClick = {
                     runCatching { picker.launch(arrayOf("application/octet-stream", "application/json", "*/*")) }
                         .onFailure { message = "Bu TV’de belge seçici bulunamadı." }
                 }) { Text(if (selected == null) "Yedek dosyası seç (.lmb)" else "Başka yedek seç") }
             }
             item {
-                Button(enabled = available && selected != null && validPassword, onClick = {
+                LumenButton(style = LumenButtonStyle.Secondary, enabled = available && selected != null && validPassword, onClick = {
                     run {
                         val uri = checkNotNull(selected)
                         val bytes = withContext(Dispatchers.IO) {
@@ -254,9 +253,9 @@ internal fun BackupScreen(model: LibraryModel, restore: Boolean, finishLabel: St
             }
             preview?.let { opened ->
                 item { Text(opened.summary, modifier = Modifier.testTag("backup-summary")) }
-                item { Text("Ayarlar yedekteki durumuna döner. Aynı kaynağın izleme ve liste kayıtları güncellenir; kaynaklar yenilenir. Devam edilsin mi?", color = Ink.muted) }
+                item { Text("Ayarlar yedekteki durumuna döner. Aynı kaynağın izleme ve liste kayıtları güncellenir; kaynaklar yenilenir. Devam edilsin mi?", color = LumenColors.textSecondary) }
                 item {
-                    Button(enabled = available && !completed, onClick = {
+                    LumenButton(style = LumenButtonStyle.Secondary, enabled = available && !completed, onClick = {
                         run {
                             val result = model.repo.restoreBackup(opened)
                             message = "Geri yükleme tamamlandı. ${result.skipped} kayıt katalogda bulunamadı; ${result.guideFailures} kaynağın EPG’si yenilenemedi."
@@ -267,9 +266,21 @@ internal fun BackupScreen(model: LibraryModel, restore: Boolean, finishLabel: St
                 }
             }
         }
-        if (busy) item { Text(if (restore) "Yedek işleniyor…" else "Şifreli yedek hazırlanıyor…", color = Ink.accent) }
-        if (message.isNotEmpty()) item { Text(message, color = Ink.accent, modifier = Modifier.testTag("backup-message")) }
-        item { Button(enabled = !busy, onClick = finish) { Text(finishLabel) } }
+        if (busy) item {
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+                LumenIcon(LumenIcon.Clock, null, tint = LumenColors.textSecondary)
+                Text(if (restore) "Yedek işleniyor…" else "Şifreli yedek hazırlanıyor…", style = LumenType.meta)
+            }
+        }
+        if (message.isNotEmpty()) item {
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+                val success = completed || message.startsWith("Yedek kaydedildi:")
+                LumenIcon(if (success) LumenIcon.Check else LumenIcon.Info, null,
+                    tint = if (success) LumenColors.success else LumenColors.error)
+                Text(message, style = LumenType.meta, modifier = Modifier.testTag("backup-message"))
+            }
+        }
+        item { LumenButton(style = LumenButtonStyle.Secondary, enabled = !busy, onClick = finish) { Text(finishLabel) } }
     }
 }
 
@@ -296,7 +307,7 @@ private fun BackupPhonePanel(bytes: ByteArray, filename: String) {
     DisposableEffect(lifecycle) { onDispose { session?.close() } }
     val active = session
     Column {
-        Text("Telefonun kamerasıyla kodu tarayın; açılan sayfaya TV eşleştirme kodunu girin.", color = Ink.muted)
-        if (active != null) PairSessionInfo(active) else Text(status, color = Ink.accent)
+        Text("Telefonun kamerasıyla kodu tarayın; açılan sayfaya TV eşleştirme kodunu girin.", color = LumenColors.textSecondary)
+        if (active != null) PairSessionInfo(active) else Text(status, color = LumenColors.accent)
     }
 }

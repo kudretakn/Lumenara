@@ -24,6 +24,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import androidx.tv.material3.*
 import dev.lumenara.data.*
+import dev.lumenara.catalog.displayTitle
 import dev.lumenara.catalog.trackChoice
 import dev.lumenara.catalog.trackPreferenceRank
 import dev.lumenara.design.Ink
@@ -517,7 +518,7 @@ internal fun Playback(
                 if (item.kind == "EPISODE") episodeEnded()
             },
         )
-        if (!panel && !sleepCountdown) PlaybackOverlay(model, item, group, fullscreen,
+        if (!panel && !sleepCountdown) FullscreenOverlay(model, item, group, fullscreen,
             { channel, rows -> changeGroup(rows); select(channel) },
             { panel = true },
             { engine?.currentPosition ?: 0 }, { engine?.duration ?: 0 },
@@ -900,56 +901,6 @@ internal fun PlaybackSection(title: String) {
         style = LumenType.caption, color = LumenColors.textSecondary)
 }
 
-// D4 owns the catalog cleaner; keep this private until that change is integrated.
-internal fun playbackDisplayTitle(item: Item): String = cleanPlaybackTitle(item)
-
-private fun cleanPlaybackTitle(item: Item): String = dev.lumenara.catalog.productionName(item.title, item.year).title
-    .replace(Regex("\\b\\d{6,}\\b"), "")
-    .replace(Regex("(?i)^(?:(?:TR|EN|4K|FHD|HD|UHD|VOD)\\s*[|:–-]\\s*)+"), "")
-    .replace(Regex("\\s+"), " ").trim(' ', '-', '|', ':')
-    .ifBlank { "Video" }
-
-/** Both engines use the same VOD presentation and the existing remote state. */
-@Composable
-internal fun BoxScope.PlaybackOverlay(
-    model: LibraryModel, item: Item, group: List<Item>, state: FullscreenState,
-    select: (Item, List<Item>) -> Unit, options: () -> Unit,
-    position: () -> Long, duration: () -> Long, next: (() -> Unit)?,
-) {
-    if (item.kind == "LIVE") {
-        FullscreenOverlay(model, item, group, state, select, options, position, duration, next)
-        return
-    }
-    if (state.finished && next != null) {
-        Panel(Modifier.align(Alignment.BottomEnd).padding(Spacing.screenHorizontal, Spacing.screenVertical).width(320.dp)) {
-            val focus = remember { FocusRequester() }
-            LaunchedEffect(Unit) { focus.requestFocus() }
-            LumenButton(next, Modifier.padding(Spacing.cardGap).focusRequester(focus)) {
-                LumenIcon(LumenIcon.Play, null)
-                Text("Sonraki bölüm")
-            }
-        }
-    } else if (state.bannerUntil > state.now) {
-        LaunchedEffect(item.id, state.bannerRequest) {
-            withFrameNanos { }
-            withFrameNanos { }
-            state.now = System.currentTimeMillis()
-            state.bannerUntil = state.now + Motion.bannerAutoHideMillis
-        }
-        Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(200.dp)
-            .background(LumenBrushes.scrim).testTag("vod-timeline")
-            .padding(horizontal = Spacing.screenHorizontal, vertical = Spacing.screenVertical),
-            verticalArrangement = Arrangement.spacedBy(Spacing.unit, Alignment.Bottom)) {
-            val elapsed = position().coerceAtLeast(0)
-            val total = duration().coerceAtLeast(0)
-            Text(playbackDisplayTitle(item), style = LumenType.title, maxLines = 1)
-            ProgressLine(if (total > 0) elapsed.toFloat() / total else 0f)
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(vodTime(elapsed), style = LumenType.meta)
-                Text("${vodTime((total - elapsed).coerceAtLeast(0))} kaldı", style = LumenType.meta)
-            }
-        }
-    }
-}
-
-private fun vodTime(ms: Long): String = "%d:%02d".format(ms / 60_000, ms / 1000 % 60)
+/** Clean only the visible title; production identity and version selection stay intact. */
+internal fun playbackDisplayTitle(item: Item): String =
+    dev.lumenara.catalog.productionName(item.title, item.year).title.displayTitle().ifBlank { "Video" }

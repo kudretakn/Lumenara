@@ -130,7 +130,7 @@ internal fun SearchScreen(
         }
     }
     val notice by model.notice.collectAsStateWithLifecycle()
-    Column(Modifier.fillMaxSize().padding(horizontal = Spacing.screenHorizontal, vertical = Spacing.screenVertical),
+    Column(Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(Spacing.titleGap)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {

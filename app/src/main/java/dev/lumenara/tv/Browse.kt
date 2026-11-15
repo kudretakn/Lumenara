@@ -12,7 +12,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
@@ -27,16 +26,7 @@ import androidx.compose.ui.unit.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.*
 import dev.lumenara.data.*
-import dev.lumenara.design.Ink
-import dev.lumenara.design.GlassPanel
-import dev.lumenara.design.FocusCard
-import dev.lumenara.design.LumenColors
-import dev.lumenara.design.LumenType
-import dev.lumenara.design.LumenIcon
-import dev.lumenara.design.Motion
-import dev.lumenara.design.Spacing
-import dev.lumenara.design.Radii
-import dev.lumenara.design.ProgressLine
+import dev.lumenara.design.*
 import dev.lumenara.catalog.displayTitle
 import androidx.compose.ui.draw.alpha
 import kotlinx.coroutines.flow.*
@@ -168,25 +158,19 @@ private fun HubResumeShelf(model: LibraryModel, rows: List<Item>, open: (Item) -
 /** Local 16:9 fallback; the shared poster fallback and shared channel cards belong to D1/D3. */
 @Composable
 private fun HubArtwork(model: LibraryModel, item: Item, address: String?, channel: Boolean = false) {
-    val tones = remember { listOf(0xFF1E2430, 0xFF2A1F24, 0xFF1F2A24, 0xFF2B2619, 0xFF24202E, 0xFF1C2A2B) }
-    val tone = androidx.compose.ui.graphics.Color(tones[Math.floorMod(item.title.hashCode(), tones.size)])
-    val fill = if (channel && address == null) tone else if (channel) LumenColors.surface3 else LumenColors.surface2
-    Box(Modifier.fillMaxSize().background(fill),
-        contentAlignment = if (channel) Alignment.Center else Alignment.BottomStart) {
+    if (channel) {
+        ChannelLogo(model, item, address, Modifier.fillMaxSize())
+        return
+    }
+    Box(Modifier.fillMaxSize().background(LumenColors.surface2), contentAlignment = Alignment.BottomStart) {
         if (address == null) {
-            Text(if (channel) item.title.split(Regex("\\s+")).take(2).joinToString(" ") else item.title,
-                Modifier.padding(Spacing.cardGap),
-                style = if (channel) LumenType.label else LumenType.cardTitle,
-                color = LumenColors.textPrimary, maxLines = if (channel) 2 else 3,
-                textAlign = if (channel) TextAlign.Center else TextAlign.Start,
-                overflow = TextOverflow.Ellipsis)
-            if (!channel) LumenIcon(if (item.kind == "SERIES") LumenIcon.Series else LumenIcon.Film,
+            Text(item.title, Modifier.padding(Spacing.cardGap), style = LumenType.cardTitle,
+                color = LumenColors.textPrimary, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            LumenIcon(if (item.kind == "SERIES") LumenIcon.Series else LumenIcon.Film,
                 contentDescription = null, modifier = Modifier.align(Alignment.TopEnd).padding(Spacing.cardGap),
                 tint = LumenColors.textPrimary.copy(alpha = .4f))
-        } else Artwork(model, item, address,
-            if (channel) Modifier.fillMaxSize(.7f) else Modifier.fillMaxSize(),
-            contentScale = if (channel) ContentScale.Fit else ContentScale.Crop,
-            role = if (channel) "poster" else "backdrop")
+        } else Artwork(model, item, address, Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop, role = "backdrop")
     }
 }
 

@@ -496,7 +496,7 @@ internal fun VlcScreen(
             },
             modifier = Modifier.fillMaxSize().focusProperties { canFocus = false },
         )
-        if (!panel && !sleepCountdown) PlaybackOverlay(model, item, group, fullscreen, select, { panel = true },
+        if (!panel && !sleepCountdown) FullscreenOverlay(model, item, group, fullscreen, select, { panel = true },
             { player?.time ?: 0 }, { player?.length ?: 0 },
             if (item.kind == "EPISODE" && group.nextItem(item) != null) next else null)
         FrameRateMatch(model, item.kind, frameRate, layout)

@@ -216,7 +216,7 @@ class CinemaJourneyTest {
                     }
                 }
             try {
-                node("✓ M3U").assertExists()
+                node("Liste adresi gir").assertExists()
                 capture("cinema-setup")
                 runBlocking {
                     repo.add(
@@ -363,8 +363,10 @@ class CinemaJourneyTest {
                 waitFor(hasText("IPTV Kaynakları") and isFocused())
                 node("IPTV Kaynakları").assertIsFocused()
                 screen.ok()
-                node("✓ M3U").assertExists()
+                node("Liste adresi gir").assertExists()
                 screen.back()
+                screen.onNodeWithTag("settings-group-Oynatıcı").performClick()
+                screen.onNodeWithTag("settings-list").performScrollToNode(hasText("Varsayılan motor · Media3"))
                 node("Varsayılan motor · Media3").assertExists()
             } finally {
                 runBlocking {

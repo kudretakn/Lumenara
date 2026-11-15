@@ -275,7 +275,7 @@ internal fun SubtitleResults(state: SubtitleSearchState, panel: Boolean, playerF
         Panel(Modifier.width(400.dp).fillMaxHeight().testTag("subtitle-results")
             .pointerInput(Unit) { detectTapGestures { } }
             .focusProperties { onExit = { cancelFocusChange() } }.focusGroup(),
-            shape = androidx.compose.foundation.shape.RectangleShape) {
+            shape = androidx.compose.ui.graphics.RectangleShape) {
             Column(Modifier.padding(horizontal = Spacing.titleGap, vertical = Spacing.screenVertical),
                 verticalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
                 Text("Altyazı ara", style = LumenType.title)

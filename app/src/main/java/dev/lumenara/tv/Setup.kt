@@ -4,6 +4,9 @@ import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -13,13 +16,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.*
 import androidx.tv.material3.*
 import dev.lumenara.data.*
-import dev.lumenara.design.Ink
+import dev.lumenara.design.*
+import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import java.text.DateFormat
 import java.util.Date
 import kotlinx.coroutines.launch
@@ -32,20 +40,20 @@ internal fun Field(
     secret: Boolean = false,
 ) {
     var focus by remember { mutableStateOf(false) }
-    Column {
-        Text(label, color = Ink.muted, fontSize = 13.sp)
+    Column(Modifier.fillMaxWidth().background(LumenColors.surface3, RoundedCornerShape(Radii.button))
+        .border(2.dp, if (focus) LumenColors.focus else androidx.compose.ui.graphics.Color.Transparent, RoundedCornerShape(Radii.button))
+        .padding(horizontal = Spacing.cardGap, vertical = Spacing.unit)) {
+        Text(label, color = LumenColors.textSecondary, style = LumenType.caption)
         BasicTextField(
-            value,
-            change,
-            Modifier.fillMaxWidth()
+            value = value,
+            onValueChange = change,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 28.dp)
                 .onFocusChanged { focus = it.isFocused }
-                .background(if (focus) Ink.focus else Ink.surface, RoundedCornerShape(6.dp))
-                .padding(9.dp),
-            textStyle =
-                TextStyle(color = if (focus) Ink.background else Ink.text, fontSize = 16.sp),
+                .semantics { contentDescription = label },
+            textStyle = LumenType.body.copy(color = LumenColors.textPrimary),
+            cursorBrush = androidx.compose.ui.graphics.SolidColor(LumenColors.focus),
             singleLine = true,
-            visualTransformation =
-                if (secret) PasswordVisualTransformation() else VisualTransformation.None,
+            visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
         )
     }
 }
@@ -53,7 +61,8 @@ internal fun Field(
 @Composable
 internal fun Setup(model: LibraryModel, sources: List<Source>, openRestore: () -> Unit, openHome: () -> Unit) {
     val context = LocalContext.current
-    var method by remember { mutableStateOf("M3U") }
+    var method by rememberSaveable { mutableStateOf<String?>(null) }
+    var advanced by rememberSaveable { mutableStateOf(false) }
     var name by remember { mutableStateOf("") }
     var address by remember { mutableStateOf("") }
     var user by remember { mutableStateOf("") }
@@ -63,7 +72,14 @@ internal fun Setup(model: LibraryModel, sources: List<Source>, openRestore: () -
     val busy by model.busy.collectAsState()
     val notice by model.notice.collectAsState()
     val first = remember { FocusRequester() }
-    LaunchedEffect(Unit) { first.requestFocus() }
+    LaunchedEffect(method) { withFrameNanos { }; first.requestFocus() }
+    BackHandler(method != null) { method = null }
+    fun choose(type: String) {
+        method = type
+        address = ""
+        pass = ""
+        model.notice.value = ""
+    }
     val file =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             if (uri != null) {
@@ -80,184 +96,222 @@ internal fun Setup(model: LibraryModel, sources: List<Source>, openRestore: () -
                     }
             }
         }
-    LazyColumn(
-        modifier = Modifier.widthIn(max = 470.dp).testTag("source-setup"),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-        contentPadding = PaddingValues(start = 4.dp, top = 4.dp, bottom = 24.dp, end = 4.dp),
-    ) {
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("M3U", "Dosya", "Xtream", "Telefon").forEachIndexed { i, type ->
-                    Button(
-                        onClick = {
-                            method = type
-                            address = ""
-                            pass = ""
-                            model.notice.value = ""
+    Row(Modifier.fillMaxSize().testTag("setup-screen"), horizontalArrangement = Arrangement.spacedBy(Spacing.titleGap)) {
+        LazyColumn(
+            modifier = Modifier.weight(if (method == null) .56f else .66f).testTag("source-setup"),
+            verticalArrangement = Arrangement.spacedBy(Spacing.cardGap),
+            contentPadding = PaddingValues(bottom = Spacing.titleGap),
+        ) {
+            item {
+                Text(if (method == null) "ADIM 1 / 2" else "ADIM 2 / 2", style = LumenType.caption, color = LumenColors.textSecondary)
+            }
+            if (method == null) {
+                item { Text("Hoş geldiniz", style = LumenType.display, color = LumenColors.textPrimary) }
+                item { Text("IPTV listenizi ekleyin; kanallar, filmler ve diziler tek yerde.", style = LumenType.body, color = LumenColors.textSecondary) }
+                item {
+                    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+                        LumenButton(onClick = { choose("M3U") }, modifier = Modifier.weight(1f).focusRequester(first)) { Text("Liste adresi gir") }
+                        LumenButton(onClick = { choose("Xtream") }, style = LumenButtonStyle.Secondary, modifier = Modifier.weight(1f)) { Text("Xtream ile giriş") }
+                    }
+                }
+                item {
+                    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+                        LumenButton(onClick = { choose("Dosya") }, style = LumenButtonStyle.Secondary) { Text("Dosyadan") }
+                        LumenButton(enabled = !busy, onClick = openRestore,
+                            style = LumenButtonStyle.Secondary, modifier = Modifier.testTag("setup-restore")) { Text("Yedekten geri yükle") }
+                    }
+                }
+            } else {
+                item {
+                    LumenButton(onClick = { method = null }, style = LumenButtonStyle.Secondary,
+                        modifier = Modifier.focusRequester(first)) {
+                        LumenIcon(LumenIcon.Back, null)
+                        Text("Yöntemi değiştir")
+                    }
+                }
+                item { Text(when (method) { "Xtream" -> "Xtream ile giriş"; "Dosya" -> "Dosyadan ekle"; else -> "Liste adresi gir" }, style = LumenType.title) }
+                item {
+                    Text(
+                        when (method) {
+                            "Dosya" ->
+                                "TV depolamasından veya bağlı USB aygıtından bir M3U listesi seçin."
+                            "Xtream" -> "Sağlayıcınızın sunucu adresini ve hesap bilgilerini girin."
+                            else -> "Sağlayıcınızın verdiği M3U liste adresini girin."
                         },
-                        modifier = if (i == 0) Modifier.focusRequester(first) else Modifier,
-                    ) {
-                        Text(if (method == type) "✓ $type" else type)
-                    }
-                }
-            }
-        }
-        if (sources.isEmpty()) item {
-            Button(enabled = !busy, onClick = openRestore, modifier = Modifier.testTag("setup-restore")) {
-                Text("Yedekten geri yükle")
-            }
-        }
-        if (method == "Telefon") item { PairPanel(model, openHome) }
-        else {
-            item {
-                Text(
-                    when (method) {
-                        "Dosya" ->
-                            "TV depolamasından veya bağlı USB aygıtından bir M3U listesi seçin."
-                        "Xtream" -> "Sağlayıcınızın sunucu adresini ve hesap bilgilerini girin."
-                        else -> "Sağlayıcınızın verdiği M3U liste adresini girin."
-                    },
-                    color = Ink.muted,
-                )
-            }
-            item { Field("Liste adı", name, { name = it }) }
-            item {
-                if (method == "Dosya")
-                    Button(
-                        onClick = {
-                            runCatching { file.launch(arrayOf("*/*")) }
-                                .onFailure {
-                                    model.notice.value = "Bu TV’de belge seçici bulunamadı."
-                                }
-                        }
-                    ) {
-                        Text(if (address.isEmpty()) "M3U dosyası seç" else "Dosyayı değiştir")
-                    }
-                else
-                    Field(
-                        if (method == "Xtream") "Sunucu adresi" else "Liste adresi",
-                        address,
-                        { address = it },
+                        color = LumenColors.textSecondary,
                     )
-            }
-            if (method == "Xtream") {
-                item { Field("Kullanıcı adı", user, { user = it }) }
-                item { Field("Şifre", pass, { pass = it }, true) }
-            }
-            item {
-                Button(onClick = { http = !http }) {
-                    Text("HTTP uyumluluğu · " + if (http) "Açık" else "Kapalı")
                 }
-            }
-            item {
-                Button(
-                    enabled =
-                        !busy &&
-                            name.isNotBlank() &&
-                            address.isNotBlank() &&
-                            (method != "Xtream" || user.isNotBlank() && pass.isNotEmpty()),
-                    onClick = {
-                        val spec =
-                            SourceSpec(
-                                address.trim(),
-                                http,
-                                if (method == "Xtream") user else "",
-                                if (method == "Xtream") pass else "",
-                            )
-                        model.job("Kaynak eklendi.") {
-                            model.repo.add(name, spec)
-                            pass = ""
-                            address = ""
-                            name = ""
-                            openHome()
+                item { Field("Liste adı", name, { name = it }) }
+                item {
+                    if (method == "Dosya")
+                        LumenButton(
+                            style = LumenButtonStyle.Secondary,
+                            onClick = {
+                                runCatching { file.launch(arrayOf("*/*")) }
+                                    .onFailure {
+                                        model.notice.value = "Bu TV’de belge seçici bulunamadı."
+                                    }
+                            }
+                        ) {
+                            Text(if (address.isEmpty()) "M3U dosyası seç" else "Dosyayı değiştir")
                         }
-                    },
-                ) {
-                    Text(if (busy) "Kaynak işleniyor…" else "Bağlantıyı sına ve ekle")
+                    else
+                        Field(
+                            if (method == "Xtream") "Sunucu adresi" else "Liste adresi",
+                            address,
+                            { address = it },
+                        )
                 }
-            }
-        }
-        if (notice.isNotEmpty()) item { Text(notice, color = Ink.accent) }
-        items(sources, key = { it.id }) { source ->
-            var guideInput by remember { mutableStateOf(false) }
-            val limit by
-                remember(source.id) { model.prefs.connections(source.id) }.collectAsState(1)
-            val configuredLimit by
-                remember(source.id) { model.prefs.text("limit_${source.id}", "1") }
-                    .collectAsState("1")
-            val sync by
-                remember(source.id) { model.prefs.text("sync_${source.id}") }.collectAsState("")
-            val scope = rememberCoroutineScope()
-            var guideAddress by remember { mutableStateOf("") }
-            Column {
-                Text(source.name, fontSize = 18.sp)
-                if (sync.isNotEmpty()) Text(sync, color = Ink.accent)
-                Text(
-                    "${source.count} içerik · ${DateFormat.getDateTimeInstance().format(Date(source.refreshed))}",
-                    color = Ink.muted,
-                )
-                Button(
-                    onClick = {
-                        scope.launch {
-                            model.prefs.set(
-                                "limit_${source.id}",
-                                ((configuredLimit.toIntOrNull() ?: 1) % 4 + 1).toString(),
-                            )
-                        }
+                if (method == "Xtream") {
+                    item { Field("Kullanıcı adı", user, { user = it }) }
+                    item { Field("Şifre", pass, { pass = it }, true) }
+                }
+                item {
+                    ListRow(onClick = { advanced = !advanced }, modifier = Modifier.testTag("setup-advanced")) {
+                        Text("Gelişmiş", style = LumenType.cardTitle, modifier = Modifier.weight(1f))
+                        LumenIcon(if (advanced) LumenIcon.ChevronUp else LumenIcon.ChevronDown, null)
                     }
-                ) {
-                    Text("Bağlantı sınırı · $configuredLimit (kullanılabilir $limit)")
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        enabled = !busy,
+                if (advanced) item {
+                    ListRow(onClick = { http = !http }) {
+                        Text("HTTP uyumluluğu · " + if (http) "Açık" else "Kapalı", style = LumenType.cardTitle)
+                    }
+                }
+                item {
+                    LumenButton(
+                        enabled =
+                            !busy &&
+                                name.isNotBlank() &&
+                                address.isNotBlank() &&
+                                (method != "Xtream" || user.isNotBlank() && pass.isNotEmpty()),
                         onClick = {
-                            model.job("Liste yenilendi.") {
-                                model.repo.refresh(source.id)
-                                model.repo.refreshGuides(source.id)
+                            val spec =
+                                SourceSpec(
+                                    address.trim(),
+                                    http,
+                                    if (method == "Xtream") user else "",
+                                    if (method == "Xtream") pass else "",
+                                )
+                            model.job("Kaynak eklendi.") {
+                                model.repo.add(name, spec)
+                                pass = ""
+                                address = ""
+                                name = ""
+                                openHome()
                             }
                         },
                     ) {
-                        Text("Yenile")
+                        Text(if (busy) "Kaynak işleniyor…" else "Bağlantıyı sına ve ekle")
                     }
-                    Button(enabled = !busy, onClick = { guideInput = !guideInput }) {
-                        Text("EPG ekle")
-                    }
-                    Button(
-                        enabled = !busy,
-                        onClick = {
-                            if (pendingDelete == source.id)
-                                model.job("Kaynak silindi.") {
-                                    model.repo.remove(source.id)
-                                    pendingDelete = ""
-                                }
-                            else pendingDelete = source.id
-                        },
-                    ) {
-                        Text(if (pendingDelete == source.id) "Silmeyi onayla" else "Sil")
-                    }
-                    if (pendingDelete == source.id)
-                        Button(onClick = { pendingDelete = "" }) { Text("Vazgeç") }
                 }
-                if (guideInput) {
-                    Field(
-                        "XMLTV adresi (Xtream rehberi için boş bırakın)",
-                        guideAddress,
-                        { guideAddress = it },
+            }
+            if (busy) item {
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+                    LumenIcon(LumenIcon.Clock, null, tint = LumenColors.textSecondary)
+                    Text("Bağlantı sınanıyor…", style = LumenType.meta)
+                }
+            }
+            if (notice.isNotEmpty()) item {
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+                    val success = notice == "Kaynak eklendi."
+                    LumenIcon(if (success) LumenIcon.Check else LumenIcon.Info, null,
+                        tint = if (success) LumenColors.success else LumenColors.error)
+                    Text(notice, style = LumenType.meta)
+                }
+            }
+            items(sources, key = { it.id }) { source ->
+                var guideInput by remember { mutableStateOf(false) }
+                val limit by
+                    remember(source.id) { model.prefs.connections(source.id) }.collectAsState(1)
+                val configuredLimit by
+                    remember(source.id) { model.prefs.text("limit_${source.id}", "1") }
+                        .collectAsState("1")
+                val sync by
+                    remember(source.id) { model.prefs.text("sync_${source.id}") }.collectAsState("")
+                val scope = rememberCoroutineScope()
+                var guideAddress by remember { mutableStateOf("") }
+                Column {
+                    Text(source.name, style = LumenType.cardTitle)
+                    if (sync.isNotEmpty()) Text(sync, color = LumenColors.accent)
+                    Text(
+                        "${source.count} içerik · ${DateFormat.getDateTimeInstance().format(Date(source.refreshed))}",
+                        color = LumenColors.textSecondary,
                     )
-                    Button(
-                        enabled = !busy,
+                    LumenButton(
+                            style = LumenButtonStyle.Secondary,
                         onClick = {
-                            model.job("Rehber güncellendi.") {
-                                model.repo.addGuide(source.id, guideAddress.trim())
-                                guideInput = false
-                                guideAddress = ""
+                            scope.launch {
+                                model.prefs.set(
+                                    "limit_${source.id}",
+                                    ((configuredLimit.toIntOrNull() ?: 1) % 4 + 1).toString(),
+                                )
                             }
-                        },
+                        }
                     ) {
-                        Text("Rehberi al")
+                        Text("Bağlantı sınırı · $configuredLimit (kullanılabilir $limit)")
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        LumenButton(
+                            style = LumenButtonStyle.Secondary,
+                            enabled = !busy,
+                            onClick = {
+                                model.job("Liste yenilendi.") {
+                                    model.repo.refresh(source.id)
+                                    model.repo.refreshGuides(source.id)
+                                }
+                            },
+                        ) {
+                            Text("Yenile")
+                        }
+                        LumenButton(enabled = !busy, onClick = { guideInput = !guideInput }) {
+                            Text("EPG ekle")
+                        }
+                        LumenButton(
+                            style = LumenButtonStyle.Secondary,
+                            enabled = !busy,
+                            onClick = {
+                                if (pendingDelete == source.id)
+                                    model.job("Kaynak silindi.") {
+                                        model.repo.remove(source.id)
+                                        pendingDelete = ""
+                                    }
+                                else pendingDelete = source.id
+                            },
+                        ) {
+                            Text(if (pendingDelete == source.id) "Silmeyi onayla" else "Sil")
+                        }
+                        if (pendingDelete == source.id)
+                            LumenButton(onClick = { pendingDelete = "" }) { Text("Vazgeç") }
+                    }
+                    if (guideInput) {
+                        Field(
+                            "XMLTV adresi (Xtream rehberi için boş bırakın)",
+                            guideAddress,
+                            { guideAddress = it },
+                        )
+                        LumenButton(
+                            style = LumenButtonStyle.Secondary,
+                            enabled = !busy,
+                            onClick = {
+                                model.job("Rehber güncellendi.") {
+                                    model.repo.addGuide(source.id, guideAddress.trim())
+                                    guideInput = false
+                                    guideAddress = ""
+                                }
+                            },
+                        ) {
+                            Text("Rehberi al")
+                        }
                     }
                 }
+            }
+        }
+        Panel(Modifier.weight(if (method == null) .44f else .34f).fillMaxHeight()) {
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(Spacing.titleGap),
+                verticalArrangement = Arrangement.spacedBy(Spacing.cardGap), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("Telefonla ekle", style = LumenType.title)
+                Text("Telefonunuzla okutun, adresi oradan yapıştırın.", style = LumenType.meta, textAlign = TextAlign.Center)
+                PairPanel(model, openHome)
             }
         }
     }
