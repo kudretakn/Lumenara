@@ -142,7 +142,6 @@ class SeriesJourneyTest {
                 val card = hasContentDescription(series.title) and hasAnyAncestor(hasTestTag("poster-grid"))
                 select(card)
                 waitFor(hasTestTag("season-1"))
-                screen.onNodeWithTag("details-content").performScrollToNode(hasTestTag("season-shelf"))
                 capture("series")
                 select(hasTestTag("season-1"))
                 waitFor(hasTestTag("season-page"))
@@ -152,6 +151,8 @@ class SeriesJourneyTest {
                 val second = episodes[1]
                 val row = hasTestTag("episode-${first.id}")
                 waitFor(row and isFocused())
+                val bounds = screen.onNode(row).fetchSemanticsNode().boundsInRoot
+                assertEquals("Bölüm görseli 16:9 kalmalı", 16f / 9f, bounds.width / bounds.height, .02f)
                 capture("season")
                 screen.ok()
                 screen.waitUntil(60_000) {
@@ -162,7 +163,7 @@ class SeriesJourneyTest {
                 screen.back()
                 waitFor(row and isFocused() and SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "İzlendi"))
                 screen.onNode(row).assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "İzlendi"))
-                screen.onNodeWithText("B1 · Başlangıç ✓").assertExists()
+                screen.onNodeWithText("1. Başlangıç").assertExists()
                 // Both manual operations preserve the row's remote focus.
                 screen.longPressOkNative()
                 select(hasText("İzlenmedi olarak işaretle"))
@@ -173,14 +174,13 @@ class SeriesJourneyTest {
                 waitFor(row and isFocused())
                 screen.back()
                 waitFor(hasTestTag("season-1") and isFocused())
-                waitFor(hasText("Sezon 1 ✓"))
-                screen.onNodeWithText("Sezon 1 ✓").assertExists()
+                waitFor(hasTestTag("season-1") and SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "İzlendi"))
                 // A partial episode in the next season must win over the completed season.
                 runBlocking {
                     repo.updateMark(second.id) { it.copy(position = 300, duration = 10_000, updated = System.currentTimeMillis()) }
                 }
                 screen.onNodeWithTag("details-content").performScrollToIndex(0)
-                select(hasText("Devam et: S2 B1"))
+                select(hasText("Devam et · S2 B1"))
                 screen.waitUntil(30_000) { requestedEpisode.get() == "201.mp4" }
                 waitFor(hasContentDescription("Tam ekran oynatıcı"))
                 // Back may first dismiss the timeline; stop as soon as the player has closed.

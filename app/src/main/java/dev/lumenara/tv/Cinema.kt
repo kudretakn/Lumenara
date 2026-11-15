@@ -21,6 +21,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.*
 import dev.lumenara.data.*
 import dev.lumenara.design.Ink
+import dev.lumenara.design.LumenColors
+import dev.lumenara.design.LumenBrushes
+import dev.lumenara.design.Motion
 import dev.lumenara.design.FocusCard
 import dev.lumenara.design.ProgressLine
 import kotlinx.coroutines.CancellationException
@@ -62,14 +65,14 @@ internal fun CinemaBackdrop(
                 else model.repo.poster(it)?.let { poster -> poster to true }
             }
         }
-    Box(Modifier.fillMaxSize().background(Ink.background)) {
-        Crossfade(address, animationSpec = tween(100), label = "Sinema arka planı") { art ->
+    Box(Modifier.fillMaxSize().background(LumenColors.bg)) {
+        Crossfade(address, animationSpec = tween(Motion.backdropCrossfadeMillis), label = "Sinema arka planı") { art ->
             if (art != null) {
                 Box(Modifier.fillMaxSize()) {
                     Artwork(model, item, art.first,
-                        Modifier.align(Alignment.CenterEnd)
-                            .fillMaxHeight()
-                            .fillMaxWidth(if (art.second) .62f else 1f),
+                        if (art.second) Modifier.align(Alignment.CenterEnd).padding(end = 48.dp)
+                            .height(360.dp).aspectRatio(2f / 3f)
+                        else Modifier.fillMaxSize(),
                         contentScale = if (art.second) ContentScale.Fit else ContentScale.Crop,
                         alignment = Alignment.CenterEnd,
                         role = if (art.second) "poster" else "backdrop",
@@ -77,29 +80,9 @@ internal fun CinemaBackdrop(
                 }
             }
         }
-        Box(
-            Modifier.fillMaxSize()
-                .background(
-                    Brush.horizontalGradient(
-                        0f to Ink.background.copy(alpha = .97f),
-                        .30f to Ink.background.copy(alpha = .80f),
-                        .62f to Ink.background.copy(alpha = .18f),
-                        1f to Ink.background.copy(alpha = .06f),
-                    )
-                )
-        )
-        Box(
-            Modifier.fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        0f to Ink.background.copy(alpha = .28f),
-                        .42f to Color.Transparent,
-                        .75f to Ink.background.copy(alpha = .88f),
-                        1f to Ink.background,
-                    )
-                )
-        )
-        if (dim) Box(Modifier.fillMaxSize().background(Ink.background.copy(alpha = .55f)))
+        Box(Modifier.fillMaxHeight().fillMaxWidth(.68f).background(LumenBrushes.detailLeft))
+        Box(Modifier.fillMaxSize().background(LumenBrushes.detailBottom))
+        if (dim) Box(Modifier.fillMaxSize().background(LumenColors.bg.copy(alpha = .35f)))
     }
 }
 

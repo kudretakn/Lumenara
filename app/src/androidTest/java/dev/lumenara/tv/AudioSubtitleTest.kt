@@ -125,9 +125,11 @@ class AudioSubtitleTest {
                 waitFor(card)
                 screen.onAllNodes(card).assertCountEquals(1)
                 select(card)
-                screen.onNodeWithTag("details-content").performScrollToNode(hasTestTag("version-SUBTITLED"))
-                select(hasTestTag("version-SUBTITLED"))
+                screen.onNodeWithTag("details-content").performScrollToNode(hasTestTag("version-picker"))
+                select(hasTestTag("version-picker"))
+                waitFor(hasTestTag("version-menu"))
                 capture("versions")
+                select(hasTestTag("version-SUBTITLED"))
                 screen.onNodeWithTag("details-content").performScrollToIndex(0)
                 select(hasText("Devam et"))
                 screen.waitUntil(30_000) { videoRequested.get() == "102.mp4" }
