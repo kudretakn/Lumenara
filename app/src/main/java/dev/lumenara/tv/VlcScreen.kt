@@ -20,7 +20,6 @@ import androidx.tv.material3.*
 import dev.lumenara.data.Item
 import dev.lumenara.data.nextItem
 import dev.lumenara.data.seriesOrder
-import dev.lumenara.design.Ink
 import dev.lumenara.design.*
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.contentDescription
@@ -532,7 +531,7 @@ internal fun VlcScreen(
                 item {
                     Text("Seçenekler", style = LumenType.title)
                     Text(playbackDisplayTitle(item), style = LumenType.cardTitle, maxLines = 2)
-                    if (message.isNotEmpty()) Text(message, color = Ink.accent)
+                    if (message.isNotEmpty()) Text(message, color = LumenColors.accent)
                 }
                 item { PlaybackSection("OYNATICI") }
                 item { SleepTimerChoices(sleepTimer, item.kind == "EPISODE", onSleepTimerChanged) }

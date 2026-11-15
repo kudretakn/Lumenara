@@ -27,7 +27,6 @@ import dev.lumenara.data.*
 import dev.lumenara.catalog.displayTitle
 import dev.lumenara.catalog.trackChoice
 import dev.lumenara.catalog.trackPreferenceRank
-import dev.lumenara.design.Ink
 import dev.lumenara.design.*
 import dev.lumenara.player.*
 import kotlinx.coroutines.Dispatchers
@@ -228,7 +227,7 @@ internal fun Video(
             } catch (e: Exception) {
                 if (BuildConfig.DEBUG) {
                     val frames =
-                        e.stackTrace.take(8).joinToString(" ← ") {
+                        e.stackTrace.take(8).joinToString(" / ") {
                             "${it.className}.${it.methodName}:${it.lineNumber}"
                         }
                     android.util.Log.w("LumenaraPlayback", "${e.javaClass.simpleName} · $frames")
@@ -312,7 +311,7 @@ internal fun Video(
         if (error.isNotEmpty()) {
             val retryFocus = remember { FocusRequester() }
             if (!preview) LaunchedEffect(error) { retryFocus.requestFocus() }
-            Column(Modifier.align(Alignment.Center).background(Ink.secondary).padding(12.dp)) {
+            Column(Modifier.align(Alignment.Center).background(LumenColors.surface1).padding(12.dp)) {
                 Text(error, maxLines = 3)
                 if (!preview) Button(onClick = { error = ""; retry.manual() },
                     modifier = Modifier.focusRequester(retryFocus)) { Text("Yeniden dene") }

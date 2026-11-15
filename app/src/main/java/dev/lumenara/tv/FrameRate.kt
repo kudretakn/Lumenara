@@ -19,8 +19,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
+import dev.lumenara.design.LumenColors
 import dev.lumenara.catalog.*
-import dev.lumenara.design.Ink
 import kotlinx.coroutines.delay
 
 private tailrec fun Context.activity(): Activity? = when (this) {
@@ -112,7 +112,7 @@ internal fun FrameRateMatch(model: LibraryModel, kind: String, frameRate: Float?
     LaunchedEffect(adjusting) {
         if (adjusting) { delay(2000); adjusting = false }
     }
-    if (adjusting) Box(Modifier.padding(24.dp).background(Ink.secondary).padding(12.dp).testTag("frame-rate-adjusting")) {
+    if (adjusting) Box(Modifier.padding(24.dp).background(LumenColors.surface1).padding(12.dp).testTag("frame-rate-adjusting")) {
         Text("Kare hızı ayarlanıyor")
     }
 }

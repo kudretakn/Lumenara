@@ -11,7 +11,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Text
-import dev.lumenara.design.GlassPanel
+import dev.lumenara.design.Panel
 import kotlinx.coroutines.flow.collect
 
 @Composable
@@ -38,7 +38,7 @@ internal fun BoxScope.DoubleBackExit(enabled: Boolean) {
         } else deadline = now + 2_000
     }
     if (enabled && deadline > 0) {
-        GlassPanel(Modifier.align(Alignment.BottomCenter).padding(bottom = 27.dp)
+        Panel(Modifier.align(Alignment.BottomCenter).padding(bottom = 27.dp)
             .testTag("exit-confirmation")) {
             Text("Çıkmak için tekrar geri'ye basın", Modifier.padding(16.dp))
         }

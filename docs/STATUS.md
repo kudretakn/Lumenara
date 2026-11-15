@@ -11,6 +11,7 @@ Son güncelleme: 15 Kasım 2026 akşam · sunucu oturumundan yerel (Windows) otu
 > Sonra bu dosyayı ve `CLAUDE.md`'yi oku. Çalışma düzeni: sen ekip liderisin; işleri Codex alt ajanlarına (zorluğa göre luna/sol/astra) ve Claude alt ajanlarına (haiku/sonnet/opus) dağıt, kendin kod yazma (yalnız birleştirme çakışması ve tek satırlık mekanik düzeltme).
 
 ## Şu an açık
+- **D8 yerel temizlik (d8 worktree):** `Glass.kt`, `Ink` alias'ı ve `NavIcon` kaldırıldı; kalan çağrılar `Panel`, `LumenColors` ve `LumenIcon` ile değiştirildi. Üretim kaynaklarında yasaklı altı glif 0; `SourceGlyphTest` JUnit 4 ile Gradle dışında çalıştırılıp geçti. Debug `Perf.kt` frame özetleri eklendi. Yeni bağımlılık yok; Gradle/cihaz testi, ekran görüntüsü ve jank <%5 doğrulaması henüz yapılmadı. Commit/push yapılmadı; aşağıdaki PR notu bu yerel değişikliklerden önceki durumu anlatır.
 - **PR #22 — Tasarım 0.5.0** (dal `design/0.5`): `docs/DESIGN-0.5.md` D0–D7 uygulandı; D8 (temizlik: `Glass.kt`, `Ink` alias, `NavIcon`, Unicode glif taraması, jank kontrolü) **yapılmadı**. Yerelde `test lintDebug assembleDebug assembleDebugAndroidTest` geçti; CI cihaz testleri bu PR'da ilk kez koşuyor — düşen test olursa `gh run download <id> -n android-tv-device-artifacts` ile incele ve her testi ayrı ajana ver. Yeşil olunca merge → `v0.5.0` etiketi. Yeni ekran görüntüleri artifact'ta `files/screens/` altında; kullanıcıya göster.
 - Onaylı maketler: `docs/DESIGN-0.5.md` §6 istemleri; PNG'ler sunucudaydı, gerekirse SVG istemleriyle yeniden üretilir.
 

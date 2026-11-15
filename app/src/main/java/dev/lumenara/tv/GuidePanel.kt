@@ -7,9 +7,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.*
+import dev.lumenara.design.LumenColors
 import dev.lumenara.catalog.searchable
 import dev.lumenara.data.*
-import dev.lumenara.design.Ink
 import kotlinx.coroutines.flow.collect
 import java.time.*
 import java.time.format.DateTimeFormatter
@@ -88,7 +88,7 @@ internal fun GuidePanel(model: LibraryModel, channel: Item, playReplay: (Item) -
             Button(onClick = { day = day.plusDays(1) }) { Text("Sonraki gün") }
         }
         Field("Program ara", query, { query = it })
-        if (slots.isEmpty()) Text("Bu gün için eşleşen program yok.", color = Ink.muted)
+        if (slots.isEmpty()) Text("Bu gün için eşleşen program yok.", color = LumenColors.textSecondary)
         else
             LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 items(slots, key = { "${it.feed}:${it.channel}:${it.start}" }) { slot ->
@@ -103,7 +103,7 @@ internal fun GuidePanel(model: LibraryModel, channel: Item, playReplay: (Item) -
                                     " – " +
                                     format.format(Instant.ofEpochMilli(slot.end)) +
                                     if (now in slot.start until slot.end) " · Şimdi" else "",
-                                color = Ink.accent,
+                                color = LumenColors.accent,
                             )
                             Text(slot.title)
                             if (expanded)
