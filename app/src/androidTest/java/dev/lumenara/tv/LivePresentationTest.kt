@@ -76,10 +76,11 @@ class LivePresentationTest {
             second.performSemanticsAction(SemanticsActions.RequestFocus)
             second.assertIsFocused()
             val after = screen.onNodeWithText(rows[1].title, substring = true).fetchSemanticsNode().boundsInRoot
-            assertEquals("Focus must leave the caption in place", before, after)
-            val logoBounds = second.fetchSemanticsNode().boundsInRoot
-            assertEquals("Only the 16:9 tile receives focus", 16f / 9f,
-                logoBounds.width / logoBounds.height, .02f)
+            // Compact grid (0.5.0): the whole 60 dp card scales around its centre, nothing shifts.
+            assertEquals("Focus must not move the card", before.center.x, after.center.x, 1f)
+            assertEquals("Focus must not move the card", before.center.y, after.center.y, 1f)
+            val density = screen.activity.resources.displayMetrics.density
+            assertEquals("Compact channel card height", 60f, before.height / density, 1.5f)
             screen.onNodeWithContentDescription("Kanal ara").assertExists()
             screen.onNodeWithContentDescription("Filtrele").assertExists()
             shot("live")
