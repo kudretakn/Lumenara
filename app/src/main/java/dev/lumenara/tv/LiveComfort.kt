@@ -134,8 +134,10 @@ internal fun rememberLiveNumberControl(model: LibraryModel, source: String,
     LaunchedEffect(state, state.input.deadline, state.input.missingUntil) {
         val deadline = if (state.input.digits.isNotEmpty()) state.input.deadline else state.input.missingUntil
         if (deadline > 0) {
-            delay((deadline - System.currentTimeMillis()).coerceAtLeast(0))
-            state.apply(state.input.tick(System.currentTimeMillis()))
+            // NumberInput deadlines use wall time. A Compose/test-clock delay can
+            // finish early, leaving the same deadline with no effect to restart.
+            val now = wallClockTicks(50).first { it >= deadline }
+            state.apply(state.input.tick(now))
         }
     }
     return state

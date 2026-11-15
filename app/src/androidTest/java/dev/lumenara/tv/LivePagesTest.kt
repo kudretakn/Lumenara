@@ -3,6 +3,7 @@ package dev.lumenara.tv
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.lifecycle.ViewModelProvider
@@ -82,8 +83,15 @@ class LivePagesTest {
             screen.waitUntil(10_000) {
                 screen.onAllNodes(hasText(rows[240].title)).fetchSemanticsNodes().isNotEmpty()
             }
-            screen.onNode(hasText(rows[240].title) and hasClickAction()).performClick()
-            screen.onNodeWithText("Return to timeline").performClick()
+            // TV Material surfaces handle remote OK, not injected touch clicks.
+            screen.onNode(hasText(rows[240].title) and hasClickAction())
+                .performSemanticsAction(SemanticsActions.RequestFocus)
+                .assertIsFocused()
+            screen.ok()
+            screen.onNodeWithText("Return to timeline")
+                .performSemanticsAction(SemanticsActions.RequestFocus)
+                .assertIsFocused()
+            screen.ok()
             screen.waitUntil(10_000) {
                 screen.onAllNodes(hasText(rows[240].title) and isFocused())
                     .fetchSemanticsNodes().isNotEmpty()
