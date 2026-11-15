@@ -100,6 +100,10 @@ Devam yöntemi:
 - Sunucu diski dar (~6 GB boş): her derlemeden sonra build klasörlerini sil.
 
 ## Sıradaki
+0. **İlk iş — kart genişliği (kullanıcı geri bildirimi, 16 Kasım 2026, 0.5.0'ı TV'de gördükten sonra):** "Kartlar yatayda biraz büyüsün; bu sefer de isimler okunmuyor, alan çok küçük olmuş, yazılara yer kalmamış." Kullanıcı başlama demeden başlama.
+   - Hedef: kartları yatayda genişlet ki kategori, kanal ve içerik adları okunabilsin. Dikeydeki sıklık (ekrana sığan satır sayısı) korunsun; yalnız sütun sayısı biraz düşebilir.
+   - Kontrol edilecek yerler: kategori ızgarası (6 sütun, 60 dp), kompakt kanal kartı (6 sütun, logo 40 dp + "numara · ad"), afiş ızgarası (8 sütun, ad yalnız odakta), Hub raf kartları (110 dp), arama sonuçları (110 dp), bölüm kartları (140 dp).
+   - Öneri: kategori ve kanal 6 → 4–5 sütun ya da kanal adı için 2 satır; raf ve arama kartları ~150 dp. Önce TV'den ya da CI'dan ekran görüntüsüyle hangi adların kesildiğini ölç, sonra karar ver.
 1. (bitti) PR #18 → v0.4.0.
 2. Performans 0.4.1 (yukarıda).
 3. Kullanıcı kararı (15 Kasım 2026): U3 yerine sırayla şunlar yapılacak:
