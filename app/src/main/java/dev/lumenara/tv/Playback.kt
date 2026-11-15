@@ -27,7 +27,7 @@ import dev.lumenara.data.*
 import dev.lumenara.catalog.trackChoice
 import dev.lumenara.catalog.trackPreferenceRank
 import dev.lumenara.design.Ink
-import dev.lumenara.design.glass
+import dev.lumenara.design.*
 import dev.lumenara.player.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collect
@@ -517,7 +517,7 @@ internal fun Playback(
                 if (item.kind == "EPISODE") episodeEnded()
             },
         )
-        if (!panel && !sleepCountdown) FullscreenOverlay(model, item, group, fullscreen,
+        if (!panel && !sleepCountdown) PlaybackOverlay(model, item, group, fullscreen,
             { channel, rows -> changeGroup(rows); select(channel) },
             { panel = true },
             { engine?.currentPosition ?: 0 }, { engine?.duration ?: 0 },
@@ -529,7 +529,9 @@ internal fun Playback(
             activeSleepTimer.cancel()
             sleepTimerVersion++
         }
-        if (panel) {
+        val optionsState = rememberLazyListState()
+        LaunchedEffect(panel) { if (!panel) optionsState.scrollToItem(0) }
+        if (panel && !subtitleSearch.open) {
             val candidates by
                 remember(item.source, category, channelQuery, limit) {
                         model.repo.browse(
@@ -546,27 +548,32 @@ internal fun Playback(
                 remember(item.source) { model.repo.categories("LIVE", item.source) }
                     .collectAsStateWithLifecycle(emptyList())
             val close = remember { FocusRequester() }
-            LaunchedEffect(Unit) { close.requestFocus() }
+            LaunchedEffect(Unit) {
+                withFrameNanos { }
+                if (!subtitleSearch.restore) close.requestFocus()
+            }
             val mark by
                 remember(item.id) { model.repo.library.observeMark(item.id) }
                     .collectAsStateWithLifecycle(null)
             LazyColumn(
-                Modifier.width(420.dp).fillMaxHeight().testTag("player-options").padding(start = 48.dp, top = 27.dp, bottom = 27.dp).glass().padding(12.dp),
+                state = optionsState,
+                modifier = Modifier.align(Alignment.CenterEnd).width(400.dp).fillMaxHeight().background(LumenColors.surface1).testTag("player-options").padding(horizontal = Spacing.titleGap, vertical = Spacing.screenVertical),
                 verticalArrangement = Arrangement.spacedBy(5.dp),
             ) {
                 item {
-                    Text("Seçenekler", fontSize = 20.sp)
-                    Text(item.title, fontSize = 20.sp)
-                    Text(item.category, color = Ink.muted)
+                    Text("Seçenekler", style = LumenType.title)
+                    Text(playbackDisplayTitle(item), style = LumenType.cardTitle, maxLines = 2)
+                    Text(item.category, style = LumenType.meta)
                 }
+                item { PlaybackSection("OYNATICI") }
                 item { SleepTimerChoices(activeSleepTimer, item.kind == "EPISODE") { sleepTimerVersion++ } }
                 item {
-                    Button(onClick = { panel = false }, modifier = Modifier.focusRequester(close)) {
+                    PlayerOption(onClick = { panel = false }, modifier = Modifier.focusRequester(close)) {
                         Text("Yayına dön")
                     }
                 }
                 item {
-                    Button(onClick = { model.mark(item, true) }) {
+                    PlayerOption(onClick = { model.mark(item, true) }) {
                         Text(if (mark?.favorite == true) "Favoriden çıkar" else "Favoriye ekle")
                     }
                 }
@@ -584,10 +591,11 @@ internal fun Playback(
                     }
                 } }
                 item { Tracks(engine, model, item) }
+                item { PlaybackSection("ALTYAZI") }
                 item { SubtitleSearch(subtitleSearch) }
                 item {
                     Text("Altyazı kaydırma · ${delayMs / 1000.0} sn")
-                    Row { for (step in listOf(-500L, 500L)) Button(onClick = {
+                    Column { for (step in listOf(-500L, 500L)) PlayerOption(onClick = {
                         delayMs = (delayMs + step).coerceIn(-60_000, 60_000)
                         subtitleDelay.set(delayMs * 1000)
                         scope.launch { model.prefs.set("delay_$preferenceKey", delayMs.toString()) }
@@ -605,7 +613,7 @@ internal fun Playback(
                 if (live)
                     item {
                         var guide by remember { mutableStateOf(false) }
-                        Button(onClick = { guide = !guide }) { Text("Kanal rehberi") }
+                        PlayerOption(onClick = { guide = !guide }) { Text("Kanal rehberi") }
                         if (guide)
                             GuidePanel(model, item) { replay ->
                                 changeGroup(listOf(replay))
@@ -621,17 +629,18 @@ internal fun Playback(
                         }
                     }
                 }
+                item { PlaybackSection("GÖRÜNTÜ") }
                 if (!live)
                     item {
-                        Button(
+                        PlayerOption(
                             onClick = {
                                 engine?.let { if (it.isPlaying) it.pause() else it.play() }
                             }
                         ) {
                             Text("Duraklat / devam")
                         }
-                        Row {
-                            for (step in listOf(-10000, 10000)) Button(
+                        Column {
+                            for (step in listOf(-10000, 10000)) PlayerOption(
                                 onClick = {
                                     engine?.let { e ->
                                         e.seekTo((e.currentPosition + step).coerceAtLeast(0))
@@ -643,7 +652,7 @@ internal fun Playback(
                         }
                     }
                 item {
-                    Button(
+                    PlayerOption(
                         onClick = {
                             transferred = engine?.currentPosition ?: -1
                             android.util.Log.d("LumenaraVlc", "switch Media3 to VLC position=$transferred subtitle=${subtitle != null} scheme=${subtitle?.uri?.scheme}")
@@ -652,12 +661,12 @@ internal fun Playback(
                             vlc = true
                         }
                     ) {
-                        Text("VLC ile aç")
+                        Text("Motor: Media3/VLC")
                     }
                 }
                 item {
                     if (live)
-                        for (count in listOf(2, 4)) Button(
+                        for (count in listOf(2, 4)) PlayerOption(
                             onClick = {
                                 scope.launch {
                                     val options = (listOf(item) + group).distinctBy { it.id }
@@ -688,15 +697,15 @@ internal fun Playback(
                     if (hint.isNotEmpty()) Text(hint)
                     val e = engine
                     if (e != null && e.isCurrentMediaItemLive && e.isCurrentMediaItemSeekable) {
-                        Button(
+                        PlayerOption(
                             onClick = { e.seekTo((e.currentPosition - 30_000).coerceAtLeast(0)) }
                         ) {
                             Text("30 sn geri")
                         }
-                        Button(onClick = { if (e.isPlaying) e.pause() else e.play() }) {
+                        PlayerOption(onClick = { if (e.isPlaying) e.pause() else e.play() }) {
                             Text("Duraklat / devam")
                         }
-                        Button(onClick = { e.seekToDefaultPosition() }) { Text("Canlıya dön") }
+                        PlayerOption(onClick = { e.seekToDefaultPosition() }) { Text("Canlıya dön") }
                     }
                 }
                 if (live)
@@ -706,10 +715,9 @@ internal fun Playback(
                             horizontalArrangement = Arrangement.spacedBy(5.dp)
                         ) {
                             items(listOf("") + categories, key = { it }) { name ->
-                                Button(onClick = { category = name }) {
+                                PlayerOption(onClick = { category = name }) {
                                     Text(
-                                        (if (category == name) "✓ " else "") +
-                                            name.ifEmpty { "Tümü" }
+                                        name.ifEmpty { "Tümü" }
                                     )
                                 }
                             }
@@ -718,7 +726,7 @@ internal fun Playback(
                 val list =
                     if (live) candidates else group
                 items(list, key = { it.id }) { channel ->
-                    Button(
+                    PlayerOption(
                         onClick = {
                             if (channel.id == item.id) panel = false
                             else {
@@ -731,7 +739,7 @@ internal fun Playback(
                     }
                 }
                 if (live && candidates.size >= limit)
-                    item { Button(onClick = { limit += 80 }) { Text("Devamını göster") } }
+                    item { PlayerOption(onClick = { limit += 80 }) { Text("Devamını göster") } }
             }
         }
         SubtitleResults(subtitleSearch, panel, focus)
@@ -744,15 +752,24 @@ internal fun SleepTimerChoices(
     episodeAvailable: Boolean,
     changed: () -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text("Uyku zamanlayıcısı")
-        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+    var expanded by remember { mutableStateOf(false) }
+    val focus = remember { FocusRequester() }
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+        PlayerOption(onClick = { expanded = !expanded }, modifier = Modifier.focusRequester(focus),
+            icon = LumenIcon.Timer) {
+            Text("Uyku zamanlayıcısı", Modifier.weight(1f))
+            Text(timer.choice.label, style = LumenType.meta)
+        }
+        if (expanded) {
+            BackHandler { expanded = false; focus.requestFocus() }
             val choices = dev.lumenara.catalog.SleepTimer.Choice.values().filter {
                 it != dev.lumenara.catalog.SleepTimer.Choice.EPISODE || episodeAvailable
             }
             choices.forEach { choice ->
-                Button(onClick = { timer.select(choice); changed() }) {
-                    Text((if (timer.choice == choice) "✓ " else "") + choice.label)
+                PlayerOption(onClick = {
+                    timer.select(choice); changed(); expanded = false; focus.requestFocus()
+                }, icon = if (timer.choice == choice) LumenIcon.Check else LumenIcon.Timer) {
+                    Text(choice.label)
                 }
             }
         }
@@ -771,7 +788,7 @@ internal fun androidx.compose.foundation.layout.BoxScope.SleepTimerCard(
     LaunchedEffect(Unit) { withFrameNanos { }; cancelFocus.requestFocus() }
     val seconds = ((timer.remainingMs() ?: 0L) + 999) / 1000
     Row(
-        Modifier.align(Alignment.TopCenter).padding(top = 36.dp).glass().padding(12.dp),
+        Modifier.align(Alignment.TopCenter).padding(top = 36.dp).background(LumenColors.surface1, androidx.compose.foundation.shape.RoundedCornerShape(Radii.panel)).padding(Spacing.cardGap),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -785,8 +802,8 @@ internal fun androidx.compose.foundation.layout.BoxScope.SleepTimerCard(
 @Composable
 private fun Tracks(player: ExoPlayer?, model: LibraryModel, item: Item) {
     val scope = rememberCoroutineScope()
-    var key by remember(item.id) { mutableStateOf("") }
-    LaunchedEffect(item.id) { key = model.repo.preferenceKey(item) }
+    var preferenceKey by remember(item.id) { mutableStateOf("") }
+    LaunchedEffect(item.id) { preferenceKey = model.repo.preferenceKey(item) }
     if (player == null) return
     var tracks by remember(player) { mutableStateOf(player.currentTracks) }
     DisposableEffect(player) {
@@ -799,39 +816,140 @@ private fun Tracks(player: ExoPlayer?, model: LibraryModel, item: Item) {
         player.addListener(listener)
         onDispose { player.removeListener(listener) }
     }
-    for (group in
-        tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO || it.type == C.TRACK_TYPE_TEXT }) {
-        for (i in 0 until group.length) {
-            if (!group.isTrackSupported(i)) continue
-            val format = group.getTrackFormat(i)
-            val label = if (group.type == C.TRACK_TYPE_AUDIO) "Ses" else "Altyazı"
-            Button(
-                onClick = {
-                    scope.launch { model.prefs.set("${if (group.type == C.TRACK_TYPE_AUDIO) "audio" else "text"}_$key",
+    for (type in listOf(C.TRACK_TYPE_AUDIO, C.TRACK_TYPE_TEXT)) key(type) {
+        val groups = tracks.groups.filter { it.type == type }
+        val label = if (type == C.TRACK_TYPE_AUDIO) "Ses" else "Altyazı"
+        var expanded by remember { mutableStateOf(false) }
+        val entry = remember { FocusRequester() }
+        val first = remember { FocusRequester() }
+        val selected = groups.firstNotNullOfOrNull { group ->
+            (0 until group.length).firstOrNull { group.isTrackSelected(it) }?.let {
+                dev.lumenara.catalog.languageName(group.getTrackFormat(it).language)
+            }
+        } ?: "Kapalı"
+        PlaybackSection(if (type == C.TRACK_TYPE_AUDIO) "SES" else "ALTYAZI")
+        PlayerOption(onClick = { expanded = !expanded }, modifier = Modifier.focusRequester(entry),
+            icon = if (type == C.TRACK_TYPE_AUDIO) LumenIcon.Audio else LumenIcon.Subtitles) {
+            Text(label, Modifier.weight(1f))
+            Text(selected, style = LumenType.meta)
+        }
+        if (expanded) {
+            BackHandler { expanded = false; entry.requestFocus() }
+            LaunchedEffect(Unit) {
+                withFrameNanos { }
+                if (type == C.TRACK_TYPE_TEXT || groups.any { group ->
+                    (0 until group.length).any { group.isTrackSupported(it) }
+                }) first.requestFocus()
+            }
+            var firstTrack = true
+            for (group in groups) for (i in 0 until group.length) {
+                if (!group.isTrackSupported(i)) continue
+                val format = group.getTrackFormat(i)
+                val modifier = if (firstTrack) Modifier.focusRequester(first) else Modifier
+                firstTrack = false
+                PlayerOption(onClick = {
+                    scope.launch { model.prefs.set("${if (type == C.TRACK_TYPE_AUDIO) "audio" else "text"}_$preferenceKey",
                         trackChoice(format.language, format.id)) }
-                    player.trackSelectionParameters =
-                        player.trackSelectionParameters
-                            .buildUpon()
-                            .setTrackTypeDisabled(group.type, false)
-                            .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, i))
-                            .build()
+                    player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                        .setTrackTypeDisabled(type, false)
+                        .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, i)).build()
+                    expanded = false
+                    entry.requestFocus()
+                }, modifier = modifier,
+                    icon = if (group.isTrackSelected(i)) LumenIcon.Check else LumenIcon.ChevronRight) {
+                    Text("$label · ${dev.lumenara.catalog.languageName(format.language)}" +
+                        (format.label?.let { " · $it" } ?: " · ${i + 1}"))
                 }
-            ) {
-                Text("$label · ${dev.lumenara.catalog.languageName(format.language)}" + (format.label?.let { " · $it" } ?: " · ${i + 1}"))
+            }
+            if (type == C.TRACK_TYPE_TEXT) PlayerOption(onClick = {
+                scope.launch { model.prefs.set("text_$preferenceKey", "off") }
+                player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                    .setTrackTypeDisabled(type, true).build()
+                expanded = false
+                entry.requestFocus()
+            }, modifier = if (firstTrack) Modifier.focusRequester(first) else Modifier) { Text("Altyazıyı kapat") }
+            if (type == C.TRACK_TYPE_AUDIO && firstTrack) {
+                LaunchedEffect(Unit) { expanded = false; entry.requestFocus() }
             }
         }
     }
-    if (tracks.groups.any { it.type == C.TRACK_TYPE_TEXT })
-        Button(
-            onClick = {
-                scope.launch { model.prefs.set("text_$key", "off") }
-                player.trackSelectionParameters =
-                    player.trackSelectionParameters
-                        .buildUpon()
-                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
-                        .build()
-            }
-        ) {
-            Text("Altyazıyı kapat")
-        }
 }
+
+/** Local player controls keep the design system's list focus treatment. */
+@Composable
+internal fun PlayerOption(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    icon: LumenIcon = LumenIcon.Settings,
+    content: @Composable RowScope.() -> Unit,
+) {
+    ListRow(onClick = onClick, modifier = modifier, enabled = enabled) {
+        LumenIcon(icon, null)
+        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+            ProvideTextStyle(LumenType.label) { content() }
+        }
+        LumenIcon(LumenIcon.ChevronRight, null, tint = LumenColors.textSecondary)
+    }
+}
+
+@Composable
+internal fun PlaybackSection(title: String) {
+    Text(title, Modifier.padding(top = Spacing.cardGap, bottom = Spacing.unit),
+        style = LumenType.caption, color = LumenColors.textSecondary)
+}
+
+// D4 owns the catalog cleaner; keep this private until that change is integrated.
+internal fun playbackDisplayTitle(item: Item): String = cleanPlaybackTitle(item)
+
+private fun cleanPlaybackTitle(item: Item): String = dev.lumenara.catalog.productionName(item.title, item.year).title
+    .replace(Regex("\\b\\d{6,}\\b"), "")
+    .replace(Regex("(?i)^(?:(?:TR|EN|4K|FHD|HD|UHD|VOD)\\s*[|:–-]\\s*)+"), "")
+    .replace(Regex("\\s+"), " ").trim(' ', '-', '|', ':')
+    .ifBlank { "Video" }
+
+/** Both engines use the same VOD presentation and the existing remote state. */
+@Composable
+internal fun BoxScope.PlaybackOverlay(
+    model: LibraryModel, item: Item, group: List<Item>, state: FullscreenState,
+    select: (Item, List<Item>) -> Unit, options: () -> Unit,
+    position: () -> Long, duration: () -> Long, next: (() -> Unit)?,
+) {
+    if (item.kind == "LIVE") {
+        FullscreenOverlay(model, item, group, state, select, options, position, duration, next)
+        return
+    }
+    if (state.finished && next != null) {
+        Panel(Modifier.align(Alignment.BottomEnd).padding(Spacing.screenHorizontal, Spacing.screenVertical).width(320.dp)) {
+            val focus = remember { FocusRequester() }
+            LaunchedEffect(Unit) { focus.requestFocus() }
+            LumenButton(next, Modifier.padding(Spacing.cardGap).focusRequester(focus)) {
+                LumenIcon(LumenIcon.Play, null)
+                Text("Sonraki bölüm")
+            }
+        }
+    } else if (state.bannerUntil > state.now) {
+        LaunchedEffect(item.id, state.bannerRequest) {
+            withFrameNanos { }
+            withFrameNanos { }
+            state.now = System.currentTimeMillis()
+            state.bannerUntil = state.now + Motion.bannerAutoHideMillis
+        }
+        Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(200.dp)
+            .background(LumenBrushes.scrim).testTag("vod-timeline")
+            .padding(horizontal = Spacing.screenHorizontal, vertical = Spacing.screenVertical),
+            verticalArrangement = Arrangement.spacedBy(Spacing.unit, Alignment.Bottom)) {
+            val elapsed = position().coerceAtLeast(0)
+            val total = duration().coerceAtLeast(0)
+            Text(playbackDisplayTitle(item), style = LumenType.title, maxLines = 1)
+            ProgressLine(if (total > 0) elapsed.toFloat() / total else 0f)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(vodTime(elapsed), style = LumenType.meta)
+                Text("${vodTime((total - elapsed).coerceAtLeast(0))} kaldı", style = LumenType.meta)
+            }
+        }
+    }
+}
+
+private fun vodTime(ms: Long): String = "%d:%02d".format(ms / 60_000, ms / 1000 % 60)
