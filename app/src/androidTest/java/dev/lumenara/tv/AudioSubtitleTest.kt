@@ -28,7 +28,9 @@ class AudioSubtitleTest {
         waitFor(matcher)
         screen.onNode(matcher).performSemanticsAction(SemanticsActions.RequestFocus)
         waitFor(matcher and isFocused())
-        screen.ok()
+        // Keep remote activation in the window containing this verified focused row.
+        screen.onNode(matcher and isFocused()).performKeyInput { pressKey(Key.DirectionCenter) }
+        screen.waitForIdle()
     }
     private fun capture(name: String) {
         screen.waitForIdle()
@@ -39,6 +41,12 @@ class AudioSubtitleTest {
     }
     private fun optionsScrollTo(matcher: SemanticsMatcher) {
         screen.onNodeWithTag("player-options").performScrollToNode(matcher)
+    }
+    private fun assertOptionsKeepRemoteFocus() {
+        val focusedOption = isFocused() and hasAnyAncestor(hasTestTag("player-options"))
+        waitFor(focusedOption)
+        screen.dpad(Key.DirectionLeft)
+        screen.onNode(focusedOption).assertIsFocused()
     }
 
     @Test fun xtreamVersionsShareStateAndSubtitleSearchAttachesAndReusesCache() {
@@ -128,12 +136,14 @@ class AudioSubtitleTest {
                 screen.onNodeWithTag("details-content").performScrollToNode(hasTestTag("version-picker"))
                 select(hasTestTag("version-picker"))
                 waitFor(hasTestTag("version-menu"))
+                waitFor(isFocused() and hasAnyAncestor(hasTestTag("version-menu")))
                 capture("versions")
                 select(hasTestTag("version-SUBTITLED"))
                 screen.onNodeWithTag("details-content").performScrollToIndex(0)
                 select(hasText("Devam et"))
                 screen.waitUntil(30_000) { videoRequested.get() == "102.mp4" }
                 screen.dpad(Key.Menu)
+                assertOptionsKeepRemoteFocus()
                 optionsScrollTo(hasTestTag("version-DUBBED"))
                 select(hasTestTag("version-DUBBED"))
                 screen.waitUntil(30_000) { videoRequested.get() == "101.mp4" }
@@ -179,6 +189,7 @@ class AudioSubtitleTest {
                 select(hasText("Motor: Media3/VLC"))
                 waitFor(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "İndirilen altyazı etkin"))
                 screen.dpad(Key.Menu)
+                assertOptionsKeepRemoteFocus()
                 optionsScrollTo(hasText("Altyazı gecikmesi · 500 ms"))
                 waitFor(hasText("Altyazı gecikmesi · 500 ms"))
                 select(hasText("−0,5 sn"))

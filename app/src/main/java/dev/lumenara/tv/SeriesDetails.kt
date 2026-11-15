@@ -205,12 +205,14 @@ private fun EpisodeShelf(model: LibraryModel, episodes: List<Item>, all: List<It
                 withFrameNanos { }; focus.requestFocus(); target = ""; restored()
             }
             Column(Modifier.width(240.dp)) {
-                FocusCard(onClick = { play(ep, all) }, onLongClick = { actions(ep) },
-                    modifier = Modifier.fillMaxWidth().testTag("episode-${ep.id}").focusRequester(focus)
-                        .onFocusChanged { if (it.isFocused) { lastFocus = ep.id; focused(ep) } }
-                        .semantics { stateDescription = if (done) "İzlendi" else if (position > 0) "Yarım kaldı" else "İzlenmedi" }) {
-                    Poster(model, ep, Modifier.fillMaxWidth().aspectRatio(16f / 9f))
-                    if (duration > 0 && position > 0) ProgressLine(position.toFloat() / duration, Modifier.align(Alignment.BottomStart))
+                Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).testTag("episode-artwork-${ep.id}")) {
+                    FocusCard(onClick = { play(ep, all) }, onLongClick = { actions(ep) },
+                        modifier = Modifier.fillMaxSize().testTag("episode-${ep.id}").focusRequester(focus)
+                            .onFocusChanged { if (it.isFocused) { lastFocus = ep.id; focused(ep) } }
+                            .semantics { stateDescription = if (done) "İzlendi" else if (position > 0) "Yarım kaldı" else "İzlenmedi" }) {
+                        Poster(model, ep, Modifier.fillMaxSize())
+                        if (duration > 0 && position > 0) ProgressLine(position.toFloat() / duration, Modifier.align(Alignment.BottomStart))
+                    }
                 }
                 Row(Modifier.padding(top = Spacing.unit), verticalAlignment = Alignment.CenterVertically) {
                     Text("${name.episode}. ${name.title.displayTitle()}", Modifier.weight(1f), style = LumenType.cardTitle,

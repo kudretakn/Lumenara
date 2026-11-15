@@ -168,6 +168,8 @@ private fun DetailVersionPicker(model: LibraryModel, item: Item) {
             val offset = with(LocalDensity.current) { 56.dp.roundToPx() }
             Popup(alignment = Alignment.TopStart, offset = IntOffset(0, offset),
                 onDismissRequest = { dismiss() }, properties = PopupProperties(focusable = true)) {
+                // The popup owns a separate composition; request focus only after its row attaches.
+                LaunchedEffect(Unit) { withFrameNanos { }; first.requestFocus() }
                 Panel(Modifier.width(280.dp).testTag("version-menu")) {
                     Column(Modifier.padding(Spacing.unit).focusGroup()) {
                         choices.forEachIndexed { index, version ->
@@ -198,7 +200,6 @@ private fun DetailVersionPicker(model: LibraryModel, item: Item) {
                     }
                 }
             }
-            LaunchedEffect(Unit) { withFrameNanos { }; first.requestFocus() }
         }
     }
 }
