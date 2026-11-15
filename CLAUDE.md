@@ -22,6 +22,11 @@ Kişisel kullanım için Android TV IPTV oynatıcısı (Kotlin, Compose for TV, 
 ## Derleme ve test
 - JDK 17, Android SDK (platform 36, build-tools 36.0.0), `local.properties` içinde `sdk.dir`.
 - Standart kontrol: `./gradlew test lintDebug :app:assembleDebug :app:assembleDebugAndroidTest`
+- **Cihaz testleri önce yerelde çalışır** (kullanıcı kararı, 16 Kasım 2026: "testleri yereldeyken CI'dan yapma"). CI yalnız son doğrulama içindir; düzeltme döngüsü CI'da dönmez.
+  - Windows'ta: emülatörü başlat (`emulator -avd Streamora_TV_API36 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot-save -port 5580`), sonra `.\scripts\local-device-tests.ps1 -Serial emulator-5580` (tek test: `-Class dev.lumenara.tv.FooTest`).
+  - Sonuçlar `build\local-device\` altına yazılır: `summary.txt`, `instrument*.txt`, `logcat.txt`, ekran görüntüleri.
+  - Kullanıcının TV'si de adb'ye bağlı olabilir (`192.168.1.14:5555`). Testleri asla TV'de çalıştırma; betik emülatör dışı cihazı reddeder.
+  - Push yalnız yerel cihaz testleri yeşilken yapılır.
 - Cihaz testleri CI'da Android TV API 36 x86_64 emülatöründe `scripts/ci-device-tests.sh` ile çalışır.
   - Bir test düşerse bir kez tekrar denenir; geçerse RETRIED yazılır.
   - Uygulama çökerse kalan testler yine çalışır.
