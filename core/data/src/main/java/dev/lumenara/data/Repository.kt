@@ -118,10 +118,14 @@ class Repository private constructor(private val context: Context) {
             ids.mapNotNull { byId[it] }
         }
     }
-    fun nowAiring(source: String, now: Long, query: String = "") =
-        hidden.flatMapLatest { guide.nowAiring(source, now, query, it) }
-    fun searchPrograms(source: String, query: String, from: Long, now: Long) =
-        hidden.flatMapLatest { guide.searchPrograms(source, query, from, now, it) }
+    private val guideStore by lazy { GuideStore(guide, liveScope, hidden) }
+    fun cardProgrammes(source: String, itemId: String): Flow<List<Slot>> = guideStore.cardProgrammes(source, itemId)
+    fun nowAiring(source: String, now: Long, query: String = ""): Flow<List<AiringProgram>> = nowAiring(source, flowOf(now), query)
+    fun nowAiring(source: String, now: Flow<Long>, query: String = ""): Flow<List<AiringProgram>> = guideStore.nowAiring(source, now, query)
+    fun searchPrograms(source: String, query: String, from: Long, now: Long): Flow<List<ProgramHit>> =
+        searchPrograms(source, query, flowOf(from to now))
+    fun searchPrograms(source: String, query: String, times: Flow<Pair<Long, Long>>): Flow<List<ProgramHit>> =
+        guideStore.searchPrograms(source, query, times)
 
     val subtitles = SubtitleService(preferences, SubtitleCache(java.io.File(context.cacheDir, "subtitles")))
 

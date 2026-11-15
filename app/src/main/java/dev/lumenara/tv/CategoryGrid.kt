@@ -17,7 +17,7 @@ import androidx.tv.material3.*
 import dev.lumenara.data.LiveCategoryCount
 import dev.lumenara.design.Ink
 
-internal data class CategoryEntry(val id: String, val name: String, val count: Int)
+internal data class CategoryEntry(val id: String, val name: String, val count: Int, val countKnown: Boolean = true)
 
 internal fun providerCategories(groups: List<LiveCategoryCount>): List<CategoryEntry> {
     return groups.filter { it.category.isNotEmpty() }
@@ -83,9 +83,9 @@ internal fun CategoryGrid(title: String, entries: List<CategoryEntry>, choose: (
                     focus.requestFocus()
                     requestPending = false
                 }
-                NavigationCard(entry.name, entry.count.toString(),
+                NavigationCard(entry.name, if (entry.countKnown) entry.count.toString() else "",
                     Modifier.fillMaxWidth().height(120.dp).testTag("category-${entry.name}")
-                        .semantics { contentDescription = "${entry.name} · ${entry.count}" }
+                        .semantics { contentDescription = if (entry.countKnown) "${entry.name} · ${entry.count}" else entry.name }
                         .then(if (index == target) Modifier.focusRequester(focus) else Modifier)
                         .onFocusChanged { if (it.isFocused) last = entry.id }) {
                     Perf.mark("category")

@@ -79,9 +79,9 @@ internal fun SearchScreen(
     }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { wallClockTicks(30_000).collect { now = it } }
-    val programs by remember(source, query, now) {
+    val programs by remember(source, query) {
         if (query.isBlank()) flowOf(emptyList())
-        else model.repo.searchPrograms(source, searchable(query), now - 7 * 86_400_000L, now)
+        else model.repo.searchPrograms(source, searchable(query), snapshotFlow { (now - 7 * 86_400_000L) to now })
             .flatMapLatest { hits ->
                 val ids = hits.map { it.itemId }.distinct()
                 if (ids.isEmpty()) flowOf(emptyList())

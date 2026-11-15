@@ -56,16 +56,15 @@ internal fun LiveScreen(
         .collectAsStateWithLifecycle(emptyList())
     val favorites by remember(source) { model.repo.shelfCount(source, "LIVE", "favorite") }
         .collectAsStateWithLifecycle(0)
-    val airing by remember(source, now) { model.repo.nowAiring(source, now) }
-        .collectAsStateWithLifecycle(emptyList())
+    var airingCount by remember(source) { mutableStateOf<Int?>(null) }
     val total = groups.sumOf { it.count }
     val entries = listOf(
         CategoryEntry("all", "Tüm kanallar", total),
         CategoryEntry("recent", "Son izlenenler", recent.size),
         CategoryEntry("favorite", "Favoriler", favorites),
-        CategoryEntry("airing", "Şu an yayında", airing.size),
+        CategoryEntry("airing", "Şu an yayında", airingCount ?: total, countKnown = airingCount != null),
         CategoryEntry("timeline", "Yayın akışı", total),
-    ).filter { it.count > 0 } + providerCategories(groups)
+    ).filter { it.count > 0 || (it.id == "airing" && total > 0) } + providerCategories(groups)
     androidx.activity.compose.BackHandler(category != null) { category = null }
     LaunchedEffect(source, returnToChannel) {
         val target = returnToChannel ?: return@LaunchedEffect
@@ -96,8 +95,9 @@ internal fun LiveScreen(
             val paged = if (category !in listOf("airing", "recent"))
                 rememberLivePages(model, source, provider, searchable(query),
                     if (category == "favorite") "favorite" else "", restoreId) else null
-            val rows by remember(source, category, query, limit, if (category == "airing") now else 0L) {
-                if (category == "airing") model.repo.nowAiring(source, now, searchable(query)).flatMapLatest { hits ->
+            val rows by remember(source, category, query, limit) {
+                if (category == "airing") model.repo.nowAiring(source, snapshotFlow { now }, searchable(query))
+                    .onEach { if (query.isBlank()) airingCount = it.size }.flatMapLatest { hits ->
                     val ids = hits.take(limit).map { it.itemId }
                     model.repo.liveByIds(source, ids).map { items ->
                         val byId = items.associateBy { it.id }

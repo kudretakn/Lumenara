@@ -10,8 +10,10 @@ data class GuideChannel(
     val tvgId: String,
     val search: String = searchable(title),
     val source: String = "",
+    val category: String = "",
 )
 data class ProgrammeChannel(val feed: String, val channel: String, val source: String = "")
+data class GuideTarget(val feed: String, val channel: String)
 
 /** Resolves one source, or all sources without allowing automatic matches across sources. */
 class GuideResolver(
@@ -22,6 +24,7 @@ class GuideResolver(
 ) {
     private val channelsById = channels.associateBy { it.id }
     private val itemsBySlot: Map<Pair<String, String>, List<String>>
+    private val targetsByItem: Map<String, List<GuideTarget>>
 
     init {
         val explicit = mappings.associateBy { it.item }
@@ -47,11 +50,19 @@ class GuideResolver(
             }
         }
         itemsBySlot = resolved
+        val targets = HashMap<String, MutableList<GuideTarget>>()
+        for ((pair, ids) in resolved) for (id in ids)
+            targets.getOrPut(id) { ArrayList() }.add(GuideTarget(pair.first, pair.second))
+        targetsByItem = targets
     }
 
     fun itemIds(slot: Slot): List<String> = itemsBySlot[slot.feed to slot.channel].orEmpty()
+    fun targets(itemId: String): List<GuideTarget> = targetsByItem[itemId].orEmpty()
+    fun visible(itemId: String, hidden: List<String>): Boolean =
+        channelsById[itemId]?.let { it.category !in hidden } == true
 
-    fun searchPrograms(slots: List<Slot>, query: String, from: Long, now: Long): List<ProgramHit> {
+    fun searchPrograms(slots: List<Slot>, query: String, from: Long, now: Long,
+        hidden: List<String> = emptyList()): List<ProgramHit> {
         val normalized = searchable(query)
         fun rank(slot: Slot) = when {
             slot.start <= now && slot.end > now -> 0
@@ -59,7 +70,7 @@ class GuideResolver(
             else -> 2
         }
         return slots.asSequence().filter { it.end > from && normalized in it.search }
-            .flatMap { slot -> itemIds(slot).asSequence().map { ProgramHit(slot, it) } }
+            .flatMap { slot -> itemIds(slot).asSequence().filter { visible(it, hidden) }.map { ProgramHit(slot, it) } }
             .sortedWith(compareBy<ProgramHit> { rank(it.slot) }
                 .thenBy { if (rank(it.slot) == 2) -it.slot.start else it.slot.start }
                 .thenBy { it.itemId }.thenBy { it.slot.feed }.thenBy { it.slot.channel })
