@@ -200,8 +200,6 @@ class Repository private constructor(private val context: Context) {
     suspend fun production(item: Item): Item = if (item.kind == "EPISODE") library.item(item.parent) ?: item
         else library.item(item.id) ?: item
 
-    private val versionIndex = java.util.concurrent.ConcurrentHashMap<String, Map<String, List<Item>>>()
-
     suspend fun versions(item: Item): List<Item> {
         val all = allVersions(item)
         return if (preferences.showAdult.first()) all else all.filterNot { isAdultCategory(it.category) }
@@ -211,10 +209,9 @@ class Repository private constructor(private val context: Context) {
         val base = production(item)
         if (base.kind !in listOf("MOVIE", "SERIES")) return@withContext listOf(base)
         if (base.versionKey.isNotEmpty()) return@withContext library.versionRows(base.versionKey)
-        val key = "${base.source}|${base.kind}|${base.generation}"
-        val index = versionIndex[key] ?: library.versionCandidates(base.source, base.kind).versionGroups()
-            .flatMap { group -> group.map { it.id to group } }.toMap().also { versionIndex[key] = it }
-        index[base.id] ?: listOf(base)
+        // Legacy rows from the 7→8 migration have no grouping key. Avoid scanning the full
+        // source on first detail/playback; the next import assigns keys in one bounded projection.
+        listOf(base)
     }
 
     suspend fun preferenceKey(item: Item): String {
@@ -271,10 +268,7 @@ class Repository private constructor(private val context: Context) {
                     if (query.tmdb.isNotBlank() && base.tmdbId() != query.tmdb) {
                         db.withTransaction {
                             library.save(listOf(base.copy(search = base.search.replace(Regex(" \\[tmdb:[0-9]+\\]"), "") + " [tmdb:${query.tmdb}]")))
-                            // A newly learned ID can join translated titles or split conflicting IDs.
-                            library.assignVersions(library.versionCandidates(base.source, base.kind).versionAssignments())
                         }
-                        versionIndex.keys.removeAll { it.startsWith("${base.source}|") }
                     }
                 }
                 catch (e: kotlinx.coroutines.CancellationException) { throw e }
@@ -343,7 +337,6 @@ class Repository private constructor(private val context: Context) {
 
     suspend fun remove(id: String) = lock.withLock {
         library.deleteSource(id)
-        versionIndex.keys.removeAll { it.startsWith("$id|") }
     }
 
     suspend fun addGuide(sourceId: String, url: String) =
@@ -478,7 +471,7 @@ class Repository private constructor(private val context: Context) {
                 else library.prune(source.id, token)
                 library.orphans(source.id)
                 for (kind in listOf("MOVIE", "SERIES")) {
-                    val rows = library.versionCandidates(source.id, kind)
+                    val rows = library.versionCandidates(source.id, kind).map(VersionCandidate::asItem)
                     // Resolve across the complete source, not each 128-row staging batch: matching
                     // translated titles and a missing TMDB ID may occur in distant batches.
                     library.assignVersions(rows.versionAssignments())
@@ -495,7 +488,6 @@ class Repository private constructor(private val context: Context) {
                 job.ensureActive()
                 library.save(source.copy(refreshed = token, count = library.count(source.id)))
             }
-            versionIndex.keys.removeAll { it.startsWith("${source.id}|") }
         } finally {
             staged.close()
         }
