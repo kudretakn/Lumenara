@@ -32,7 +32,7 @@ import dev.lumenara.vlc.VlcInput
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import org.videolan.libvlc.LibVLC
+import dev.lumenara.vlc.VlcRuntime
 import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer
 import org.videolan.libvlc.util.VLCVideoLayout
@@ -301,7 +301,6 @@ internal fun VlcScreen(
         playbackMutex.withLock {
             android.util.Log.d("LumenaraVlc", "playback acquired mutex")
             var input: VlcInput? = null
-            var library: LibVLC? = null
             var engine: MediaPlayer? = null
             var completed = false
             try {
@@ -317,8 +316,7 @@ internal fun VlcScreen(
                 withContext(Dispatchers.IO) {
                     input = VlcInput.open(context, address, source.allowHttp)
                     // Native initialization and media setup can block for seconds.
-                    val lib = LibVLC(context, arrayListOf("--quiet", "--no-video-title-show"))
-                    library = lib
+                    val lib = VlcRuntime.get(context)
                     val p = MediaPlayer(lib)
                     engine = p
                     val media = Media(lib, input!!.descriptor.fileDescriptor)
@@ -426,7 +424,7 @@ internal fun VlcScreen(
                             // Close the input before stop to unblock native reads.
                             try { input?.close() } finally {
                                 try { p?.stop() } finally {
-                                    try { p?.release() } finally { library?.release() }
+                                    p?.release()
                                 }
                             }
                         }
