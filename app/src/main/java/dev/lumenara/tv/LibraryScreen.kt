@@ -9,13 +9,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.*
 import androidx.compose.ui.focus.*
 import androidx.compose.ui.semantics.*
-import dev.lumenara.design.Pill
+import dev.lumenara.design.Chip
+import dev.lumenara.design.LumenColors
+import dev.lumenara.design.Spacing
 import androidx.compose.ui.unit.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.*
 import dev.lumenara.data.*
-import dev.lumenara.design.Ink
 import dev.lumenara.catalog.exactChannelIndex
 import dev.lumenara.catalog.searchable
 import kotlinx.coroutines.launch
@@ -159,8 +160,8 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
             entry.requestFocus()
         }
     }
-    Box(Modifier.fillMaxSize().background(Ink.background)) {
-        Column(Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 27.dp)) {
+    Box(Modifier.fillMaxSize().background(LumenColors.bg)) {
+        Column(Modifier.fillMaxSize().padding(horizontal = Spacing.screenHorizontal, vertical = Spacing.screenVertical)) {
             pages.SaveableStateProvider(section) {
                 Column(Modifier.fillMaxSize().semantics { testTag = "section-$section" }
                     .focusRequester(entry).focusRestorer().focusGroup()) {
@@ -183,16 +184,16 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
                             }
                         }
                         "Ana Sayfa" -> {
-                            if (available.size > 1) LazyRow(
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                contentPadding = PaddingValues(vertical = 8.dp),
-                            ) {
-                                items(listOf("" to "Tümü") + available.map { it.id to it.name },
-                                    key = { it.first }) { (id, name) ->
-                                    Pill(name, scope == id, onClick = { scope = id })
+                            Home(model, scope, open, play, hubCard, sourceSelector = {
+                                if (available.size > 1) LazyRow(
+                                    horizontalArrangement = Arrangement.spacedBy(Spacing.unit),
+                                ) {
+                                    items(listOf("" to "Tümü") + available.map { it.id to it.name },
+                                        key = { it.first }) { (id, name) ->
+                                        Chip(name, scope == id, onClick = { scope = id })
+                                    }
                                 }
-                            }
-                            Home(model, scope, open, play, hubCard) {
+                            }) {
                                 hubCard = it
                                 section = it
                                 model.notice.value = ""

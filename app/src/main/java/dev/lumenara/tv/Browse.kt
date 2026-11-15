@@ -9,6 +9,11 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.*
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -24,6 +29,14 @@ import androidx.tv.material3.*
 import dev.lumenara.data.*
 import dev.lumenara.design.Ink
 import dev.lumenara.design.GlassPanel
+import dev.lumenara.design.FocusCard
+import dev.lumenara.design.LumenColors
+import dev.lumenara.design.LumenType
+import dev.lumenara.design.LumenIcon
+import dev.lumenara.design.Motion
+import dev.lumenara.design.Spacing
+import dev.lumenara.design.Radii
+import dev.lumenara.design.ProgressLine
 import kotlinx.coroutines.flow.*
 
 @Composable
@@ -38,37 +51,183 @@ internal fun Poster(model: LibraryModel, item: Item, modifier: Modifier,
     }
 }
 
+/** Hub shelves keep their text stationary while the 16:9 image receives focus. */
 @Composable
-private fun Shelf(
-    model: LibraryModel,
-    title: String,
-    rows: List<Item>,
-    shelf: String,
-    open: (Item) -> Unit,
-    focus: (Item) -> Unit,
+private fun HubShelfTile(
+    item: Item,
+    click: () -> Unit,
+    focus: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable BoxScope.() -> Unit,
 ) {
-    if (rows.isEmpty()) return
-    Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-        Text(
-            title,
-            fontSize = 19.sp,
-            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-        )
+    var restoreFocus by rememberSaveable(item.id) { mutableStateOf(false) }
+    val requester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        if (restoreFocus) {
+            withFrameNanos { }
+            requester.requestFocus()
+            restoreFocus = false
+        }
+    }
+    FocusCard(
+        onClick = { restoreFocus = true; click() },
+        modifier = modifier.fillMaxWidth().aspectRatio(16f / 9f)
+            .focusRequester(requester)
+            .semantics { contentDescription = item.title }
+            .onFocusChanged { if (it.isFocused) focus() },
+        content = content,
+    )
+}
+
+@Composable
+private fun HubChannelShelf(
+    model: LibraryModel,
+    rows: List<Item>,
+    play: (Item, List<Item>) -> Unit,
+    focus: () -> Unit,
+) {
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) { wallClockTicks(30_000).collect { now = it } }
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
+        Text("SON KANAL", style = LumenType.caption, color = LumenColors.textSecondary)
         LazyRow(
-            modifier = Modifier.testTag("shelf-$title").focusRestorer().focusGroup(),
-            horizontalArrangement = Arrangement.spacedBy(15.dp),
-            contentPadding = PaddingValues(5.dp),
+            Modifier.testTag("channel-shelf-Son kanal").focusRestorer().focusGroup(),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.cardGap),
+            // No horizontal inset: titles, artwork and navigation share the safe-area column.
+            contentPadding = PaddingValues(vertical = Spacing.unit),
         ) {
-            items(rows, key = { it.id }) { entry ->
-                MovieCard(
-                    model,
-                    entry,
-                    entry.kind != "LIVE" && shelf != "resume",
-                    open,
-                    focus,
-                    progress = shelf == "resume",
-                )
+            items(rows, key = { it.id }) { item ->
+                val slots = liveProgrammes(model, item, now)
+                val current = slots.firstOrNull { now >= it.start && now < it.end }
+                val logo by produceState<String?>(null, item.id, item.logo) {
+                    value = model.repo.poster(item)
+                }
+                Column(Modifier.width(200.dp), verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+                    HubShelfTile(item, { play(item, rows) }, focus,
+                        Modifier.testTag("live-channel-${item.id}")) {
+                        HubArtwork(model, item, logo, channel = true)
+                    }
+                    Text(item.title, style = LumenType.cardTitle, color = LumenColors.textPrimary,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(current?.title.orEmpty(), style = LumenType.meta,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (current != null) ProgressLine(
+                        (now - current.start).toFloat() / (current.end - current.start).coerceAtLeast(1),
+                    )
+                }
             }
+        }
+    }
+}
+
+@Composable
+private fun HubResumeShelf(model: LibraryModel, rows: List<Item>, open: (Item) -> Unit, focus: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
+        Text("KALDIĞIN YERDEN DEVAM ET", style = LumenType.caption, color = LumenColors.textSecondary)
+        LazyRow(
+            Modifier.testTag("shelf-Kaldığın yerden devam et").focusRestorer().focusGroup(),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.cardGap),
+            contentPadding = PaddingValues(vertical = Spacing.unit),
+        ) {
+            items(rows, key = { it.id }) { item ->
+                val episodes by remember(item.id) {
+                    if (item.kind == "SERIES") model.repo.episodes(item.id) else flowOf(emptyList<Item>())
+                }.collectAsStateWithLifecycle(emptyList())
+                val marks by remember(item.id) {
+                    if (item.kind == "SERIES") model.repo.library.episodeMarks(item.id) else flowOf(emptyList<Mark>())
+                }.collectAsStateWithLifecycle(emptyList())
+                val continuing = episodes.continueItem(marks)
+                val observedMark by remember(item.id) {
+                    model.repo.library.observeMark(item.id)
+                }.collectAsStateWithLifecycle(null)
+                val mark = if (item.kind == "SERIES") marks.firstOrNull { it.id == continuing?.id } else observedMark
+                val backdrop by produceState<String?>(null, item.id, item.backdrop) {
+                    value = model.repo.backdrop(item)
+                }
+                val episode = continuing?.seriesEpisode()
+                val remaining = mark?.takeIf { it.duration > 0 }?.let {
+                    "${((it.duration - it.position).coerceAtLeast(0) + 59_999) / 60_000} dk kaldı"
+                }
+                val caption = listOfNotNull(episode?.let { "S${it.season} · B${it.episode}" }, remaining)
+                    .joinToString(" · ").ifBlank { "İzlemeye devam et" }
+                Column(Modifier.width(240.dp), verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+                    HubShelfTile(item, { open(item) }, focus) {
+                        HubArtwork(model, item, backdrop)
+                        if ((mark?.duration ?: 0) > 0) ProgressLine(
+                            (mark?.position ?: 0).toFloat() / checkNotNull(mark).duration,
+                            Modifier.align(Alignment.BottomStart),
+                        )
+                    }
+                    Text(item.title, style = LumenType.cardTitle, color = LumenColors.textPrimary,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(caption, style = LumenType.meta, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+    }
+}
+
+/** Local 16:9 fallback; the shared poster fallback and shared channel cards belong to D1/D3. */
+@Composable
+private fun HubArtwork(model: LibraryModel, item: Item, address: String?, channel: Boolean = false) {
+    val tones = remember { listOf(0xFF1E2430, 0xFF2A1F24, 0xFF1F2A24, 0xFF2B2619, 0xFF24202E, 0xFF1C2A2B) }
+    val tone = androidx.compose.ui.graphics.Color(tones[Math.floorMod(item.title.hashCode(), tones.size)])
+    val fill = if (channel && address == null) tone else if (channel) LumenColors.surface3 else LumenColors.surface2
+    Box(Modifier.fillMaxSize().background(fill),
+        contentAlignment = if (channel) Alignment.Center else Alignment.BottomStart) {
+        if (address == null) {
+            Text(if (channel) item.title.split(Regex("\\s+")).take(2).joinToString(" ") else item.title,
+                Modifier.padding(Spacing.cardGap),
+                style = if (channel) LumenType.label else LumenType.cardTitle,
+                color = LumenColors.textPrimary, maxLines = if (channel) 2 else 3,
+                textAlign = if (channel) TextAlign.Center else TextAlign.Start,
+                overflow = TextOverflow.Ellipsis)
+            if (!channel) LumenIcon(if (item.kind == "SERIES") LumenIcon.Series else LumenIcon.Film,
+                contentDescription = null, modifier = Modifier.align(Alignment.TopEnd).padding(Spacing.cardGap),
+                tint = LumenColors.textPrimary.copy(alpha = .4f))
+        } else Artwork(model, item, address,
+            if (channel) Modifier.fillMaxSize(.7f) else Modifier.fillMaxSize(),
+            contentScale = if (channel) ContentScale.Fit else ContentScale.Crop,
+            role = if (channel) "poster" else "backdrop")
+    }
+}
+
+@Composable
+private fun HubNavigationCard(
+    model: LibraryModel, name: String, caption: String, icon: LumenIcon,
+    modifier: Modifier, compact: Boolean, loading: Boolean, update: Boolean,
+    artworkItem: Item?, click: () -> Unit,
+) {
+    val backdrop by produceState<String?>(null, artworkItem?.id, artworkItem?.backdrop) {
+        // Only a real wide image is eligible; never substitute a channel logo or poster.
+        value = artworkItem?.let { model.repo.backdrop(it) }
+    }
+    FocusCard(click, modifier, focusedScale = Motion.hubFocusScale) {
+        if (!compact && backdrop != null) {
+            Box(Modifier.fillMaxSize().clip(RoundedCornerShape(Radii.card))) {
+                Artwork(model, artworkItem, backdrop, Modifier.align(Alignment.CenterEnd).fillMaxHeight().fillMaxWidth(.6f),
+                    contentScale = ContentScale.Crop, role = "backdrop")
+                Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(
+                    LumenColors.surface2, LumenColors.surface2.copy(alpha = .65f),
+                ))))
+            }
+        }
+        if (compact) Row(Modifier.fillMaxSize().padding(horizontal = Spacing.titleGap),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.cardGap), verticalAlignment = Alignment.CenterVertically) {
+            LumenIcon(icon, null)
+            Text(name, style = LumenType.title, color = LumenColors.textPrimary)
+            if (update) {
+                Spacer(Modifier.weight(1f))
+                Box(Modifier.size(6.dp).background(LumenColors.accent, RoundedCornerShape(3.dp)))
+            }
+        } else Column(Modifier.fillMaxSize().padding(Spacing.titleGap)) {
+            LumenIcon(icon, null, size = 32.dp)
+            Spacer(Modifier.weight(1f))
+            Text(name, style = LumenType.title, color = LumenColors.textPrimary)
+            Spacer(Modifier.height(Spacing.iconText))
+            if (loading) Box(Modifier.width(72.dp).height(18.dp)
+                .background(LumenColors.surface3, RoundedCornerShape(4.dp)).testTag("list-loading"))
+            else Text(caption, style = LumenType.meta)
         }
     }
 }
@@ -80,6 +239,7 @@ internal fun Home(
     open: (Item) -> Unit,
     play: (Item, List<Item>) -> Unit,
     lastCard: String = "Canlı TV",
+    sourceSelector: @Composable () -> Unit = {},
     navigate: (String) -> Unit,
 ) {
     val recentResult by remember(source) { model.repo.recentLive(source) }.collectAsLoadingState()
@@ -122,11 +282,19 @@ internal fun Home(
         }
     }
     LazyColumn(Modifier.fillMaxSize().testTag("hub").focusRestorer().focusGroup(), state = list,
-        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp)) {
-        item { LumenaraLogo(showName = true) }
+        contentPadding = PaddingValues(bottom = Spacing.shelfGap),
+        verticalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
+        item {
+            Row(Modifier.fillMaxWidth().height(45.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                LumenaraLogo(showName = true)
+                Spacer(Modifier.weight(1f))
+                Box(Modifier.widthIn(max = 480.dp)) { sourceSelector() }
+            }
+        }
         items(2) { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(22.dp)) {
+            Row(Modifier.padding(bottom = if (row == 1) Spacing.cardGap else 0.dp),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
                 repeat(3) { column ->
                     val index = row * 3 + column
                     val name = cards[index]
@@ -135,33 +303,46 @@ internal fun Home(
                             .format(counts[index] ?: 0)
                         "$number " + listOf("kanal", "film", "dizi")[index]
                     } else ""
-                    NavigationCard(name, caption,
-                        Modifier.weight(1f).height(if (row == 0) 200.dp else 110.dp)
+                    HubNavigationCard(model, name, caption,
+                        listOf(LumenIcon.Tv, LumenIcon.Film, LumenIcon.Series, LumenIcon.Bookmark, LumenIcon.Search, LumenIcon.Settings)[index],
+                        Modifier.weight(1f).height(if (row == 0) 168.dp else 64.dp)
                             .testTag("hub-$name").semantics {
                                 contentDescription = name
                                 if (name == "Ayarlar" && update != null) stateDescription = "Güncelleme hazır"
                             }.then(if (name == target) Modifier.focusRequester(entry) else Modifier)
                             .onFocusChanged { if (it.isFocused) focused = name },
                         update = name == "Ayarlar" && update != null,
-                        icon = listOf(2, 3, 4, 5, 0, 6)[index],
-                        loadingCaption = index < 3 && counts[index] == null,
+                        compact = row == 1,
+                        loading = index < 3 && counts[index] == null,
+                        artworkItem = when (index) {
+                            0 -> recent.firstOrNull()
+                            1 -> resume.firstOrNull { it.kind == "MOVIE" }
+                            2 -> resume.firstOrNull { it.kind == "SERIES" }
+                            else -> null
+                        },
                     ) { navigate(name) }
                 }
             }
         }
         if (recentResult == null || resumeResult == null) item {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(15.dp)) {
-                items(8) { LoadingCard(Modifier.width(210.dp).height(140.dp)) }
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
+                items(4) {
+                    Box(Modifier.width(200.dp).aspectRatio(16f / 9f)
+                        .background(LumenColors.surface2, RoundedCornerShape(Radii.card)).testTag("list-loading"))
+                }
             }
         }
         if (recent.isNotEmpty()) item(key = "recent-live") {
-            ChannelShelf(model, "Son kanal", recent, play, { focused = "recent" })
+            HubChannelShelf(model, recent, play, { focused = "recent" })
         }
         if (resume.isNotEmpty()) item(key = "resume") {
-            Shelf(model, "Kaldığın yerden devam et", resume, "resume", open, { focused = "resume" })
+            Box(Modifier.padding(top = if (recent.isNotEmpty()) Spacing.cardGap else 0.dp)) {
+                HubResumeShelf(model, resume, open, { focused = "resume" })
+            }
         }
         if (counts.all { it == 0 }) item {
-            Text("İçerik eklemek için Ayarlar → IPTV Kaynakları.", color = Ink.muted)
+            Text("İçerik eklemek için Ayarlar bölümünden IPTV Kaynakları’nı açın.",
+                style = LumenType.body, color = LumenColors.textSecondary)
         }
     }
 }

@@ -44,7 +44,8 @@ class LibraryJourneyTest {
                         if (request.path == "/list")
                             return MockResponse()
                                 .setBody(
-                                    "#EXTM3U\n#EXTINF:-1 group-title=\"Spor\",Test Kanalı\n${server.url("/live/1")}\n"
+                                    "#EXTM3U\n#EXTINF:-1 group-title=\"Spor\",Test Kanalı\n${server.url("/live/1")}\n" +
+                                        "#EXTINF:-1 group-title=\"Filmler\",Gece Treni\n${server.url("/movie/1.mp4")}\n"
                                 )
                         received.countDown()
                         return MockResponse()
@@ -77,6 +78,14 @@ class LibraryJourneyTest {
                 }
                 screen.ok()
             }
+            fun capture(name: String) {
+                // Include the completed TV focus animation in the device screenshot.
+                val readyAt = android.os.SystemClock.uptimeMillis() + 300
+                screen.waitUntil(30_000) { android.os.SystemClock.uptimeMillis() >= readyAt }
+                val image = File(context.getExternalFilesDir(null), "screens/$name.png")
+                checkNotNull(image.parentFile).mkdirs()
+                assertTrue("Ekran görüntüsü: $name", device.takeScreenshot(image))
+            }
             try {
                 button("✓ M3U")
                 val fields = screen.onAllNodes(hasSetTextAction())
@@ -98,9 +107,55 @@ class LibraryJourneyTest {
                             "Maç Sonu", "Karşılaşmanın değerlendirmesi.", "mac sonu"),
                     ))
                     repo.guide.map(Mapping(item.id, "live-journey", "sport"))
+                    preferences.set("recent_live", "")
+                    preferences.recordLive(item.id)
+                    val movie = repo.library.browse(source.id, "MOVIE", "", "", "", 1).first().single()
+                    repo.updateMark(movie.id) {
+                        it.copy(position = 900_000, duration = 5_400_000, updated = now)
+                    }
                     item
                 }
+                screen.waitUntil(30_000) {
+                    screen.onAllNodes(hasTestTag("hub-Canlı TV") and isFocused()).fetchSemanticsNodes().isNotEmpty()
+                }
+                capture("hub")
+                val density = context.resources.displayMetrics.density
+                listOf("Canlı TV" to "Listem", "Filmler" to "Ara", "Diziler" to "Ayarlar").forEach { (top, bottom) ->
+                    val upper = screen.onNodeWithTag("hub-$top").fetchSemanticsNode().boundsInRoot
+                    val lower = screen.onNodeWithTag("hub-$bottom").fetchSemanticsNode().boundsInRoot
+                    assertEquals("Hub kolonları aynı merkezde kalmalı", upper.center.x, lower.center.x, density)
+                    assertEquals("İkincil kart yüksekliği", 64f, lower.height / density, 1f)
+                }
+                assertEquals("Ortak sol kolon", 48f,
+                    screen.onNodeWithTag("hub-Listem").fetchSemanticsNode().boundsInRoot.left / density, 1f)
+                screen.onNodeWithTag("hub").performScrollToNode(hasTestTag("channel-shelf-Son kanal"))
+                val recentCard = hasTestTag("live-channel-${channel.id}") and
+                    hasAnyAncestor(hasTestTag("channel-shelf-Son kanal"))
+                screen.onNode(recentCard).performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus)
+                screen.waitUntil(30_000) { screen.onAllNodes(recentCard and isFocused()).fetchSemanticsNodes().isNotEmpty() }
+                screen.onNodeWithTag("hub").performScrollToNode(hasTestTag("shelf-Kaldığın yerden devam et"))
+                button("75 dk kaldı").assertIsDisplayed()
+                capture("home-shelves")
+                listOf("channel-shelf-Son kanal", "shelf-Kaldığın yerden devam et").forEach { tag ->
+                    assertEquals("Raflar aynı sol kolonda başlamalı", 48f,
+                        screen.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot.left / density, 1f)
+                }
+                assertEquals("Hub rafları yayın başlatmamalı", 1L, received.count)
                 screen.openHubCard("Canlı TV")
+                screen.waitUntil(30_000) {
+                    screen.onAllNodesWithTag("category-Son izlenenler").fetchSemanticsNodes().isNotEmpty()
+                }
+                val category = screen.onNodeWithTag("category-Son izlenenler").fetchSemanticsNode().boundsInRoot
+                assertEquals("Kategori kartı genişliği", 200f, category.width / density, 1f)
+                assertEquals("Kategori kartı yüksekliği", 88f, category.height / density, 1f)
+                screen.onNodeWithTag("category-search")
+                    .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus)
+                screen.ok()
+                screen.onNodeWithTag("category-search-field").performTextReplacement("Spor")
+                screen.onNodeWithTag("category-Spor").assertExists()
+                screen.onNodeWithTag("category-Tüm kanallar").assertDoesNotExist()
+                screen.back()
+                screen.onNodeWithTag("category-search").assertIsFocused()
                 screen.openCategory("Spor")
                 screen.waitUntil(30_000) {
                     screen.onAllNodes(hasTestTag("live-channel-${channel.id}") and isFocused())
@@ -112,9 +167,7 @@ class LibraryJourneyTest {
                 assertEquals(1L, received.count)
                 screen.onNodeWithText("Canlı Maç").assertExists()
                 screen.onNodeWithTag("live-preview").assertDoesNotExist()
-                val image = File(context.getExternalFilesDir(null), "screens/live.png")
-                checkNotNull(image.parentFile).mkdirs()
-                assertTrue("Canlı TV ekran görüntüsü", device.takeScreenshot(image))
+                capture("live")
                 screen.ok()
                 screen.waitUntil(30_000) {
                     screen.onAllNodes(hasContentDescription("Tam ekran oynatıcı") and isFocused())
