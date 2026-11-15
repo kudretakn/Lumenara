@@ -57,14 +57,11 @@ internal fun BoxScope.Reconnecting(retry: LiveRetry) {
 }
 
 @Composable
-internal fun liveChannelNumbers(model: LibraryModel, source: String): Map<String, Int> {
-    val order by remember(source) { model.repo.liveChannelOrder(source) }
-        .collectAsStateWithLifecycle(emptyList())
-    return remember(order) {
-        order.groupBy { it.source }.values.flatMap { rows ->
-            rows.mapIndexed { index, row -> row.id to channelNumber(null, index) }
-        }.toMap()
-    }
+internal fun liveChannelNumbers(model: LibraryModel, source: String, rows: List<Item>): Map<String, Int> {
+    val ids = rows.map { it.id }.distinct()
+    val numbers by remember(source, rows) { model.repo.liveChannelNumbers(source, ids) }
+        .collectAsStateWithLifecycle(emptyMap())
+    return numbers
 }
 
 @Stable
