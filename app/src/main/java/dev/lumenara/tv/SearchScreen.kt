@@ -50,6 +50,8 @@ internal fun SearchScreen(
         }
     }
     var query by rememberSaveable { mutableStateOf("") }
+    val searchPrefill by model.searchPrefill.collectAsStateWithLifecycle()
+    LaunchedEffect(searchPrefill) { searchPrefill?.let { query = it.second } }
     var limit by rememberSaveable(source, query) { mutableIntStateOf(80) }
     val voice = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         if (it.resultCode == Activity.RESULT_OK) {

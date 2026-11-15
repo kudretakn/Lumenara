@@ -1,9 +1,12 @@
 package dev.lumenara.tv
 
 import android.os.Bundle
+import android.app.SearchManager
+import android.content.Intent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import dev.lumenara.catalog.searchRequest
 import dev.lumenara.design.LumenaraTheme
 
 @dagger.hilt.android.AndroidEntryPoint
@@ -17,6 +20,19 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        handleSearchIntent(intent)
         setContent { LumenaraTheme { LibraryScreen(library) } }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleSearchIntent(intent)
+    }
+
+    private fun handleSearchIntent(intent: Intent?) {
+        val request = searchRequest(intent?.action, intent?.getStringExtra(SearchManager.QUERY))
+            ?: return
+        library.receiveSearchIntent(request)
     }
 }
