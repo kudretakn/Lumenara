@@ -11,6 +11,7 @@ Kişisel kullanım için Android TV IPTV oynatıcısı (Kotlin, Compose for TV, 
   - Çağrı biçimi: `codex exec -m <model> -c model_reasoning_effort='"<seviye>"' -s workspace-write -C <dizin> -o <sonuç> - < istem.md`. İstem dosyadan verilir, stdin kapalı olur.
   - Codex commit ya da push yapmaz.
   - Codex'in bildirdiği düzeltmenin diskte olduğunu her zaman doğrula.
+- **Paralellik (kullanıcı isteği, 15 Kasım 2026):** İşleri küçük, bağımsız parçalara bölüp 8–12 Codex ajanıyla paralel çalıştır. Her ajan ayrı git worktree'de çalışır (`../lumenara-wt/<ad>`) ve Gradle çalıştırmaz. Derleme ve testleri Claude sırayla yapar, çünkü sunucuda 2 CPU var. Her ajanın modeli kendi görevinin zorluğuna göre seçilir.
 - **Model seçimi:** Basit işte `gpt-6-luna` low/medium, çok dosyalı ya da kritik işte `gpt-6.1-sol` medium/high. İstem kısa olur: dosya yolları, kabul ölçütleri ve "en fazla N satır rapor" isteği içerir. Token tasarrufu her iki tarafta da önemli.
 - **Merge:** CI'daki **tüm** işler (`build` + `device`) pass olmadan merge yapılmaz; tam `gh pr checks` çıktısına bak. Hepsi yeşilse sormadan merge et. `main` korumalı.
 - **Kullanıcıya kalanlar:** Kimlik, ödeme ve imza anahtarı adımları kullanıcıya bırakılır. Geri alınamaz silme ya da para harcatan işlem için açık onay gerekir.
