@@ -1,18 +1,14 @@
 # Lumenara sürüm kaydı
 
-## 0.5.1 · 16 Kasım 2026
-
-- Hub, raf, arama ve bölüm kartları küçültüldü; ekrana daha çok içerik sığıyor.
-
-- Daha sık ızgaralar: kategoriler ve kanallar 6 sütun, afişler 8 sütun.
-
-## 0.5.0 · 15 Kasım 2026
+## 0.5.0 · 16 Kasım 2026
 
 - Yeni tasarım ("Quiet Cinema"): koyu nötr zemin, tek altın vurgu, Inter yazı tipi, 8 dp ızgara, cam efekti ve bulanıklık yok.
 - Odak düzeltmesi: odaklanan kart artık açık renge dönmüyor; beyaz çerçeve ve hafif büyüme, yazılar her zaman okunur.
 - Ana ekran, kategori ızgarası, Canlı TV kanal ızgarası, tam ekran bilgi bandı ve mini rehber, Filmler/Diziler, detay ve sezon ekranları, oynatıcı seçenekleri, Ara, Ayarlar ve karşılama ekranı yeniden tasarlandı.
 - Görseli olmayan içerik ve kanallar için tipografik afişler; stok manzara fotoğrafları ve tek harfli kutular kaldırıldı. Yeni düz altın logo.
 - Sağlayıcı başlıklarındaki önek ve uzun sayı dizileri temizleniyor.
+- Daha sık ızgaralar: kategoriler ve kanallar 6 sütun (ekranda 6×6), afişler 8 sütun.
+- Ana ekran, raf, arama ve bölüm kartları küçültüldü; ekrana yaklaşık iki kat içerik sığıyor.
 
 ## 0.4.3 · 15 Kasım 2026
 
