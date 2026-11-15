@@ -52,6 +52,10 @@ Devam yöntemi:
 5. Tek PR, CI yeşil, merge, `v0.4.1`. CHANGELOG'a ölçülen kazançları yaz.
 6. Kullanıcıdan TV'de güncelleyip `adb logcat -s LumenaraPerf` çıktısı ya da gözlem iste.
 
+## 0.4.3 (PR #21)
+- Özellik dalları `feat/f-*` + `fix/atomic-restore` birleştirildi. Şema 10 (geri yükleme günlüğü) → U3 artık 10→11.
+- Sonraki: Tasarım 0.5 — `docs/DESIGN-0.5.md` (Opus) ve maketler kullanıcı onayında. Onaydan sonra D0 (tasarım sistemi) → D1–D7 paralel → D8.
+
 ## 0.4.2 (PR #20)
 - Opus performans ve bellek taramalarının bulguları: P1–P6 (hız), M1–M3 (bellek), şema 9. Birleştirme ayrı klonda yapıldı (Codex sandbox, worktree'lerin ortak .git'ine yazamıyor; birleştirme işi için bağımsız klon kullan).
 - Kullanıcı 4K ve yüksek bit hızlı dosya oynatacak; Mi Box'ta 100–150 Mbps alıyor. Tampon uyarlanabilir: cihaz bütçesi = memoryClass'ın %33'ü (32–96 MB), içerikte VOD 20 sn / canlı 10 sn.

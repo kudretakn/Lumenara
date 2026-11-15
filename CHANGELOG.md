@@ -1,5 +1,14 @@
 # Lumenara sürüm kaydı
 
+## 0.4.3 · 15 Kasım 2026
+
+- Android TV ana ekranında "İzlemeye devam et": yarım kalan film ve bölümler, sıradaki bölüm; karttan doğrudan kaldığın yerden oynatma (Ayarlar'dan kapatılabilir).
+- Google Asistan ve sesli arama: "Lumenara'da TRT 1 aç" gibi isteklerle kanal açma, diğer sorgular Ara ekranında.
+- Kare hızı eşleme (Kapalı / Yalnız film ve dizi / Her zaman): TV, içeriğin 24/25/50/60 Hz kare hızına geçer.
+- Uyku zamanlayıcısı (15/30/60/90 dk, bölüm sonunda): son 60 saniyede geri sayım, +15 dk ya da iptal.
+- Yedekle / geri yükle: ayarlar, kaynaklar, Listem ve izleme geçmişi parolayla şifreli dosyaya; geri yükleme ya tamamen olur ya hiç (yarıda kalırsa bir sonraki açılışta eski hâle döner).
+- Altyazı önbelleği yazımı her platformda güvenli.
+
 ## 0.4.2 · 15 Kasım 2026
 
 - Hız (40 bin içerikli katalog, Mi Box 4): +18 filtresi ve kategori sayıları bir kez hesaplanıp paylaşılıyor; "Tümü" görünümü ve kategori listeleri yeni indeksle çalışıyor (şema 8→9).
