@@ -272,14 +272,17 @@ interface LibraryDao {
 
     @Query("SELECT * FROM marks WHERE id=:id") suspend fun mark(id: String): Mark?
 
+    @Query("SELECT * FROM marks WHERE id IN (:ids)")
+    suspend fun marksByIds(ids: List<String>): List<Mark>
+
     @Query("SELECT * FROM marks WHERE id=:id") fun observeMark(id: String): Flow<Mark?>
 
     @Query("""SELECT * FROM items WHERE parent=:id AND category NOT IN (:hidden)
-        AND parent NOT IN (SELECT id FROM items WHERE category IN (:hidden)) ORDER BY items.rowid""")
+        AND NOT EXISTS(SELECT 1 FROM items s WHERE s.id=:id AND s.category IN (:hidden)) ORDER BY items.rowid""")
     fun episodes(id: String, hidden: List<String> = emptyList()): Flow<List<Item>>
 
     @Query("""SELECT * FROM items WHERE parent=:id AND category NOT IN (:hidden)
-        AND parent NOT IN (SELECT id FROM items WHERE category IN (:hidden))""")
+        AND NOT EXISTS(SELECT 1 FROM items s WHERE s.id=:id AND s.category IN (:hidden))""")
     suspend fun episodeSnapshot(id: String, hidden: List<String> = emptyList()): List<Item>
 
     @Query("SELECT marks.* FROM marks JOIN items USING(id) WHERE items.parent=:id")
