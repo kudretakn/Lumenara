@@ -64,7 +64,8 @@ class HubAndAdultFilterTest {
             server.start()
             try {
                 val channels = runBlocking {
-                    repo.library.snapshot().filter { it.name == name }.forEach { repo.remove(it.id) }
+                    // Hub counts span every source; leftovers from earlier tests would change them.
+                    repo.library.snapshot().forEach { repo.remove(it.id) }
                     prefs.setShowAdult(false)
                     prefs.set("engine", "Media3")
                     prefs.set("recent_live", "")

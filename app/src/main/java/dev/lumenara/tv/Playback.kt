@@ -610,6 +610,8 @@ internal fun Playback(
                     Button(
                         onClick = {
                             transferred = engine?.currentPosition ?: -1
+                            switched = true
+                            panel = false
                             vlc = true
                         }
                     ) {
