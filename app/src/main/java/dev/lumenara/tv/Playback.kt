@@ -610,6 +610,7 @@ internal fun Playback(
                     Button(
                         onClick = {
                             transferred = engine?.currentPosition ?: -1
+                            android.util.Log.d("LumenaraVlc", "switch Media3 to VLC position=$transferred subtitle=${subtitle != null} scheme=${subtitle?.uri?.scheme}")
                             switched = true
                             panel = false
                             vlc = true

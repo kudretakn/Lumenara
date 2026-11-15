@@ -18,8 +18,13 @@ class HubAndAdultFilterTest {
     @get:Rule val screen = createAndroidComposeRule<MainActivity>()
 
     private fun waitFor(matcher: SemanticsMatcher, present: Boolean = true) {
-        screen.waitUntil(30_000) {
-            screen.onAllNodes(matcher).fetchSemanticsNodes().isNotEmpty() == present
+        try {
+            screen.waitUntil(30_000) {
+                screen.onAllNodes(matcher).fetchSemanticsNodes().isNotEmpty() == present
+            }
+        } catch (failure: Throwable) {
+            screen.onRoot().printToLog("HUB")
+            throw failure
         }
     }
 
@@ -96,11 +101,14 @@ class HubAndAdultFilterTest {
                         kotlinx.coroutines.withTimeout(10_000) {
                             repo.liveChannelOrder(source).first { it.size == 2 }
                         }.map { it.id })
+                    assertEquals(2, repo.categoryCounts("LIVE", "").first().sumOf { it.count })
+                    assertEquals(1, repo.categoryCounts("MOVIE", "").first().sumOf { it.count })
                 }
                 screen.returnToHub()
                 waitFor(hasTestTag("hub-Canlı TV") and isFocused())
-                waitFor(hasText("2 kanal") and hasAnyAncestor(hasTestTag("hub-Canlı TV")))
-                screen.onNode(hasText("1 film") and hasAnyAncestor(hasTestTag("hub-Filmler"))).assertExists()
+                // Clickable cards merge their caption into the tagged card's semantics.
+                waitFor(hasTestTag("hub-Canlı TV") and hasText("2 kanal"))
+                waitFor(hasTestTag("hub-Filmler") and hasText("1 film"))
                 screen.onNodeWithTag("channel-shelf-Son kanal").assertDoesNotExist()
                 screen.onNodeWithTag("shelf-Kaldığın yerden devam et").assertDoesNotExist()
                 // The complete journey uses the focused Hub card and remote OK.
@@ -146,8 +154,8 @@ class HubAndAdultFilterTest {
                 toggleAdult()
                 waitFor(hasText("+18 içerikleri göster · Açık"))
                 screen.returnToHub()
-                waitFor(hasText("3 kanal") and hasAnyAncestor(hasTestTag("hub-Canlı TV")))
-                screen.onNode(hasText("2 film") and hasAnyAncestor(hasTestTag("hub-Filmler"))).assertExists()
+                waitFor(hasTestTag("hub-Canlı TV") and hasText("3 kanal"))
+                waitFor(hasTestTag("hub-Filmler") and hasText("2 film"))
                 screen.openHubCard("Canlı TV")
                 screen.onNodeWithTag("category-grid").performScrollToNode(hasTestTag("category-For Adults"))
                 waitFor(hasTestTag("category-For Adults"))
