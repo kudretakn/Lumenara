@@ -195,7 +195,7 @@ class SeriesJourneyTest {
                 val homeSeries = hasContentDescription(series.title) and hasAnyAncestor(hasTestTag("shelf-Kaldığın yerden devam et"))
                 waitFor(homeSeries)
                 screen.onNode(homeSeries).assertExists()
-                val resumeLabel = hasText("S2 B1") or hasText("S2 B2")
+                val resumeLabel = hasText("S2 · B1", substring = true) or hasText("S2 · B2", substring = true)
                 waitFor(resumeLabel and hasAnyAncestor(hasTestTag("shelf-Kaldığın yerden devam et")))
             } finally {
                 runBlocking {
