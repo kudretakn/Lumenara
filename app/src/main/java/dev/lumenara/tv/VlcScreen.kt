@@ -49,7 +49,12 @@ internal fun VlcScreen(
     attachSubtitle: (androidx.media3.common.MediaItem.SubtitleConfiguration?) -> Unit,
     select: (Item, List<Item>) -> Unit,
     next: () -> Unit,
+    sleepTimer: dev.lumenara.catalog.SleepTimer,
+    sleepTimerVersion: Int,
+    onSleepTimerChanged: () -> Unit,
+    episodeEnded: () -> Unit,
 ) {
+    @Suppress("UNUSED_VARIABLE") val timerRefresh = sleepTimerVersion
     val life by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
     var panel by remember { mutableStateOf(false) }
     var position by remember(item.id) { mutableLongStateOf(initial) }
@@ -370,8 +375,10 @@ internal fun VlcScreen(
                                     nativePlaying = false
                                     completed = true
                                     model.progress(item, p.length, p.length)
-                                    if (item.kind == "EPISODE")
+                                    if (item.kind == "EPISODE") {
                                         fullscreen.finished = group.nextItem(item) != null
+                                        episodeEnded()
+                                    }
                                 }
                                 MediaPlayer.Event.Stopped -> {
                                     nativePlaying = false
@@ -479,6 +486,10 @@ internal fun VlcScreen(
         Reconnecting(retry)
         numbers?.let { NumberEntry(it) }
         SubtitleNotice(subtitleNotice) { subtitleNotice = "" }
+        SleepTimerCard(sleepTimer, sleepTimerVersion) {
+            sleepTimer.cancel()
+            onSleepTimerChanged()
+        }
         if (panel) {
             val first = remember { FocusRequester() }
             LaunchedEffect(Unit) { first.requestFocus() }
@@ -491,6 +502,7 @@ internal fun VlcScreen(
                     Text(item.title)
                     if (message.isNotEmpty()) Text(message, color = Ink.accent)
                 }
+                item { SleepTimerChoices(sleepTimer, item.kind == "EPISODE", onSleepTimerChanged) }
                 item {
                     Button(modifier = Modifier.focusRequester(first), onClick = { panel = false }) {
                         Text("Yayına dön")
