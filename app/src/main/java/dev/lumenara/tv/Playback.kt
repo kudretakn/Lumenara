@@ -71,6 +71,8 @@ internal fun Video(
     val allowedHttp = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
     val allowedSubtitle = remember { java.util.concurrent.atomic.AtomicReference<android.net.Uri?>(null) }
     var resume by remember(item.id) { mutableLongStateOf(initial) }
+    var frameRate by remember(item.id, attempt) { mutableStateOf<Float?>(null) }
+    var videoOutput by remember { mutableStateOf<PlayerView?>(null) }
     val size by remember { model.prefs.text("size", "Orta") }.collectAsStateWithLifecycle("Orta")
     val color by remember {
         model.prefs.text("color", "Beyaz")
@@ -115,6 +117,7 @@ internal fun Video(
                     )
                 configuration = config
                 player = engine
+                engine.setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
                 val preferenceKey = model.repo.preferenceKey(item)
                 val audioPreference = model.prefs.playbackChoice("audio", preferenceKey)
                 val textPreference = model.prefs.playbackChoice("text", preferenceKey)
@@ -137,6 +140,10 @@ internal fun Video(
                         }
 
                         override fun onTracksChanged(tracks: Tracks) {
+                            if (frameRate == null) frameRate = tracks.groups
+                                .filter { it.type == C.TRACK_TYPE_VIDEO }
+                                .flatMap { g -> (0 until g.length).map { g.getTrackFormat(it).frameRate } }
+                                .firstOrNull { it.isFinite() && it > 0f }
                             val signature = tracks.groups.joinToString { g -> (0 until g.length).joinToString { g.getTrackFormat(it).toString() } }
                             if (signature == formats) return
                             formats = signature
@@ -269,6 +276,7 @@ internal fun Video(
                     isFocusableInTouchMode = false
                     descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS
                     keepScreenOn = true
+                    videoOutput = this
                 }
             },
             update = {
@@ -298,6 +306,7 @@ internal fun Video(
             },
             modifier = Modifier.fillMaxSize(),
         )
+        FrameRateMatch(model, item.kind, frameRate, videoOutput, active = !preview && !multi)
         if (!preview) Reconnecting(retry)
         if (error.isNotEmpty()) {
             val retryFocus = remember { FocusRequester() }
