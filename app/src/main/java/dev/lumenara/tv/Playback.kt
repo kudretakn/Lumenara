@@ -290,6 +290,7 @@ internal fun Playback(
     select: (Item) -> Unit,
     back: () -> Unit,
     changeGroup: (List<Item>) -> Unit,
+    initial: Long = -1,
 ) {
     var panel by remember { mutableStateOf(false) }
     var multi by remember { mutableStateOf(emptyList<Item>()) }
@@ -348,7 +349,7 @@ internal fun Playback(
         .collectAsStateWithLifecycle("Açık")
     if (preferred == null) return
     var vlc by remember { mutableStateOf(preferred == "VLC") }
-    var transferred by remember(item.id) { mutableLongStateOf(-1) }
+    var transferred by remember(item.id) { mutableLongStateOf(initial) }
     var switched by remember { mutableStateOf(false) }
     if (vlc) {
         VlcScreen(

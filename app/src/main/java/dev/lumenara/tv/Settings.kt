@@ -165,6 +165,7 @@ internal fun SettingsScreen(
         }
         setting { Text("Türkçe   ·   Antrasit tema   ·   Lumenara 0.1", color = Ink.muted) }
         setting { Text("Oynatıcı", fontSize = 20.sp) }
+        setting { Choice(model, "watch_next", "Android TV ana ekranında göster", listOf("Açık", "Kapalı")) }
         setting { Choice(model, "engine", "Varsayılan motor", listOf("Media3", "VLC")) }
         setting { Choice(model, "fallback", "Codec hatasında VLC", listOf("Açık", "Kapalı")) }
         setting { Choice(model, "buffer", "Media3 tamponu", listOf("Dengeli", "Hızlı", "Kararlı")) }

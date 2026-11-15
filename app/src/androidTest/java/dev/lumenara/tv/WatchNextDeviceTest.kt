@@ -1,0 +1,124 @@
+package dev.lumenara.tv
+
+import android.content.Intent
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.test.platform.app.InstrumentationRegistry
+import androidx.tvprovider.media.tv.TvContractCompat
+import androidx.tvprovider.media.tv.WatchNextProgram
+import dev.lumenara.data.*
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import okhttp3.mockwebserver.*
+import okio.Buffer
+import org.junit.Assert.*
+import org.junit.Rule
+import org.junit.Test
+
+class WatchNextDeviceTest {
+    @get:Rule val screen = createAndroidComposeRule<MainActivity>()
+
+    private fun published(id: String): WatchNextProgram? {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        context.contentResolver.query(TvContractCompat.WatchNextPrograms.CONTENT_URI,
+            null, null, null, null)?.use { cursor ->
+            while (cursor.moveToNext()) {
+                if (cursor.getString(cursor.getColumnIndexOrThrow("package_name")) != context.packageName) continue
+                val row = WatchNextProgram.fromCursor(cursor)
+                if (row.contentId == id) return row
+            }
+        }
+        return null
+    }
+
+    @Test fun publishResumeCompleteDisableAndRemoveSource() {
+        val test = InstrumentationRegistry.getInstrumentation()
+        val context = test.targetContext
+        val repo = Repository.get(context)
+        val prefs = Preferences(context)
+        val publisher = WatchNext.get(context)
+        val oldSetting = runBlocking { prefs.text("watch_next", "Açık").first() }
+        val oldEngine = runBlocking { prefs.text("engine", "Media3").first() }
+        val videoRequested = java.util.concurrent.CountDownLatch(1)
+        val bytes = test.context.assets.open("lumenara-test.mp4").use { it.readBytes() }
+        MockWebServer().use { server ->
+            server.dispatcher = object : Dispatcher() {
+                override fun dispatch(request: RecordedRequest): MockResponse {
+                    if (request.path == "/list") return MockResponse().setBody("""
+                        #EXTM3U
+                        #EXTINF:-1 group-title="Film",Watch Next Deneme
+                        ${server.url("/movie/test.mp4")}
+                    """.trimIndent())
+                    videoRequested.countDown()
+                    return MockResponse().setHeader("Content-Type", "video/mp4")
+                        .setBody(Buffer().write(bytes))
+                }
+            }
+            server.start()
+            var source: String? = null
+            try {
+                val movie = runBlocking {
+                    prefs.set("watch_next", "Açık")
+                    prefs.set("engine", "Media3")
+                    repo.add("Test · Watch Next", SourceSpec(server.url("/list").toString(), true))
+                    source = repo.library.snapshot().single { it.name == "Test · Watch Next" }.id
+                    val item = repo.browse(source!!, "MOVIE", "", "", "", 1).first().single()
+                    repo.updateMark(item.id) { it.copy(position = 1_000, duration = 100_000, updated = 1234) }
+                    publisher.sync()
+                    item
+                }
+                val row = checkNotNull(published(movie.id))
+                assertEquals(TvContractCompat.WatchNextPrograms.WATCH_NEXT_TYPE_CONTINUE, row.watchNextType)
+                assertEquals(1_000, row.lastPlaybackPositionMillis)
+                assertEquals(100_000, row.durationMillis)
+                assertEquals(1234L, row.lastEngagementTimeUtcMillis)
+                assertEquals(movie.title, row.title)
+                assertEquals(WatchNextPlayback(movie.id, 1_000), parseWatchNextLink(row.intentUri.toString()))
+                screen.runOnUiThread {
+                    screen.activity.startActivity(Intent(Intent.ACTION_VIEW, row.intentUri,
+                        context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP))
+                }
+                assertTrue("Deep link video isteği başlatmalı", videoRequested.await(30, java.util.concurrent.TimeUnit.SECONDS))
+                // Stop playback before changing history so the player cannot write over the fixture.
+                test.runOnMainSync { screen.activity.finish() }
+                test.waitForIdleSync()
+                runBlocking {
+                    repo.updateMark(movie.id) { it.copy(position = 95_000, duration = 100_000) }
+                    publisher.sync()
+                }
+                assertNull(published(movie.id))
+                runBlocking {
+                    repo.updateMark(movie.id) { it.copy(position = 1_000, duration = 100_000) }
+                    publisher.sync()
+                }
+                assertNotNull(published(movie.id))
+                runBlocking { prefs.set("watch_next", "Kapalı"); publisher.sync() }
+                assertNull(published(movie.id))
+                runBlocking { prefs.set("watch_next", "Açık"); publisher.sync() }
+                assertNotNull(published(movie.id))
+                runBlocking {
+                    publisher.exclude(movie.id)
+                    publisher.sync()
+                    repo.updateMark(movie.id) { it.copy(position = 2_000) }
+                    publisher.sync()
+                }
+                assertNull("Kaldırılan kart ilerleme güncellemesiyle geri gelmemeli", published(movie.id))
+                runBlocking {
+                    prefs.set("watch_next", "Kapalı")
+                    publisher.sync()
+                    prefs.set("watch_next", "Açık")
+                    publisher.sync()
+                }
+                assertNull("Kaldırılan kart ayar değişimiyle geri gelmemeli", published(movie.id))
+                runBlocking { repo.remove(source!!); publisher.sync() }
+                assertNull(published(movie.id))
+            } finally {
+                runBlocking {
+                    source?.let { repo.remove(it) }
+                    prefs.set("watch_next", oldSetting)
+                    prefs.set("engine", oldEngine)
+                    publisher.sync()
+                }
+            }
+        }
+    }
+}

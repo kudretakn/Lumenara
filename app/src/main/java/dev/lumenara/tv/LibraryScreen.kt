@@ -42,6 +42,7 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
         }
     }
     val open: (Item) -> Unit = { detail = it }
+    var launchPosition by remember { mutableLongStateOf(-1) }
     val playbackScope = rememberCoroutineScope()
     val play: (Item, List<Item>) -> Unit = { item, group ->
         playbackScope.launch {
@@ -50,18 +51,39 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
                 siblings = if (chosen.kind == "EPISODE" && chosen.parent != item.parent)
                     model.repo.episodeSnapshot(chosen.parent).seriesOrder()
                     else if (item.kind == "EPISODE") group.seriesOrder() else group
+                launchPosition = -1
                 playing = chosen
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (_: Exception) { model.notice.value = "Seçilen sürüm açılamadı." }
         }
     }
+    var launchSerial by remember { mutableIntStateOf(0) }
+    val watchNextRequest by model.watchNextPlayback.collectAsStateWithLifecycle()
+    LaunchedEffect(watchNextRequest) {
+        val target = watchNextRequest ?: return@LaunchedEffect
+        try {
+            val row = model.repo.library.item(target.itemId)
+            if (row != null && row.kind in listOf("MOVIE", "EPISODE")) {
+                val chosen = model.repo.selectedVersion(row)
+                siblings = if (chosen.kind == "EPISODE")
+                    model.repo.episodeSnapshot(chosen.parent).seriesOrder() else emptyList()
+                detail = null
+                launchPosition = target.position
+                launchSerial++
+                playing = chosen
+            } else model.notice.value = "İçerik artık bulunamıyor."
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (_: Exception) { model.notice.value = "İçerik oynatılamadı." }
+        finally { model.watchNextPlayback.compareAndSet(target, null) }
+    }
     val item = playing
     if (item != null) {
-        key(item.id, item.encryptedUrl) {
-            Playback(model, item, siblings, { playing = it }, {
+        key(item.id, item.encryptedUrl, launchSerial) {
+            Playback(model, item, siblings, { launchPosition = -1; playing = it }, {
                 if (section == "Canlı TV") returnToChannel = item.id
                 playing = null
-            }, { siblings = it })
+                launchPosition = -1
+            }, { siblings = it }, initial = launchPosition)
         }
         return
     }

@@ -19,6 +19,7 @@ class LumenaraApp : Application(), ImageLoaderFactory {
     @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     override fun onCreate() {
         super.onCreate()
+        WatchNext.get(this).start()
         androidx.media3.common.util.Log.setLogLevel(androidx.media3.common.util.Log.LOG_LEVEL_OFF)
     }
 

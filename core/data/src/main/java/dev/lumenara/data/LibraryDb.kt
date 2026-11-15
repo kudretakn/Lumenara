@@ -176,6 +176,13 @@ interface LibraryDao {
 
     @Upsert suspend fun save(mark: Mark)
 
+    // Observe only playback history; catalog changes and list removals also invalidate this query.
+    @Query("""SELECT marks.* FROM marks JOIN items USING(id)
+        WHERE marks.position>0 AND (items.kind='EPISODE' OR
+            items.kind='MOVIE' AND (marks.duration<=0 OR marks.position<marks.duration*0.95))
+        ORDER BY marks.updated DESC,marks.id""")
+    fun watchNextMarks(): Flow<List<Mark>>
+
     @Query("SELECT * FROM marks WHERE id=:id") suspend fun mark(id: String): Mark?
 
     @Query("SELECT * FROM marks WHERE id=:id") fun observeMark(id: String): Flow<Mark?>
