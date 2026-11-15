@@ -52,6 +52,7 @@ constructor(val repo: Repository, val prefs: Preferences) : androidx.lifecycle.V
     val busy = MutableStateFlow(false)
     val notice = MutableStateFlow("")
     val update = MutableStateFlow<Update?>(null)
+    val watchNextPlayback = MutableStateFlow<WatchNextPlayback?>(null)
     val remoteSearch = MutableStateFlow(0)
     val searchIntent = MutableStateFlow<Pair<Int, dev.lumenara.catalog.SearchRequest>?>(null)
     val searchPrefill = MutableStateFlow<Pair<Int, String>?>(null)
@@ -116,9 +117,12 @@ constructor(val repo: Repository, val prefs: Preferences) : androidx.lifecycle.V
 
     fun mark(item: Item, favorite: Boolean) {
         viewModelScope.launch {
+            var removed = false
             repo.updateMark(item.id) {
+                removed = !favorite && it.listed
                 if (favorite) it.copy(favorite = !it.favorite) else it.copy(listed = !it.listed)
             }
+            if (removed) WatchNext.removedFromList(item.id)
         }
     }
 

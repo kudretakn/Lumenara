@@ -21,6 +21,7 @@ class LumenaraApp : Application(), ImageLoaderFactory {
     override fun onCreate() {
         Perf.mark("startup")
         super.onCreate()
+        WatchNext.get(this).start()
         androidx.media3.common.util.Log.setLogLevel(androidx.media3.common.util.Log.LOG_LEVEL_OFF)
     }
 

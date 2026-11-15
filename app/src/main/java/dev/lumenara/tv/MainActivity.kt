@@ -32,7 +32,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // Start the model's launch snapshot before the first composition.
         val model = library
-        handleSearchIntent(intent)
+        if (savedInstanceState == null) {
+            handleSearchIntent(intent)
+            handlePlaybackIntent(intent)
+        }
         setContent { LumenaraTheme { LibraryScreen(model) } }
     }
 
@@ -40,11 +43,19 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleSearchIntent(intent)
+        handlePlaybackIntent(intent)
     }
 
     private fun handleSearchIntent(intent: Intent?) {
         val request = searchRequest(intent?.action, intent?.getStringExtra(SearchManager.QUERY))
             ?: return
         library.receiveSearchIntent(request)
+    }
+
+    private fun handlePlaybackIntent(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_VIEW) return
+        parseWatchNextLink(intent.dataString.orEmpty())?.let {
+            library.watchNextPlayback.value = it
+        }
     }
 }

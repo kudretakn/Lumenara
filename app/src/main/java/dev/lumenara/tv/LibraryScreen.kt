@@ -44,6 +44,7 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
     val pages = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
     val request by model.remoteSearch.collectAsStateWithLifecycle()
     val open: (Item) -> Unit = { detail = it }
+    var launchPosition by remember { mutableLongStateOf(-1) }
     val playbackScope = rememberCoroutineScope()
     val play: (Item, List<Item>) -> Unit = { item, group ->
         Perf.mark("channel")
@@ -53,6 +54,7 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
                 siblings = if (chosen.kind == "EPISODE" && chosen.parent != item.parent)
                     model.repo.episodeSnapshot(chosen.parent).seriesOrder()
                     else if (item.kind == "EPISODE") group.seriesOrder() else group
+                launchPosition = -1
                 playing = chosen
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (_: Exception) { model.notice.value = "Seçilen sürüm açılamadı." }
@@ -89,20 +91,44 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
             section = "Ara"
         }
     }
+    var launchSerial by remember { mutableIntStateOf(0) }
+    val watchNextRequest by model.watchNextPlayback.collectAsStateWithLifecycle()
+    LaunchedEffect(watchNextRequest) {
+        val target = watchNextRequest ?: return@LaunchedEffect
+        try {
+            val row = model.repo.library.item(target.itemId)
+            val hidden = model.repo.hidden.first()
+            if (row != null && row.kind in listOf("MOVIE", "EPISODE") && row.category !in hidden) {
+                val chosen = model.repo.selectedVersion(row)
+                check(chosen.category !in hidden)
+                siblings = if (chosen.kind == "EPISODE")
+                    model.repo.episodeSnapshot(chosen.parent).seriesOrder() else emptyList()
+                detail = null
+                launchPosition = target.position
+                launchSerial++
+                playing = chosen
+            } else model.notice.value = "İçerik artık bulunamıyor."
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (_: Exception) { model.notice.value = "İçerik oynatılamadı." }
+        finally { model.watchNextPlayback.compareAndSet(target, null) }
+    }
     val item = playing
     val sleepTimer = remember { dev.lumenara.catalog.SleepTimer() }
     if (item != null) {
         key(if (item.kind == "LIVE") "live-player" else item.id,
-            if (item.kind == "LIVE") null else item.encryptedUrl) {
-            Playback(model, item, siblings, { Perf.mark("channel"); playing = it }, {
+            if (item.kind == "LIVE") null else item.encryptedUrl, launchSerial) {
+            Playback(model, item, siblings, { Perf.mark("channel"); launchPosition = -1; playing = it }, {
                 if (section == "Canlı TV") returnToChannel = item.id
                 playing = null
-            }, { siblings = it }, sleepTimer) {
-                sleepTimer.cancel()
-                detail = null
-                playing = null
-                section = "Ana Sayfa"
-            }
+                launchPosition = -1
+            }, { siblings = it }, initial = launchPosition, sleepTimer = sleepTimer,
+                sleepTimerExpired = {
+                    sleepTimer.cancel()
+                    detail = null
+                    playing = null
+                    launchPosition = -1
+                    section = "Ana Sayfa"
+                })
         }
         return
     }

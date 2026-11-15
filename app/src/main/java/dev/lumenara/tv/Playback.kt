@@ -328,6 +328,7 @@ internal fun Playback(
     select: (Item) -> Unit,
     back: () -> Unit,
     changeGroup: (List<Item>) -> Unit,
+    initial: Long = -1,
     sleepTimer: dev.lumenara.catalog.SleepTimer? = null,
     sleepTimerExpired: () -> Unit = back,
 ) {
@@ -414,7 +415,7 @@ internal fun Playback(
         .collectAsStateWithLifecycle("Açık")
     if (preferred == null) return
     var vlc by remember(item.id) { mutableStateOf(preferred == "VLC") }
-    var transferred by remember(item.id) { mutableLongStateOf(-1) }
+    var transferred by remember(item.id) { mutableLongStateOf(initial) }
     var switched by remember(item.id) { mutableStateOf(false) }
     if (vlc) {
         VlcScreen(
