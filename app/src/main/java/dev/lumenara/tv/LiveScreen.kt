@@ -44,7 +44,7 @@ internal fun LiveScreen(
     var category by rememberSaveable(source) { mutableStateOf<String?>(null) }
     var categoryTitle by rememberSaveable(source) { mutableStateOf("") }
     var query by rememberSaveable(source, category) { mutableStateOf("") }
-    var limit by rememberSaveable(source, category, query) { mutableIntStateOf(80) }
+    var limit by rememberSaveable(source, category, query) { mutableIntStateOf(LIVE_PAGE_SIZE) }
     var focusedId by rememberSaveable(source) { mutableStateOf<String?>(null) }
     val pages = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -109,7 +109,7 @@ internal fun LiveScreen(
             val channelNumbers = liveChannelNumbers(model, source, paged?.loaded() ?: rows.orEmpty())
             pages.SaveableStateProvider("channels-$category") {
                 LiveChannelGrid(model, categoryTitle, rows, channelNumbers, now, query, { query = it },
-                    limit, { limit += 80 }, returnToChannel ?: focusedId, { item ->
+                    limit, { limit += LIVE_PAGE_SIZE }, returnToChannel ?: focusedId, { item ->
                         focusedId = item.id
                         numberSource = item.source
                     }, onChannelFocusRestored, open, play, paged, entries.orEmpty().filter { it.id != "timeline" }) {
@@ -132,7 +132,7 @@ private fun LiveChannelGrid(model: LibraryModel, title: String, result: List<Ite
     val rows = result.orEmpty()
     val loading = if (paged != null) !paged.countLoaded else result == null
     val grid = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
-    PrefetchArtwork(model, grid, rows, columns = 4)
+    PrefetchArtwork(model, grid, rows, columns = LIVE_GRID_COLUMNS, paged = paged)
     val focus = remember { FocusRequester() }
     val searchFocus = remember { FocusRequester() }
     val fieldFocus = remember { FocusRequester() }
@@ -170,7 +170,7 @@ private fun LiveChannelGrid(model: LibraryModel, title: String, result: List<Ite
         if (targetReady) { withFrameNanos { }; withFrameNanos { }; Perf.since("category", "category_grid_first_draw") }
     }
     Box(Modifier.fillMaxSize().background(LumenColors.bg)) {
-        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(Spacing.titleGap)) {
+        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
             Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
                 if (searching) {
@@ -193,19 +193,19 @@ private fun LiveChannelGrid(model: LibraryModel, title: String, result: List<Ite
                 }
             }
             androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
-                androidx.compose.foundation.lazy.grid.GridCells.Fixed(4), state = grid,
+                androidx.compose.foundation.lazy.grid.GridCells.Fixed(LIVE_GRID_COLUMNS), state = grid,
                 modifier = Modifier.weight(1f).testTag("live-channels").focusRestorer().focusGroup(),
                 contentPadding = PaddingValues(vertical = Spacing.unit),
-                horizontalArrangement = Arrangement.spacedBy(Spacing.cardGap),
-                verticalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
-                if (loading) loadingCards(204.dp)
-                if (!loading && count == 0) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(4) }) {
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (loading) loadingCards(60.dp, LIVE_GRID_COLUMNS * 6)
+                if (!loading && count == 0) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
                     Text("Eşleşen içerik yok.", color = LumenColors.textSecondary)
                 }
                 items(count, key = { it }) { index ->
                     val item = if (paged != null) paged[index] else rows[index]
                     if (item == null) {
-                        LoadingCard(Modifier.fillMaxWidth().height(204.dp))
+                        LoadingCard(Modifier.fillMaxWidth().height(60.dp))
                         return@items
                     }
                     if (index == target && positioned && requestPending && !searching) LaunchedEffect(Unit) {
@@ -219,9 +219,9 @@ private fun LiveChannelGrid(model: LibraryModel, title: String, result: List<Ite
                     },
                         Modifier.fillMaxWidth()
                             .then(if (index == target) Modifier.focusRequester(focus) else Modifier),
-                        number = numbers[item.id], operations = { open(item) })
+                        number = numbers[item.id], operations = { open(item) }, compact = true)
                 }
-                if (paged == null && count >= limit) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(4) }) {
+                if (paged == null && count >= limit) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
                     FocusCard(more, Modifier.fillMaxWidth()) {
                         Text("Devamını göster", Modifier.padding(12.dp))
                     }

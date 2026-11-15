@@ -58,6 +58,7 @@ internal fun ChannelCard(
     modifier: Modifier = Modifier.width(200.dp),
     number: Int? = null,
     operations: (() -> Unit)? = null,
+    compact: Boolean = false,
 ) {
     var restoreFocus by rememberSaveable(item.id) { mutableStateOf(false) }
     val requester = remember { FocusRequester() }
@@ -71,6 +72,35 @@ internal fun ChannelCard(
     val slots = liveProgrammes(model, item, now)
     val current = slots.firstOrNull { now >= it.start && now < it.end }
     val logo by produceState<String?>(null, item.id, item.logo) { value = model.repo.poster(item) }
+    if (compact) {
+        FocusCard(
+            onClick = { restoreFocus = true; play() },
+            onLongClick = operations?.let { action -> { restoreFocus = true; action() } },
+            modifier = modifier.height(60.dp).focusRequester(requester)
+                .testTag("live-channel-${item.id}")
+                .semantics { contentDescription = item.title }
+                .onFocusChanged { if (it.isFocused) focus(item) },
+        ) {
+            Box(Modifier.fillMaxSize()) {
+                Row(Modifier.fillMaxSize().padding(horizontal = Spacing.unit),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+                    ChannelLogo(model, item, logo, Modifier.size(40.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(listOfNotNull(number?.toString(), item.title).joinToString(" · "),
+                            style = LumenType.label, color = LumenColors.textPrimary,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(current?.title.orEmpty(), style = LumenType.meta,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+                if (current != null) ProgressLine(
+                    (now - current.start).toFloat() / (current.end - current.start).coerceAtLeast(1),
+                    Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(2.dp))
+            }
+        }
+        return
+    }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
         FocusCard(
             onClick = { restoreFocus = true; play() },

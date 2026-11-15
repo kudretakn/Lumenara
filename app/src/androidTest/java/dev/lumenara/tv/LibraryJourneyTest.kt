@@ -147,8 +147,10 @@ class LibraryJourneyTest {
                     screen.onAllNodesWithTag("category-Son izlenenler").fetchSemanticsNodes().isNotEmpty()
                 }
                 val category = screen.onNodeWithTag("category-Son izlenenler").fetchSemanticsNode().boundsInRoot
-                assertEquals("Kategori kartı genişliği", 200f, category.width / density, 1f)
-                assertEquals("Kategori kartı yüksekliği", 88f, category.height / density, 1f)
+                val categoryGrid = screen.onNodeWithTag("category-grid").fetchSemanticsNode().boundsInRoot
+                assertEquals("Kategori kartı genişliği", (categoryGrid.width / density - 5 * 10f) / 6,
+                    category.width / density, 1f)
+                assertEquals("Kategori kartı yüksekliği", 60f, category.height / density, 1f)
                 screen.onNodeWithTag("category-search")
                     .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus)
                 screen.ok()

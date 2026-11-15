@@ -173,32 +173,38 @@ internal class ArtworkInterceptor(private val disk: coil.disk.DiskCache,
 
 /** Enqueue at most one row beyond the viewport; dispose requests when the window changes. */
 @Composable
-internal fun PrefetchArtwork(model: LibraryModel, grid: LazyGridState, rows: List<Item>, columns: Int = 6) {
+internal fun PrefetchArtwork(model: LibraryModel, grid: LazyGridState, rows: List<Item>, columns: Int = 6,
+    channelSpan: Int = 1, paged: LivePages? = null) {
     val context = LocalContext.current
     val sources by model.sources.collectAsStateWithLifecycle()
-    LaunchedEffect(grid, rows, sources, columns) {
+    LaunchedEffect(grid, rows, sources, columns, channelSpan, paged) {
         snapshotFlow {
             val visible = grid.layoutInfo.visibleItemsInfo
             val lastRow = visible.filter { it.row >= 0 }.maxOfOrNull { it.row }
             val last = visible.filter { it.row == lastRow }.maxOfOrNull { it.index }
             val size = visible.lastOrNull { it.index == last }?.size
-            last to size
-        }.distinctUntilChanged().collectLatest { (last, size) ->
-            if (last == null || size == null) return@collectLatest
+            val count = paged?.count ?: rows.size
+            val next = if (last == null) emptyList() else
+                (last + 1 until minOf(count, last + 1 + columns)).map { index ->
+                    if (paged != null) paged[index] else rows.getOrNull(index)
+                }
+            size to next
+        }.distinctUntilChanged().collectLatest { (size, next) ->
+            if (size == null) return@collectLatest
             delay(100)
             val pending = mutableListOf<coil.request.Disposable>()
             try {
                 var slots = 0
-                for (index in last + 1 until minOf(rows.size, last + 1 + columns)) {
-                    val item = rows[index]
-                    val span = if (columns == 6 && item.kind == "LIVE") 2 else 1
+                for (candidate in next) {
+                    val item = candidate ?: break
+                    val span = if (item.kind == "LIVE") channelSpan else 1
                     if (slots + span > columns) break
                     slots += span
                     val address = model.repo.poster(item) ?: continue
                     val allow = sources?.firstOrNull { it.id == item.source }?.allowHttp == true
                     val px = context.resources.displayMetrics.density
-                    val width = if (item.kind == "LIVE") (36 * px).toInt() else size.width
-                    val height = if (item.kind == "LIVE") width else (150 * px).toInt()
+                    val width = if (item.kind == "LIVE") (28 * px).toInt() else size.width
+                    val height = if (item.kind == "LIVE") width else (width * 1.5f).toInt()
                     pending += context.imageLoader.enqueue(artworkRequest(context, address, allow, width, height))
                 }
                 kotlinx.coroutines.awaitCancellation()

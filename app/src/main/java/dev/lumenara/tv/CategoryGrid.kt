@@ -21,6 +21,8 @@ import dev.lumenara.catalog.searchable
 import dev.lumenara.data.LiveCategoryCount
 import dev.lumenara.design.*
 
+private const val CATEGORY_COLUMNS = 6
+
 internal data class CategoryEntry(val id: String, val name: String, val count: Int, val countKnown: Boolean = true)
 
 internal fun providerCategories(groups: List<LiveCategoryCount>): List<CategoryEntry> {
@@ -67,7 +69,7 @@ internal fun CategoryGrid(title: String, entries: List<CategoryEntry>?, choose: 
             positioned = true
         }
     }
-    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(Spacing.titleGap)) {
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
         Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
             if (searching) {
@@ -100,17 +102,17 @@ internal fun CategoryGrid(title: String, entries: List<CategoryEntry>?, choose: 
             Text("İçerik yok.", style = LumenType.body, color = LumenColors.textSecondary)
             LumenButton(onClick = { back?.onBackPressed() }, modifier = Modifier.focusRequester(focus)) { Text("Geri") }
         }
-        LazyVerticalGrid(GridCells.Fixed(4), state = grid,
-            modifier = Modifier.widthIn(max = 848.dp).fillMaxWidth().weight(1f)
+        LazyVerticalGrid(GridCells.Fixed(CATEGORY_COLUMNS), state = grid,
+            modifier = Modifier.fillMaxWidth().weight(1f)
                 .testTag("category-grid").focusGroup(),
             contentPadding = PaddingValues(top = Spacing.unit, bottom = Spacing.shelfGap),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.cardGap),
-            verticalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
-            if (entries == null) items(8, key = { "loading-$it" }) {
-                Box(Modifier.fillMaxWidth().height(88.dp)
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (entries == null) items(CATEGORY_COLUMNS * 6, key = { "loading-$it" }) {
+                Box(Modifier.fillMaxWidth().height(60.dp)
                     .background(LumenColors.surface2, RoundedCornerShape(Radii.card)).testTag("list-loading"))
             }
-            if (entries != null && entries.isNotEmpty() && rows.isEmpty()) item(span = { GridItemSpan(4) }) {
+            if (entries != null && entries.isNotEmpty() && rows.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
                 Text("Eşleşen kategori yok.", style = LumenType.body, color = LumenColors.textSecondary)
             }
             itemsIndexed(rows, key = { _, it -> it.id }) { index, entry ->
@@ -124,18 +126,18 @@ internal fun CategoryGrid(title: String, entries: List<CategoryEntry>?, choose: 
                     searching = false
                     query = ""
                     choose(entry)
-                }, modifier = Modifier.fillMaxWidth().height(88.dp).testTag("category-${entry.name}")
+                }, modifier = Modifier.fillMaxWidth().height(60.dp).testTag("category-${entry.name}")
                     .semantics { contentDescription = if (entry.countKnown) "${entry.name} · ${entry.count}" else entry.name }
                     .then(if (index == target) Modifier.focusRequester(focus) else Modifier)
                     .onFocusChanged { if (it.isFocused) last = entry.id }) {
-                    Column(Modifier.fillMaxSize().padding(horizontal = Spacing.cardGap, vertical = Spacing.unit),
+                    Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = Spacing.unit),
                         verticalArrangement = Arrangement.Center,
                         horizontalAlignment = Alignment.Start) {
                         Row(verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {
                             categoryIcon(entry.id)?.let { LumenIcon(it, null, size = 20.dp) }
                             Text(entry.name, style = LumenType.cardTitle, color = LumenColors.textPrimary,
-                                maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         if (entry.countKnown) Text(entry.count.toString(), style = LumenType.meta)
                     }

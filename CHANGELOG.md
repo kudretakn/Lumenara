@@ -1,5 +1,9 @@
 # Lumenara sürüm kaydı
 
+## 0.5.1 · 16 Kasım 2026
+
+- Daha sık ızgaralar: kategoriler ve kanallar 6 sütun, afişler 8 sütun.
+
 ## 0.5.0 · 15 Kasım 2026
 
 - Yeni tasarım ("Quiet Cinema"): koyu nötr zemin, tek altın vurgu, Inter yazı tipi, 8 dp ızgara, cam efekti ve bulanıklık yok.

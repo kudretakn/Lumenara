@@ -390,11 +390,14 @@ internal fun Browse(
     }
 }
 
+private const val POSTER_GRID_COLUMNS = 8
+private const val POSTER_PAGE_SIZE = POSTER_GRID_COLUMNS * 10
+
 @Composable
 private fun PosterGridContent(model: LibraryModel, section: String, source: String, kind: String,
     category: String, shelf: String, categoryTitle: String, open: (Item) -> Unit,
     play: (Item, List<Item>) -> Unit) {
-    var limit by rememberSaveable { mutableIntStateOf(80) }
+    var limit by rememberSaveable { mutableIntStateOf(POSTER_PAGE_SIZE) }
     var advanced by rememberSaveable { mutableStateOf(false) }
     var year by rememberSaveable { mutableStateOf("") }
     var genre by rememberSaveable { mutableStateOf("") }
@@ -427,7 +430,7 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
     val httpSources = remember(sources) { sources.orEmpty().filter { it.allowHttp }.map { it.id }.toSet() }
     val density = LocalDensity.current
     var gridWidth by remember { mutableIntStateOf(0) }
-    val posterWidth = with(density) { if (gridWidth == 0) 0 else ((gridWidth - 6 * 16.dp.roundToPx()) / 7).coerceAtLeast(1) }
+    val posterWidth = with(density) { if (gridWidth == 0) 0 else ((gridWidth - (POSTER_GRID_COLUMNS - 1) * Spacing.cardGap.roundToPx()) / POSTER_GRID_COLUMNS).coerceAtLeast(1) }
     val posterHeight = (posterWidth * 1.5f).toInt()
     val grid = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
     var lastPoster by rememberSaveable(source, category, shelf) { mutableStateOf<String?>(null) }
@@ -442,7 +445,7 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
             positioned = true
         }
     }
-    PrefetchArtwork(model, grid, rows, columns = 7)
+    PrefetchArtwork(model, grid, rows, columns = POSTER_GRID_COLUMNS, channelSpan = 2)
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { wallClockTicks(30_000).collect { now = it } }
     BackHandler(advanced) { closeFilters() }
@@ -474,7 +477,7 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
                 }
             }
             androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
-                columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(7),
+                columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(POSTER_GRID_COLUMNS),
                 state = grid,
                 modifier = Modifier.weight(1f).onSizeChanged { gridWidth = it.width }.testTag("poster-grid").focusRestorer().focusGroup(),
                 // TV safe area plus the title/year below the focusable poster.
@@ -483,7 +486,7 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
                 verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
                 if (loading) loadingCards(224.dp)
-                if (!loading && rows.isEmpty()) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(7) }) {
+                if (!loading && rows.isEmpty()) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
                     Column {
                         Text("Eşleşen içerik yok.", color = Ink.muted)
                         if (kind.isEmpty()) {
@@ -511,8 +514,8 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
                         artworkHttp = entry.source in httpSources,
                         artworkWidth = posterWidth, artworkHeight = posterHeight)
                 }
-                if (rows.size >= limit) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(7) }) {
-                    Button(onClick = { limit += 80 }) { Text("Devamını göster") }
+                if (rows.size >= limit) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                    Button(onClick = { limit += POSTER_PAGE_SIZE }) { Text("Devamını göster") }
                 }
             }
         }

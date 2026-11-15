@@ -10,7 +10,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import dev.lumenara.design.Ink
+import dev.lumenara.design.LumenColors
+import dev.lumenara.design.Radii
 import kotlinx.coroutines.flow.Flow
 
 /** A replacement query starts unknown, even when the previous query had results. */
@@ -22,12 +23,12 @@ internal fun <T> Flow<T>.collectAsLoadingState(): State<T?> = key(this) {
 @Composable
 internal fun LoadingCard(modifier: Modifier = Modifier) {
     // Static, non-focusable cards avoid animation work and loading-text flicker.
-    Box(modifier.background(Ink.stroke.copy(alpha = .25f), RoundedCornerShape(12.dp))
+    Box(modifier.background(LumenColors.surface2, RoundedCornerShape(Radii.card))
         .testTag("list-loading"))
 }
 
-internal fun LazyGridScope.loadingCards(height: Dp) {
-    items(8, key = { "loading-$it" }) {
+internal fun LazyGridScope.loadingCards(height: Dp, count: Int = 8) {
+    items(count, key = { "loading-$it" }) {
         LoadingCard(Modifier.fillMaxWidth().height(height))
     }
 }

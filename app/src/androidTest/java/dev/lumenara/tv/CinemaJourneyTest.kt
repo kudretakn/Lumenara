@@ -52,8 +52,9 @@ class CinemaJourneyTest {
                 "Mavi Sessizlik",
                 "Son Sefer",
                 "Kadife Gece",
+                "Sessiz Liman",
             )
-        val art = (0..6).map { "tile$it" }
+        val art = titles.indices.map { "tile${it % 7}" }
         val previous = Coil.imageLoader(context)
         val loader =
             ImageLoader.Builder(context)
@@ -271,9 +272,10 @@ class CinemaJourneyTest {
                 val gridCards = screen.onAllNodes(hasContentDescription("Açık Deniz") or
                     hasContentDescription("Kızıl Ufuk") or hasContentDescription("Kumların Ötesi") or
                     hasContentDescription("Gece Hattı") or hasContentDescription("Mavi Sessizlik") or
-                    hasContentDescription("Son Sefer") or hasContentDescription("Kadife Gece"))
+                    hasContentDescription("Son Sefer") or hasContentDescription("Kadife Gece") or
+                    hasContentDescription("Sessiz Liman"))
                     .fetchSemanticsNodes().filter { it.boundsInRoot.width > 0 }
-                assertEquals("Yedi afiş ilk satıra sığmalı", 7, gridCards.size)
+                assertEquals("Sekiz afiş ilk satıra sığmalı", 8, gridCards.size)
                 assertTrue(gridCards.maxOf { it.boundsInRoot.top } - gridCards.minOf { it.boundsInRoot.top } < 20f)
                 assertTrue("Afiş adı ekranın içinde kalmalı",
                     screen.onNode(hasText("Kadife Gece") and hasAnyAncestor(hasTestTag("poster-grid")))
