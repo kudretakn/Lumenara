@@ -110,6 +110,21 @@ data class LiveCategoryCount(val category: String, val count: Int)
 /** Lightweight projection; this is not a persisted entity or schema change. */
 data class LiveChannelId(val id: String, val source: String)
 
+/** Columns needed to group versions; deliberately excludes summaries, cast and playback URLs. */
+data class VersionCandidate(
+    val id: String,
+    val source: String,
+    val title: String,
+    val kind: String,
+    val search: String,
+    val year: String,
+    val category: String,
+) {
+    fun asItem() = Item(id = id, source = source, title = title, category = category,
+        kind = kind, tvgId = "", encryptedUrl = "", search = search, generation = 0,
+        logo = "", year = year)
+}
+
 @Dao
 interface LibraryDao {
     @RawQuery(observedEntities = [Item::class, Mark::class, Member::class])
@@ -315,8 +330,8 @@ interface LibraryDao {
     @Query("SELECT * FROM items WHERE id=:id")
     suspend fun item(id: String): Item?
 
-    @Query("SELECT * FROM items WHERE source=:source AND kind=:kind AND category NOT IN (:hidden)")
-    suspend fun versionCandidates(source: String, kind: String, hidden: List<String> = emptyList()): List<Item>
+    @Query("SELECT id, source, title, kind, search, year, category FROM items WHERE source=:source AND kind=:kind AND category NOT IN (:hidden)")
+    suspend fun versionCandidates(source: String, kind: String, hidden: List<String> = emptyList()): List<VersionCandidate>
 
     @Query("SELECT * FROM items WHERE versionKey=:key ORDER BY versionRank")
     suspend fun versionRows(key: String): List<Item>

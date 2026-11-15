@@ -14,6 +14,15 @@ class VersionsTest {
         assertEquals(2, rows.size)
         assertTrue(rows.first().sameProduction(rows.last()))
     }
+    @Test fun versionCandidateProjectionContainsOnlyGroupingData() {
+        val projected = VersionCandidate("id", "provider", "Kıyı Dublaj", "MOVIE",
+            "Kıyı Dublaj [tmdb:42]", "2024", "Films").asItem()
+        assertEquals("provider|MOVIE|tmdb:42", projected.productionKey())
+        assertEquals("2024", projected.year)
+        assertEquals("", projected.encryptedUrl)
+        assertEquals("", projected.summary)
+        assertEquals("", projected.castNames)
+    }
     @Test fun remakeSourceAndMediaKindAreIndependent() {
         val rows = listOf(item("1", "Kıyı"), item("2", "Kıyı", "1999"), item("3", "Kıyı", source = "other"), item("4", "Kıyı", kind = "SERIES"))
         assertEquals(4, rows.mergeVersions().size)
