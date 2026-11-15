@@ -367,7 +367,7 @@ class CinemaJourneyTest {
                 screen.ok()
                 node("Liste adresi gir").assertExists()
                 screen.back()
-                screen.onNodeWithTag("settings-group-Oynatıcı").performClick()
+                screen.openSettingsGroup("Oynatıcı")
                 screen.onNodeWithTag("settings-list").performScrollToNode(hasText("Varsayılan motor · Media3"))
                 node("Varsayılan motor · Media3").assertExists()
             } finally {

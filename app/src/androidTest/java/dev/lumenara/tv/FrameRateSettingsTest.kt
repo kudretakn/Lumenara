@@ -63,7 +63,7 @@ class FrameRateSettingsTest {
         val prefs = Preferences(InstrumentationRegistry.getInstrumentation().targetContext)
         screen.waitUntil(30_000) { screen.onAllNodesWithTag("hub").fetchSemanticsNodes().isNotEmpty() }
         screen.openHubCard("Ayarlar")
-        screen.onNodeWithTag("settings-group-Oynatıcı").performClick()
+        screen.openSettingsGroup("Oynatıcı")
         for (next in listOf("Her zaman", "Kapalı", FRAME_RATE_DEFAULT)) {
             screen.onNodeWithTag("settings-list").performScrollToNode(hasText("Kare hızını eşle", substring = true))
             val choice = hasText("Kare hızını eşle", substring = true)
@@ -75,6 +75,10 @@ class FrameRateSettingsTest {
             }
             assertEquals(next, runBlocking { prefs.text("frame_rate", FRAME_RATE_DEFAULT).first() })
             screen.activityRule.scenario.recreate()
+            screen.waitUntil(5_000) {
+                screen.onAllNodes(hasTestTag("settings-group-Oynatıcı") and isSelected())
+                    .fetchSemanticsNodes().isNotEmpty()
+            }
             screen.onNodeWithTag("settings-list").performScrollToNode(choice)
             screen.waitUntil(5_000) {
                 screen.onAllNodesWithText("Kare hızını eşle · $next").fetchSemanticsNodes().isNotEmpty()
