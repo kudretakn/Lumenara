@@ -105,4 +105,33 @@ class ConditionalRefreshTest {
         assertTrue(error is SourceFailure)
         assertTrue(cache.root.listFiles()!!.isEmpty())
     }
+
+    @Test fun changedBaseUrlWith304RequiresAnUnconditionalBody() = runTest {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("relative.ts").addHeader("ETag", "v1"))
+            server.enqueue(MockResponse().setResponseCode(304))
+            server.enqueue(MockResponse().setBody("relative.ts").addHeader("ETag", "v1"))
+            val previous = Transport.download(server.url("/old/list").toString(), true, cache.root).use { it.state }
+            Transport.download(server.url("/new/list").toString(), true, cache.root, previous).use { body ->
+                assertTrue(body.importIfChanged { })
+                assertEquals(server.url("/new/list").toString(), body.state.finalUrl)
+            }
+            server.takeRequest()
+            assertEquals("v1", server.takeRequest().getHeader("If-None-Match"))
+            assertNull(server.takeRequest().getHeader("If-None-Match"))
+            assertTrue(cache.root.listFiles()!!.isEmpty())
+        }
+    }
+
+    @Test fun cancellationDeletesTemporaryBody() = MockWebServer().use { server ->
+        server.enqueue(MockResponse().setBody("catalog"))
+        var checks = 0
+        val error = runCatching {
+            Transport.download(server.url("/").toString(), true, cache.root, checkActive = {
+                if (++checks == 3) throw kotlinx.coroutines.CancellationException("Refresh stopped")
+            })
+        }.exceptionOrNull()
+        assertTrue(error is kotlinx.coroutines.CancellationException)
+        assertTrue(cache.root.listFiles()!!.isEmpty())
+    }
 }

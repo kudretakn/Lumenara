@@ -4,6 +4,11 @@ import androidx.test.platform.app.InstrumentationRegistry
 import dev.lumenara.data.*
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 import okhttp3.mockwebserver.*
 import org.junit.*
 import org.junit.Assert.*
@@ -52,9 +57,9 @@ class CatalogIntegrationTest {
             repo.library.browse(source.id, "", "", "", "favorite", 20).first().single().id,
         )
         assertEquals(500L, repo.library.mark(item.id)?.position)
-        response(
-            """<tv><programme channel="tr7" start="20261105120000 +0300" stop="20261105140000 +0300"><title>Öğle</title></programme></tv>"""
-        )
+        val now = Instant.now()
+        val stamp = DateTimeFormatter.ofPattern("yyyyMMddHHmmss Z").withZone(ZoneOffset.UTC)
+        response("""<tv><programme channel="tr7" start="${stamp.format(now.minusSeconds(60))}" stop="${stamp.format(now.plusSeconds(3600))}"><title>Öğle</title></programme></tv>""")
         repo.addGuide(source.id, server.url("/guide").toString())
         val slot =
             repo.guide.guide(source.id, "tr7", "isik", 0, Long.MAX_VALUE, "").first().single()
@@ -69,6 +74,47 @@ class CatalogIntegrationTest {
         repo.remove(source.id)
         assertNull(repo.library.mark(item.id))
         assertEquals(1, repo.library.count(other.id))
+    }
+
+    @Test
+    fun unchangedCatalogPreservesGenerationAnd304GuidePrunesExpiredSlots() = runBlocking {
+        val list = "#EXTM3U\n#EXTINF:-1 tvg-id=\"c\",Kanal\n${server.url("/live.ts")}"
+        server.enqueue(MockResponse().setBody(list).setHeader("ETag", "catalog-v1"))
+        repo.add("Test · Conditional", SourceSpec(server.url("/catalog").toString(), true))
+        val source = repo.library.snapshot().single { it.name == "Test · Conditional" }
+        val original = repo.library.browse(source.id, "LIVE", "", "", "", 10).first().single()
+        server.enqueue(MockResponse().setResponseCode(304))
+        repo.refresh(source.id)
+        assertTrue(repo.library.source(source.id)!!.refreshed > source.refreshed)
+        assertEquals(original, repo.library.item(original.id))
+        server.enqueue(MockResponse().setBody(list))
+        repo.refresh(source.id)
+        assertEquals(original, repo.library.item(original.id))
+
+        val now = Instant.now()
+        val stamp = DateTimeFormatter.ofPattern("yyyyMMddHHmmss Z").withZone(ZoneOffset.UTC)
+        fun programme(title: String, start: Instant, end: Instant) =
+            """<programme channel="c" start="${stamp.format(start)}" stop="${stamp.format(end)}"><title>$title</title></programme>"""
+        val xml = "<tv>" + programme("Şimdi", now.minusSeconds(60), now.plusSeconds(3600)) +
+            programme("Eski", now.minusSeconds(86400), now.minusSeconds(80000)) +
+            programme("Uzak", now.plusSeconds(4 * 86400L), now.plusSeconds(5 * 86400L)) + "</tv>"
+        server.enqueue(MockResponse().setBody(xml).setHeader("ETag", "guide-v1"))
+        repo.addGuide(source.id, server.url("/guide").toString())
+        val slots = repo.guide.guide(source.id, "c", "", 0, Long.MAX_VALUE, "").first()
+        assertEquals(listOf("Şimdi"), slots.map { it.title })
+        // Simulate a retained programme that has aged beyond the moving past boundary.
+        withContext(Dispatchers.IO) {
+            repo.guide.slots(listOf(slots.single().copy(start = now.minusSeconds(86400).toEpochMilli(),
+                end = now.minusSeconds(80000).toEpochMilli(), title = "Expired")))
+        }
+        server.enqueue(MockResponse().setResponseCode(304))
+        repo.refreshGuides(source.id)
+        assertEquals(slots, repo.guide.guide(source.id, "c", "", 0, Long.MAX_VALUE, "").first())
+        server.takeRequest()
+        assertEquals("catalog-v1", server.takeRequest().getHeader("If-None-Match"))
+        server.takeRequest()
+        server.takeRequest()
+        assertEquals("guide-v1", server.takeRequest().getHeader("If-None-Match"))
     }
 
     @Test

@@ -49,9 +49,16 @@ object Transport {
             if (previous.modified.isNotEmpty()) header("If-Modified-Since", previous.modified)
         }.build()
         return client(allowHttp).newCall(request).execute().use { response ->
+            checkActive()
             if (response.code == 304) {
-                if (previous.etag.isEmpty() && previous.modified.isEmpty())
+                if (previous.digest.isEmpty() || (previous.etag.isEmpty() && previous.modified.isEmpty()))
                     throw SourceFailure("Sağlayıcı beklenmeyen HTTP 304 yanıtını verdi.")
+                // A redirect can change the base of relative playlist entries. A 304 alone
+                // cannot establish that those entries still describe the imported catalog.
+                if (previous.finalUrl != response.request.url.toString()) {
+                    response.close()
+                    return@use download(url, allowHttp, cache, limit = limit, checkActive = checkActive)
+                }
                 return@use Download(null, response.request.url.toString(), previous.copy(
                     etag = response.header("ETag") ?: previous.etag,
                     modified = response.header("Last-Modified") ?: previous.modified,
@@ -72,6 +79,7 @@ object Transport {
                         }
                     }
                 }
+                checkActive()
                 val state = FetchState(response.header("ETag").orEmpty(), response.header("Last-Modified").orEmpty(),
                     digest.digest().joinToString("") { "%02x".format(it) })
                 // Relative M3U entries depend on the final URL as well as the body.

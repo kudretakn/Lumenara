@@ -305,18 +305,20 @@ class Repository private constructor(private val context: Context) {
                 downloaded = Transport.download(spec.address, spec.allowHttp, context.cacheDir, previous,
                     checkActive = { job.ensureActive() })
             job.ensureActive()
-            val state = snapshot?.state ?: downloaded?.state
-            val providerLimit = snapshot?.account?.optJSONObject("user_info")?.optInt("max_connections", 0) ?: 0
-            if (providerLimit > 0) preferences.set("provider_${source.id}", providerLimit.toString())
-            val changed = if (downloaded != null) downloaded.importIfChanged {
-                importChanged(source, spec, token, xtream, snapshot, downloaded)
-            } else if (snapshot?.unchanged != true) {
-                importChanged(source, spec, token, xtream, snapshot, downloaded)
+            val body = downloaded
+            val catalog = snapshot
+            val state = catalog?.state ?: body?.state
+            val changed = if (body != null) body.importIfChanged {
+                importChanged(source, spec, token, xtream, catalog, body)
+            } else if (catalog?.unchanged != true) {
+                importChanged(source, spec, token, xtream, catalog, body)
                 true
             } else false
             if (!changed) {
                 library.save(source.copy(refreshed = token))
             }
+            val providerLimit = catalog?.account?.optJSONObject("user_info")?.optInt("max_connections", 0) ?: 0
+            if (providerLimit > 0) preferences.set("provider_${source.id}", providerLimit.toString())
             if (state != null) preferences.setFetchState(key, state)
         } finally {
             snapshot?.close()
@@ -328,7 +330,6 @@ class Repository private constructor(private val context: Context) {
         xtream: Xtream?, snapshot: Xtream.Snapshot?, downloaded: Download?) {
         val staged = CatalogStage(context.cacheDir, source.id, token)
         val job = currentCoroutineContext()
-        var providerLimit = 0
         try {
             staged.write { append ->
                 val grouper = SeriesGrouper()
@@ -338,7 +339,7 @@ class Repository private constructor(private val context: Context) {
                     else grouper.accept(row) { append(item(source.id, token, it)) }
                 }
                 when {
-                    spec.user.isNotEmpty() -> providerLimit = checkNotNull(xtream).read(snapshot, ::accept)
+                    spec.user.isNotEmpty() -> checkNotNull(xtream).read(snapshot, ::accept)
                     spec.address.startsWith("content://") ->
                         context.contentResolver.openInputStream(Uri.parse(spec.address))?.use {
                             Playlist.read(
@@ -359,8 +360,6 @@ class Repository private constructor(private val context: Context) {
                         }
                 }
             }
-            if (providerLimit > 0)
-                Preferences(context).set("provider_${source.id}", providerLimit.toString())
             db.withTransaction {
                 library.save(source)
                 staged.read { rows -> job.ensureActive(); library.writeBatch(rows) }
@@ -369,6 +368,7 @@ class Repository private constructor(private val context: Context) {
                 library.orphans(source.id)
                 for (kind in listOf("MOVIE", "SERIES")) {
                     library.versionCandidates(source.id, kind).versionGroups().filter { it.size > 1 }.forEach { versions ->
+                        job.ensureActive()
                         val marks = versions.mapNotNull { library.mark(it.id) }
                         val newest = marks.maxByOrNull { it.updated }
                         if (newest != null) {
@@ -377,6 +377,7 @@ class Repository private constructor(private val context: Context) {
                         }
                     }
                 }
+                job.ensureActive()
                 library.save(source.copy(refreshed = token, count = library.count(source.id)))
             }
             versionIndex.keys.removeAll { it.startsWith("${source.id}|") }

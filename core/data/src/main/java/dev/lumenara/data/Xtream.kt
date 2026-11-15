@@ -19,7 +19,8 @@ internal class Xtream(private val spec: SourceSpec) {
             .addQueryParameter("password", spec.password)
             .apply { if (action.isNotEmpty()) addQueryParameter("action", action) }
 
-    internal class Snapshot(val account: JSONObject, val bodies: Map<String, Download>, val state: FetchState, val unchanged: Boolean) : java.io.Closeable {
+    internal class Snapshot(val account: JSONObject, val bodies: Map<String, Download>, val state: FetchState,
+        val unchanged: Boolean, val checkActive: () -> Unit = {}) : java.io.Closeable {
         override fun close() { bodies.values.forEach { it.close() } }
     }
 
@@ -39,7 +40,8 @@ internal class Xtream(private val spec: SourceSpec) {
             bodies.forEach { (action, body) -> digest.update("$action:${body.state.digest}\n".toByteArray(Charsets.UTF_8)) }
             digest.update(account.optJSONObject("server_info")?.optString("timezone").orEmpty().toByteArray(Charsets.UTF_8))
             val state = FetchState(digest = digest.digest().joinToString("") { "%02x".format(it) })
-            return Snapshot(account, bodies, state, state.digest == previous.digest)
+            checkActive()
+            return Snapshot(account, bodies, state, state.digest == previous.digest, checkActive)
         } catch (error: Throwable) {
             bodies.values.forEach { it.close() }
             throw error
@@ -51,6 +53,7 @@ internal class Xtream(private val spec: SourceSpec) {
             JsonReader(input.reader()).use { reader ->
                 reader.beginArray()
                 while (reader.hasNext()) {
+                    snapshot?.checkActive?.invoke()
                     val row = mutableMapOf<String, String>()
                     reader.beginObject()
                     while (reader.hasNext()) {
