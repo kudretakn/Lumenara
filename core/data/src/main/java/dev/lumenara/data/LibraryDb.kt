@@ -291,6 +291,13 @@ interface LibraryDao {
 
     @Upsert suspend fun save(mark: Mark)
 
+    // Observe only playback history; catalog changes and list removals also invalidate this query.
+    @Query("""SELECT marks.* FROM marks JOIN items USING(id)
+        WHERE marks.position>0 AND (items.kind='EPISODE' OR
+            items.kind='MOVIE' AND (marks.duration<=0 OR marks.position<marks.duration*0.95))
+        ORDER BY marks.updated DESC,marks.id""")
+    fun watchNextMarks(): Flow<List<Mark>>
+
     @Query("SELECT * FROM marks WHERE id=:id") suspend fun mark(id: String): Mark?
 
     @Query("SELECT * FROM marks WHERE id IN (:ids)")
@@ -299,6 +306,9 @@ interface LibraryDao {
     // One indexed primary-key probe per visible card, with one Room observer for the grid.
     @Query("SELECT * FROM marks WHERE id IN (:ids)")
     fun visibleMarks(ids: List<String>): Flow<List<Mark>>
+
+    @Query("SELECT * FROM marks WHERE favorite=1 OR listed=1 OR position>0 OR updated>0")
+    suspend fun backupMarks(): List<Mark>
 
     @Query("SELECT * FROM marks WHERE id=:id") fun observeMark(id: String): Flow<Mark?>
 
@@ -394,6 +404,17 @@ interface LibraryDao {
         catalogCategories(categoryCountsQuery(CatalogFilter(source = source, kind = kind, hidden = hidden), categoriesOnly = true))
 }
 
+// A single encrypted undo record; deletion participates in the restore's Room commit.
+@Entity(tableName = "restore_pending")
+internal data class RestorePending(@PrimaryKey val id: Int = 1, val snapshot: String)
+
+@Dao
+internal interface RestoreDao {
+    @Query("SELECT snapshot FROM restore_pending WHERE id=1") suspend fun pending(): String?
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun save(row: RestorePending)
+    @Query("DELETE FROM restore_pending") suspend fun clear()
+}
+
 @Database(
     entities =
         [
@@ -405,8 +426,9 @@ interface LibraryDao {
             GuideName::class,
             Mapping::class,
             Member::class,
+            RestorePending::class,
         ],
-    version = 9,
+    version = 10,
     exportSchema = true,
     autoMigrations =
         [
@@ -419,7 +441,15 @@ interface LibraryDao {
         ],
 )
 abstract class LibraryDb : RoomDatabase() {
+    internal abstract fun restoreJournal(): RestoreDao
+
     companion object {
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS restore_pending (id INTEGER NOT NULL, snapshot TEXT NOT NULL, PRIMARY KEY(id))")
+            }
+        }
+
         val MIGRATION_8_9 = object : Migration(8, 9) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("CREATE INDEX index_items_kind_category_title ON items(kind,category,title)")

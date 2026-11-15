@@ -16,7 +16,10 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.*
 import dev.lumenara.data.*
 import dev.lumenara.design.Ink
+import dev.lumenara.catalog.exactChannelIndex
+import dev.lumenara.catalog.searchable
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 
 @Composable
 internal fun LibraryScreen(model: LibraryModel = viewModel()) {
@@ -40,6 +43,51 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
     var siblings by remember { mutableStateOf(emptyList<Item>()) }
     val pages = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
     val request by model.remoteSearch.collectAsStateWithLifecycle()
+    val open: (Item) -> Unit = { detail = it }
+    var launchPosition by remember { mutableLongStateOf(-1) }
+    val playbackScope = rememberCoroutineScope()
+    var playJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    val play: (Item, List<Item>) -> Unit = { item, group ->
+        Perf.mark("channel")
+        playJob?.cancel()
+        playJob = playbackScope.launch {
+            try {
+                val chosen = model.repo.selectedVersion(item)
+                siblings = if (chosen.kind == "EPISODE" && chosen.parent != item.parent)
+                    model.repo.episodeSnapshot(chosen.parent).seriesOrder()
+                    else if (item.kind == "EPISODE") group.seriesOrder() else group
+                launchPosition = -1
+                playing = chosen
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (_: Exception) { model.notice.value = "Seçilen sürüm açılamadı." }
+        }
+    }
+    val searchIntent by model.searchIntent.collectAsStateWithLifecycle()
+    LaunchedEffect(searchIntent) {
+        val pending = searchIntent ?: return@LaunchedEffect
+        val (id, search) = pending
+        playJob?.cancel()
+        playing = null
+        detail = null
+        if (search.playFromSearch) {
+            try {
+                val channel = uniqueSearchChannel(model, search.query)
+                if (channel != null) {
+                    section = "Canlı TV"
+                    play(channel, LiveChannelGroup(listOf(channel), channel.source))
+                    model.searchIntent.compareAndSet(pending, null)
+                    return@LaunchedEffect
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Fall back to the search screen if catalog lookup fails.
+            }
+        }
+        section = "Ara"
+        model.searchPrefill.value = id to search.query
+        model.searchIntent.compareAndSet(pending, null)
+    }
     LaunchedEffect(request) {
         if (request > 0) {
             playing = null
@@ -47,29 +95,45 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
             section = "Ara"
         }
     }
-    val open: (Item) -> Unit = { detail = it }
-    val playbackScope = rememberCoroutineScope()
-    val play: (Item, List<Item>) -> Unit = { item, group ->
-        Perf.mark("channel")
-        playbackScope.launch {
-            try {
-                val chosen = model.repo.selectedVersion(item)
-                siblings = if (chosen.kind == "EPISODE" && chosen.parent != item.parent)
-                    model.repo.episodeSnapshot(chosen.parent).seriesOrder()
-                    else if (item.kind == "EPISODE") group.seriesOrder() else group
+    var launchSerial by remember { mutableIntStateOf(0) }
+    val watchNextRequest by model.watchNextPlayback.collectAsStateWithLifecycle()
+    LaunchedEffect(watchNextRequest) {
+        val target = watchNextRequest ?: return@LaunchedEffect
+        playJob?.cancel()
+        try {
+            val row = model.repo.library.item(target.itemId)
+            val hidden = model.repo.hidden.first()
+            if (row != null && row.kind in listOf("MOVIE", "EPISODE") && row.category !in hidden) {
+                val chosen = model.repo.selectedVersion(row)
+                check(chosen.category !in hidden)
+                siblings = if (chosen.kind == "EPISODE")
+                    model.repo.episodeSnapshot(chosen.parent).seriesOrder() else emptyList()
+                detail = null
+                launchPosition = target.position
+                launchSerial++
                 playing = chosen
-            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
-            catch (_: Exception) { model.notice.value = "Seçilen sürüm açılamadı." }
-        }
+            } else model.notice.value = "İçerik artık bulunamıyor."
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (_: Exception) { model.notice.value = "İçerik oynatılamadı." }
+        finally { model.watchNextPlayback.compareAndSet(target, null) }
     }
     val item = playing
+    val sleepTimer = remember { dev.lumenara.catalog.SleepTimer() }
     if (item != null) {
         key(if (item.kind == "LIVE") "live-player" else item.id,
-            if (item.kind == "LIVE") null else item.encryptedUrl) {
-            Playback(model, item, siblings, { Perf.mark("channel"); playing = it }, {
+            if (item.kind == "LIVE") null else item.encryptedUrl, launchSerial) {
+            Playback(model, item, siblings, { Perf.mark("channel"); launchPosition = -1; playing = it }, {
                 if (section == "Canlı TV") returnToChannel = item.id
                 playing = null
-            }, { siblings = it })
+                launchPosition = -1
+            }, { siblings = it }, initial = launchPosition, sleepTimer = sleepTimer,
+                sleepTimerExpired = {
+                    sleepTimer.cancel()
+                    detail = null
+                    playing = null
+                    launchPosition = -1
+                    section = "Ana Sayfa"
+                })
         }
         return
     }
@@ -104,7 +168,11 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
                         "IPTV Kaynakları" -> {
                             LumenaraLogo(showName = true)
                             Text("IPTV Kaynakları", fontSize = 28.sp)
-                            Setup(model, available) { section = "Ana Sayfa" }
+                            Setup(model, available, openRestore = { section = "Yedek geri yükle" }) { section = "Ana Sayfa" }
+                        }
+                        "Yedek geri yükle" -> BackupScreen(model, restore = true,
+                            finishLabel = if (available.isEmpty()) "Kuruluma dön" else "Ana Sayfaya dön") {
+                            section = if (available.isEmpty()) "IPTV Kaynakları" else "Ana Sayfa"
                         }
                         "Ayarlar" -> {
                             Text("Ayarlar", fontSize = 28.sp)
@@ -141,4 +209,22 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
                 available.isEmpty() && section == "IPTV Kaynakları" && sourceParent == "Ana Sayfa")
         }
     }
+}
+
+/** Search in bounded pages so a unique name beyond the first page can still launch directly. */
+private suspend fun uniqueSearchChannel(model: LibraryModel, query: String): Item? {
+    val normalized = searchable(query)
+    if (normalized.isBlank()) return null
+    val matches = mutableListOf<Item>()
+    var after: LiveCursor? = null
+    while (true) {
+        val rows = model.repo.livePageAfter("", "", normalized, "", LIVE_PAGE_SIZE, after).first()
+        for (row in rows) if (searchable(row.title) == normalized) {
+            matches += row
+            if (matches.size > 1) return null
+        }
+        if (rows.size < LIVE_PAGE_SIZE) break
+        after = rows.last().let { LiveCursor(it.title, it.id) }
+    }
+    return exactChannelIndex(query, matches.map { it.title })?.let { matches[it] }
 }

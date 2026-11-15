@@ -2,6 +2,10 @@ package dev.lumenara.data
 
 import dev.lumenara.catalog.*
 import java.io.File
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption.ATOMIC_MOVE
+import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 
 /** Only normalized UTF-8 subtitle files are persisted; API links and credentials are never cached. */
 class SubtitleCache(private val directory: File) {
@@ -14,7 +18,11 @@ class SubtitleCache(private val directory: File) {
         val temporary = File.createTempFile("subtitle-", ".tmp", directory)
         try {
             temporary.writeText(decoded.text, Charsets.UTF_8)
-            check(temporary.renameTo(target))
+            try {
+                Files.move(temporary.toPath(), target.toPath(), REPLACE_EXISTING, ATOMIC_MOVE)
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(temporary.toPath(), target.toPath(), REPLACE_EXISTING)
+            }
             SubtitleType.entries.filter { it != decoded.type }.forEach {
                 File(directory, "${contentKey("sub", key)}.${it.extension}").delete()
             }

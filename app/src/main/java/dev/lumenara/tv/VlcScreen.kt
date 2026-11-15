@@ -49,9 +49,15 @@ internal fun VlcScreen(
     attachSubtitle: (androidx.media3.common.MediaItem.SubtitleConfiguration?) -> Unit,
     select: (Item, List<Item>) -> Unit,
     next: () -> Unit,
+    sleepTimer: dev.lumenara.catalog.SleepTimer,
+    sleepTimerVersion: Int,
+    onSleepTimerChanged: () -> Unit,
+    episodeEnded: () -> Unit,
 ) {
+    val sleepCountdown = sleepTimerVersion.let { sleepTimer.showCountdown() }
     val life by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
     var panel by remember { mutableStateOf(false) }
+    LaunchedEffect(sleepCountdown) { if (sleepCountdown) panel = false }
     var position by remember(item.id) { mutableLongStateOf(initial) }
     val fullscreen = rememberFullscreenState(item)
     val moveScope = rememberCoroutineScope()
@@ -85,6 +91,21 @@ internal fun VlcScreen(
     // key from null to view, cancelling playback that may already have started.
     val layout = remember(context) { VLCVideoLayout(context) }
     var player by remember { mutableStateOf<MediaPlayer?>(null) }
+    var frameRate by remember(item.id, retry.generation) { mutableStateOf<Float?>(null) }
+    LaunchedEffect(player, item.id, retry.generation) {
+        val p = player ?: return@LaunchedEffect
+        while (frameRate == null && player === p && !p.isReleased) {
+            val media = p.media
+            try {
+                frameRate = (0 until (media?.trackCount ?: 0)).asSequence()
+                    .mapNotNull { media?.getTrack(it) as? org.videolan.libvlc.interfaces.IMedia.VideoTrack }
+                    .filter { it.frameRateNum > 0 && it.frameRateDen > 0 }
+                    .map { it.frameRateNum.toFloat() / it.frameRateDen }
+                    .firstOrNull()
+            } finally { media?.release() }
+            delay(500)
+        }
+    }
     var message by remember { mutableStateOf("") }
     var subtitleNotice by remember(item.id) { mutableStateOf("") }
     val subtitleSearch = rememberSubtitleSearchState(model, item, status = { subtitleNotice = it }) {
@@ -280,8 +301,8 @@ internal fun VlcScreen(
             if (nativePlaying && p.spuDelay != delayMs * 1000) p.setSpuDelay(delayMs * 1000)
         }
     }
-    LaunchedEffect(subtitleSearch.open, layout, panel, fullscreen.guide, fullscreen.finished, player, retry.generation, retry.reconnecting) {
-        if (!subtitleSearch.open && !panel && !fullscreen.guide && !fullscreen.finished) {
+    LaunchedEffect(subtitleSearch.open, layout, panel, fullscreen.guide, fullscreen.finished, player, retry.generation, retry.reconnecting, sleepCountdown) {
+        if (!subtitleSearch.open && !panel && !fullscreen.guide && !fullscreen.finished && !sleepCountdown) {
             if (!composeView.hasFocus()) composeView.requestFocus()
             val initialGranted = focus.requestFocus()
             android.util.Log.d("LumenaraFocus", "VLC trigger=layout/panel/fullscreen/retry initialGranted=$initialGranted viewHasFocus=${composeView.hasFocus()}")
@@ -370,8 +391,10 @@ internal fun VlcScreen(
                                     nativePlaying = false
                                     completed = true
                                     model.progress(item, p.length, p.length)
-                                    if (item.kind == "EPISODE")
+                                    if (item.kind == "EPISODE") {
                                         fullscreen.finished = group.nextItem(item) != null
+                                        episodeEnded()
+                                    }
                                 }
                                 MediaPlayer.Event.Stopped -> {
                                     nativePlaying = false
@@ -443,7 +466,7 @@ internal fun VlcScreen(
                 if (activeSubtitle) stateDescription = "İndirilen altyazı etkin"
             }
             .onPreviewKeyEvent {
-                if (subtitleSearch.open) return@onPreviewKeyEvent false
+                if (subtitleSearch.open || sleepCountdown) return@onPreviewKeyEvent false
                 val key = it.nativeKeyEvent
                 val code = key.keyCode
                 if (!panel && fullscreen.key(key, item.kind == "LIVE", ::move, { panel = true },
@@ -473,12 +496,17 @@ internal fun VlcScreen(
             },
             modifier = Modifier.fillMaxSize().focusProperties { canFocus = false },
         )
-        if (!panel) FullscreenOverlay(model, item, group, fullscreen, select, { panel = true },
+        if (!panel && !sleepCountdown) FullscreenOverlay(model, item, group, fullscreen, select, { panel = true },
             { player?.time ?: 0 }, { player?.length ?: 0 },
             if (item.kind == "EPISODE" && group.nextItem(item) != null) next else null)
+        FrameRateMatch(model, item.kind, frameRate, layout)
         Reconnecting(retry)
         numbers?.let { NumberEntry(it) }
         SubtitleNotice(subtitleNotice) { subtitleNotice = "" }
+        SleepTimerCard(sleepTimer, sleepTimerVersion) {
+            sleepTimer.cancel()
+            onSleepTimerChanged()
+        }
         if (panel) {
             val first = remember { FocusRequester() }
             LaunchedEffect(Unit) { first.requestFocus() }
@@ -491,6 +519,7 @@ internal fun VlcScreen(
                     Text(item.title)
                     if (message.isNotEmpty()) Text(message, color = Ink.accent)
                 }
+                item { SleepTimerChoices(sleepTimer, item.kind == "EPISODE", onSleepTimerChanged) }
                 item {
                     Button(modifier = Modifier.focusRequester(first), onClick = { panel = false }) {
                         Text("Yayına dön")

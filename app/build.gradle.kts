@@ -11,8 +11,8 @@ android {
         applicationId = "dev.lumenara.tv"
         minSdk = 26
         targetSdk = 36
-        versionCode = 9
-        versionName = "0.4.2"
+        versionCode = 10
+        versionName = "0.4.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures { compose = true; buildConfig = true }
@@ -37,6 +37,8 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.activity:activity-compose:1.12.4")
     implementation("androidx.tv:tv-material:1.1.0")
+    implementation("androidx.tvprovider:tvprovider:1.1.0")
+    testImplementation("junit:junit:4.13.2")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")

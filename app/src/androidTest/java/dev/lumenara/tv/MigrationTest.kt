@@ -21,6 +21,9 @@ class MigrationTest {
     @Test
     fun versionEightCatalogSurvivesCategoryAndProgrammeIndexes() = verifyUpgrade(8)
 
+    @Test
+    fun versionNineCatalogSurvivesRestoreJournalMigration() = verifyUpgrade(9)
+
     private fun verifyUpgrade(from: Int) {
         val test = InstrumentationRegistry.getInstrumentation()
         val context = test.targetContext
@@ -65,7 +68,7 @@ class MigrationTest {
                 db.version = from
             }
             val db = Room.databaseBuilder(context, LibraryDb::class.java, name)
-                .addMigrations(LibraryDb.MIGRATION_7_8, LibraryDb.MIGRATION_8_9).build()
+                .addMigrations(LibraryDb.MIGRATION_7_8, LibraryDb.MIGRATION_8_9, LibraryDb.MIGRATION_9_10).build()
             try {
                 runBlocking {
                     assertEquals(250L, db.library().mark("item")?.position)
@@ -93,7 +96,11 @@ class MigrationTest {
                     val columns = buildList { while (cursor.moveToNext()) add(cursor.getString(2)) }
                     assertEquals(listOf("start"), columns)
                 }
-                assertEquals(9, db.openHelper.readableDatabase.version)
+                assertEquals(10, db.openHelper.readableDatabase.version)
+                db.openHelper.readableDatabase.query("SELECT COUNT(*) FROM restore_pending").use { cursor ->
+                    assertTrue(cursor.moveToFirst())
+                    assertEquals(0, cursor.getInt(0))
+                }
                 if (from >= 7) db.openHelper.readableDatabase.query("SELECT title,start FROM programmes").use { cursor ->
                     assertTrue(cursor.moveToFirst())
                     assertEquals("Program", cursor.getString(0))

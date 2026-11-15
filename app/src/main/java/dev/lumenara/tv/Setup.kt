@@ -51,7 +51,7 @@ internal fun Field(
 }
 
 @Composable
-internal fun Setup(model: LibraryModel, sources: List<Source>, openHome: () -> Unit) {
+internal fun Setup(model: LibraryModel, sources: List<Source>, openRestore: () -> Unit, openHome: () -> Unit) {
     val context = LocalContext.current
     var method by remember { mutableStateOf("M3U") }
     var name by remember { mutableStateOf("") }
@@ -100,6 +100,11 @@ internal fun Setup(model: LibraryModel, sources: List<Source>, openHome: () -> U
                         Text(if (method == type) "✓ $type" else type)
                     }
                 }
+            }
+        }
+        if (sources.isEmpty()) item {
+            Button(enabled = !busy, onClick = openRestore, modifier = Modifier.testTag("setup-restore")) {
+                Text("Yedekten geri yükle")
             }
         }
         if (method == "Telefon") item { PairPanel(model, openHome) }
