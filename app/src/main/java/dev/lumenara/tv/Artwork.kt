@@ -3,13 +3,13 @@
 package dev.lumenara.tv
 
 import android.content.Context
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
@@ -21,6 +21,10 @@ import coil.request.ImageRequest
 import coil.request.ImageResult
 import dev.lumenara.data.Item
 import dev.lumenara.data.Transport
+import dev.lumenara.data.retainArtworkResult
+import coil.decode.DataSource
+import coil.request.SuccessResult
+import coil.request.CachePolicy
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -53,18 +57,24 @@ internal fun artworkRequest(context: Context, address: String, allowHttp: Boolea
 @Composable
 internal fun Artwork(model: LibraryModel, item: Item?, address: String?,
     modifier: Modifier = Modifier, contentScale: ContentScale = ContentScale.Fit,
-    alignment: Alignment = Alignment.Center, role: String = "poster") {
+    alignment: Alignment = Alignment.Center, role: String = "poster",
+    allowHttp: Boolean? = null, width: Int = 0, height: Int = 0) {
     val context = LocalContext.current
-    val sources by model.sources.collectAsStateWithLifecycle()
-    val allowHttp = sources?.firstOrNull { it.id == item?.source }?.allowHttp == true
-    BoxWithConstraints(modifier) {
-        val width = if (constraints.hasBoundedWidth) constraints.maxWidth else context.resources.displayMetrics.widthPixels
-        val height = if (constraints.hasBoundedHeight) constraints.maxHeight else context.resources.displayMetrics.heightPixels
-        val request = remember(address, allowHttp, width, height, role) {
-            address?.let { artworkRequest(context, it, allowHttp, width, height, role) }
-        }
-        AsyncImage(request, null, Modifier.fillMaxSize(), contentScale = contentScale, alignment = alignment)
+    // Legacy detail/logo callers resolve their size after layout, without subcomposition.
+    // Grids supply both dimensions and permission once at their parent.
+    val permitted = if (allowHttp != null) allowHttp else {
+        val sources by model.sources.collectAsStateWithLifecycle()
+        sources?.firstOrNull { it.id == item?.source }?.allowHttp == true
     }
+    var measured by remember { mutableStateOf(IntSize.Zero) }
+    val w = if (width > 0) width else measured.width
+    val h = if (height > 0) height else measured.height
+    val request = remember(context, address, permitted, w, h, role) {
+        address?.takeIf { w > 0 && h > 0 }?.let { artworkRequest(context, it, permitted, w, h, role) }
+    }
+    AsyncImage(request, null,
+        if (width > 0 && height > 0) modifier else modifier.onSizeChanged { measured = it },
+        contentScale = contentScale, alignment = alignment)
 }
 
 /** A bounded session cache for permanently broken URLs; transient network failures remain retryable. */
@@ -83,17 +93,23 @@ internal class ArtworkInterceptor(private val disk: coil.disk.DiskCache,
             return ErrorResult(null, request, IOException("Image HTTP blocked"))
         val key = request.diskCacheKey ?: address
         synchronized(failures) { failures[key] }?.let { return ErrorResult(null, request, it) }
-        // Coil ignores origin cache headers; bound our own disk retention to seven days.
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            val expired = disk.openSnapshot(key)?.use {
-                nowMillis() - it.data.toFile().lastModified() > WEEK_MS
-            } == true
-            if (expired) {
-                disk.remove(key)
+        // Let Coil resolve its full memory key and size compatibility first. Memory hits
+        // never open the disk cache. Expired disk results are replaced before display.
+        val cached = chain.proceed(request)
+        val result = retainArtworkResult(cached,
+            fromDisk = cached is SuccessResult && cached.dataSource == DataSource.DISK,
+            expired = {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    disk.openSnapshot(key)?.use {
+                        nowMillis() - it.data.toFile().lastModified() > WEEK_MS
+                    } == true
+                }
+            }, reload = {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { disk.remove(key) }
                 memory.keys.filter { it.key == key }.forEach { memory.remove(it) }
-            }
-        }
-        val result = chain.proceed(request)
+                chain.proceed(request.newBuilder().memoryCachePolicy(CachePolicy.WRITE_ONLY)
+                    .diskCachePolicy(CachePolicy.WRITE_ONLY).build())
+            })
         if (result is ErrorResult) {
             val error = result.throwable
             if ((error is HttpException && error.response.code in listOf(404, 410)) ||

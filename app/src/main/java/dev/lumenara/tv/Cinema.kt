@@ -224,6 +224,10 @@ internal fun MovieCard(
     focus: (Item) -> Unit = {},
     modifier: Modifier = Modifier,
     progress: Boolean = false,
+    mark: Mark? = null,
+    artworkHttp: Boolean? = null,
+    artworkWidth: Int = 0,
+    artworkHeight: Int = 0,
 ) {
     var focused by remember { mutableStateOf(false) }
     var restoreFocus by rememberSaveable(item.id) { mutableStateOf(false) }
@@ -240,9 +244,10 @@ internal fun MovieCard(
     val continuing = episodes.continueItem(marks)
     val episodeMark = marks.firstOrNull { it.id == continuing?.id }
     val episodeName = continuing?.let { dev.lumenara.catalog.episodeName(it.title, it.category) }
-    val mark by
-        remember(item.id) { model.repo.library.observeMark(item.id) }
-            .collectAsStateWithLifecycle(null)
+    val observedMark by remember(item.id, progress) {
+        if (progress && item.kind != "SERIES") model.repo.library.observeMark(item.id)
+        else kotlinx.coroutines.flow.flowOf(null)
+    }.collectAsStateWithLifecycle(null)
     Column(modifier.width(if (portrait) 116.dp else 194.dp)) {
         FocusCard(
             onClick = { restoreFocus = true; open(item) },
@@ -259,8 +264,9 @@ internal fun MovieCard(
                     model,
                     item,
                     Modifier.fillMaxWidth().height(if (portrait) 150.dp else 108.dp),
+                    allowHttp = artworkHttp, width = artworkWidth, height = artworkHeight,
                 )
-                val progressMark = if (item.kind == "SERIES") episodeMark else mark
+                val progressMark = if (item.kind == "SERIES") episodeMark else mark ?: observedMark
                 if (progress && (progressMark?.duration ?: 0) > 0) {
                     val ratio =
                         ((progressMark?.position ?: 0).toFloat() / checkNotNull(progressMark).duration).coerceIn(
