@@ -27,4 +27,53 @@ class VersionsTest {
         assertEquals(1, listOf(item("1", "Kıyı Dublaj", kind = "SERIES"), item("2", "Kıyı Altyazılı", kind = "SERIES")).mergeVersions().size)
         assertEquals(2, listOf(item("1", "Kıyı Dublaj", kind = "LIVE"), item("2", "Kıyı Altyazılı", kind = "LIVE")).mergeVersions().size)
     }
+
+    @Test fun importKeysMatchExistingGroupingIncludingMissingAndConflictingTmdbIds() {
+        val rows = listOf(
+            item("dub", "Kıyı (Türkçe Dublaj)", tmdb = "00042"),
+            item("sub", "Kıyı (Altyazılı)"),
+            item("translated", "The Coast", tmdb = "42"),
+            item("conflict1", "Başka Film", tmdb = "100"),
+            item("conflict2", "Başka Film", tmdb = "101"),
+            item("ambiguous", "Başka Film"),
+            item("remake", "Kıyı", year = "1999"),
+            item("otherSource", "Kıyı", source = "other"),
+            item("series", "Kıyı", kind = "SERIES"),
+            item("live", "Kıyı", kind = "LIVE"),
+            item("episode", "Kıyı S01E01", kind = "EPISODE"),
+        )
+        val assigned = rows.versionAssignments()
+        assertEquals(rows.versionGroups().map { it.map(Item::id).toSet() }.toSet(),
+            assigned.groupBy { it.versionKey }.values.map { it.map(VersionAssignment::id).toSet() }.toSet())
+        val keys = assigned.associate { it.id to it.versionKey }
+        assertEquals("provider|MOVIE|tmdb:42", keys["dub"])
+        assertEquals(keys["dub"], keys["sub"])
+        assertEquals(keys["dub"], keys["translated"])
+        assertEquals("ambiguous", keys["ambiguous"])
+        assertEquals("live", keys["live"])
+        assertEquals("episode", keys["episode"])
+        assertNotEquals(keys["dub"], keys["remake"])
+        assertNotEquals(keys["dub"], keys["otherSource"])
+        assertNotEquals(keys["dub"], keys["series"])
+    }
+
+    @Test fun representativeRankAndDisplayFieldsPreserveRawProviderMetadata() {
+        val rows = listOf(item("sub", "Kıyı (2024) Altyazılı"),
+            item("z-dub", "Kıyı (Türkçe Dublaj)"), item("original", "Kıyı"), item("a-dub", "Kıyı TR Dublaj"))
+        val assigned = rows.versionAssignments()
+        assertEquals(listOf("a-dub", "z-dub", "original", "sub"), assigned.sortedBy { it.versionRank }.map { it.id })
+        assertEquals("a-dub", assigned.single { it.isRepresentative }.id)
+        assertTrue(assigned.all { it.displayTitle == "Kıyı" && it.displayYear == "2024" })
+        assertEquals("Kıyı (2024) Altyazılı", rows.first().title)
+        assertEquals("Kıyı (2024) Altyazılı", rows.first().displayVersion().title) // legacy/default row
+    }
+
+    @Test fun groupingIsIndependentOfProviderOrderAndStagingBatchBoundaries() {
+        val rows = listOf(item("sub", "Kıyı Altyazılı")) +
+            (0..130).map { item("filler$it", "Film $it") } + item("dub", "Kıyı Dublaj", tmdb = "42")
+        val expected = rows.versionAssignments().associateBy { it.id }
+        assertEquals(expected, rows.reversed().versionAssignments().associateBy { it.id })
+        assertEquals(expected["sub"]!!.versionKey, expected["dub"]!!.versionKey)
+        assertFalse(expected["sub"]!!.isRepresentative)
+    }
 }

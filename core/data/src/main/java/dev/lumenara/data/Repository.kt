@@ -45,7 +45,8 @@ data class SourceSpec(
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class Repository private constructor(private val context: Context) {
-    private val db = Room.databaseBuilder(context, LibraryDb::class.java, "lumenara.db").build()
+    private val db = Room.databaseBuilder(context, LibraryDb::class.java, "lumenara.db")
+        .addMigrations(LibraryDb.MIGRATION_7_8).build()
     val library = db.library()
     val guide = db.guide()
     private val vault = Vault(context)
@@ -105,6 +106,7 @@ class Repository private constructor(private val context: Context) {
     private suspend fun allVersions(item: Item): List<Item> = withContext(Dispatchers.IO) {
         val base = production(item)
         if (base.kind !in listOf("MOVIE", "SERIES")) return@withContext listOf(base)
+        if (base.versionKey.isNotEmpty()) return@withContext library.versionRows(base.versionKey)
         val key = "${base.source}|${base.kind}|${base.generation}"
         val index = versionIndex[key] ?: library.versionCandidates(base.source, base.kind).versionGroups()
             .flatMap { group -> group.map { it.id to group } }.toMap().also { versionIndex[key] = it }
@@ -163,7 +165,11 @@ class Repository private constructor(private val context: Context) {
                 try {
                     query = Xtream(spec).subtitleInfo(address(base), base.kind, name.title, name.year)
                     if (query.tmdb.isNotBlank() && base.tmdbId() != query.tmdb) {
-                        library.save(listOf(base.copy(search = base.search.replace(Regex(" \\[tmdb:[0-9]+\\]"), "") + " [tmdb:${query.tmdb}]")))
+                        db.withTransaction {
+                            library.save(listOf(base.copy(search = base.search.replace(Regex(" \\[tmdb:[0-9]+\\]"), "") + " [tmdb:${query.tmdb}]")))
+                            // A newly learned ID can join translated titles or split conflicting IDs.
+                            library.assignVersions(library.versionCandidates(base.source, base.kind).versionAssignments())
+                        }
                         versionIndex.keys.removeAll { it.startsWith("${base.source}|") }
                     }
                 }
@@ -306,12 +312,18 @@ class Repository private constructor(private val context: Context) {
                 Preferences(context).set("provider_${source.id}", providerLimit.toString())
             db.withTransaction {
                 library.save(source)
-                staged.read(library::writeBatch)
+                staged.read { batch ->
+                    library.writeBatch(batch.map { it.copy(versionKey = it.id, displayTitle = it.title, displayYear = it.year) })
+                }
                 if (spec.user.isEmpty()) library.prunePlaylist(source.id, token)
                 else library.prune(source.id, token)
                 library.orphans(source.id)
                 for (kind in listOf("MOVIE", "SERIES")) {
-                    library.versionCandidates(source.id, kind).versionGroups().filter { it.size > 1 }.forEach { versions ->
+                    val rows = library.versionCandidates(source.id, kind)
+                    // Resolve across the complete source, not each 128-row staging batch: matching
+                    // translated titles and a missing TMDB ID may occur in distant batches.
+                    library.assignVersions(rows.versionAssignments())
+                    rows.versionGroups().filter { it.size > 1 }.forEach { versions ->
                         val marks = versions.mapNotNull { library.mark(it.id) }
                         val newest = marks.maxByOrNull { it.updated }
                         if (newest != null) {
@@ -359,7 +371,7 @@ class Repository private constructor(private val context: Context) {
             introEndMs = entry.introEndMs,
             backdrop =
                 entry.backdrop.takeIf { it.startsWith("https://") }?.let(vault::encrypt).orEmpty(),
-        )
+        ).let { it.copy(versionKey = it.id, displayTitle = it.title, displayYear = it.year) }
 
     suspend fun replay(channel: Item, slot: Slot): Item =
         withContext(Dispatchers.IO) {

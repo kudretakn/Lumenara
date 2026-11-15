@@ -60,9 +60,17 @@ class LargeCatalogTest {
                 measure("popular") {
                     repo.library.browse(source.id, "MOVIE", "", "", "popular", 24).first()
                 }
-                measure("movies") {
+                val movies = measure("movies") {
                     repo.library.browse(source.id, "MOVIE", "", "", "", 120).first()
                 }
+                assertEquals(120, movies.size)
+                assertEquals(120, movies.map { it.title }.distinct().size)
+                val category = measure("movieCategory") {
+                    repo.library.browse(source.id, "MOVIE", "Film", "", "", 120).first()
+                }
+                assertEquals(120, category.size)
+                assertEquals(10000, repo.library.categoryCounts("MOVIE", source.id).first().single().count)
+                assertEquals(10000, repo.library.shelfCount(source.id, "MOVIE", "").first())
                 assertEquals(24, recent.size)
                 assertEquals(recent.size, recent.map { it.title }.distinct().size)
                 assertTrue("Version suffixes should be merged", recent.all {
