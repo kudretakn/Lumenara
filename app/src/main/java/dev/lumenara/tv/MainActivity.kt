@@ -12,13 +12,17 @@ import dev.lumenara.design.LumenaraTheme
 @dagger.hilt.android.AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     private val library: LibraryModel by viewModels()
+    private var stopFrameObservation: (() -> Unit)? = null
 
     override fun onStart() {
         super.onStart()
+        stopFrameObservation = Perf.observeFrames(window)
         dev.lumenara.data.RefreshGate.foreground = true
     }
 
     override fun onStop() {
+        stopFrameObservation?.invoke()
+        stopFrameObservation = null
         dev.lumenara.data.RefreshGate.foreground = false
         super.onStop()
     }

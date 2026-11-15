@@ -4,21 +4,6 @@ import androidx.compose.runtime.Composable
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.darkColorScheme
 
-@Deprecated("Use LumenColors; retained until all screens migrate to Quiet Cinema")
-object Ink {
-    val background = LumenColors.bg
-    val secondary = LumenColors.surface1
-    val surface = LumenColors.surface2
-    val focus = LumenColors.focus
-    val text = LumenColors.textPrimary
-    val muted = LumenColors.textSecondary
-    val glass = LumenColors.surface2
-    val glassStrong = LumenColors.surface1
-    val stroke = LumenColors.divider
-    val focusRing = LumenColors.focus
-    val accent = LumenColors.accent
-}
-
 @Composable
 fun LumenaraTheme(content: @Composable () -> Unit) =
     MaterialTheme(

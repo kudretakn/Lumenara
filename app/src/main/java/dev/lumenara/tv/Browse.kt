@@ -485,7 +485,7 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
                 if (loading) loadingCards(224.dp)
                 if (!loading && rows.isEmpty()) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(7) }) {
                     Column {
-                        Text("Eşleşen içerik yok.", color = Ink.muted)
+                        Text("Eşleşen içerik yok.", color = LumenColors.textSecondary)
                         if (kind.isEmpty()) {
                             val back = androidx.activity.compose.LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
                             Button(onClick = { back?.onBackPressed() }, modifier = Modifier.focusRequester(emptyFocus)) { Text("Geri") }

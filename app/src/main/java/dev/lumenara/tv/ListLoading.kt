@@ -10,7 +10,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import dev.lumenara.design.Ink
+import dev.lumenara.design.LumenColors
 import kotlinx.coroutines.flow.Flow
 
 /** A replacement query starts unknown, even when the previous query had results. */
@@ -22,7 +22,7 @@ internal fun <T> Flow<T>.collectAsLoadingState(): State<T?> = key(this) {
 @Composable
 internal fun LoadingCard(modifier: Modifier = Modifier) {
     // Static, non-focusable cards avoid animation work and loading-text flicker.
-    Box(modifier.background(Ink.stroke.copy(alpha = .25f), RoundedCornerShape(12.dp))
+    Box(modifier.background(LumenColors.divider.copy(alpha = .25f), RoundedCornerShape(12.dp))
         .testTag("list-loading"))
 }
 

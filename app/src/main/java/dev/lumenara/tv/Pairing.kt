@@ -15,7 +15,6 @@ import androidx.tv.material3.*
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import dev.lumenara.data.SourceSpec
-import dev.lumenara.design.Ink
 import dev.lumenara.design.LumenType
 import dev.lumenara.design.LumenColors
 import dev.lumenara.design.Spacing
@@ -268,7 +267,7 @@ internal fun PairPanel(model: LibraryModel, finish: () -> Unit) {
     }
     DisposableEffect(lifecycle) { onDispose { session?.close() } }
     val active = session
-    if (active == null) Text(status, color = Ink.accent)
+    if (active == null) Text(status, color = LumenColors.accent)
     else PairSessionInfo(active)
 }
 

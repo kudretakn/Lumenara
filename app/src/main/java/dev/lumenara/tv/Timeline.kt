@@ -15,9 +15,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.*
+import dev.lumenara.design.LumenColors
 import dev.lumenara.catalog.searchable
 import dev.lumenara.data.*
-import dev.lumenara.design.Ink
 import java.time.*
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.flow.collect
@@ -87,13 +87,13 @@ internal fun Timeline(
             Text(
                 window.format(DateTimeFormatter.ofPattern("dd.MM")),
                 Modifier.width(108.dp),
-                color = Ink.accent,
+                color = LumenColors.accent,
             )
             repeat(4) {
                 Text(
                     time.format(window.plusMinutes(30L * it)),
                     Modifier.weight(1f),
-                    color = Ink.muted,
+                    color = LumenColors.textSecondary,
                     fontSize = 12.sp,
                 )
             }
@@ -102,7 +102,7 @@ internal fun Timeline(
             Text(
                 "${channel.title} · ${time.format(Instant.ofEpochMilli(slot.start))}  ${slot.title}"
             )
-            Text(slot.description, color = Ink.muted, maxLines = 3)
+            Text(slot.description, color = LumenColors.textSecondary, maxLines = 3)
             if (
                 channel.archive.isNotEmpty() &&
                     slot.end <= System.currentTimeMillis() &&
@@ -168,7 +168,7 @@ internal fun Timeline(
                             )
                         }
                         BoxWithConstraints(
-                            Modifier.weight(1f).height(35.dp).background(Ink.secondary)
+                            Modifier.weight(1f).height(35.dp).background(LumenColors.surface1)
                         ) {
                             for (slot in slots.distinctBy { it.start }) {
                                 val left = (maxOf(from, slot.start) - from).toFloat() / (to - from)

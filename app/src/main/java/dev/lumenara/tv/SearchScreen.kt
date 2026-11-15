@@ -31,7 +31,6 @@ import androidx.tv.material3.Text
 import dev.lumenara.data.debouncedSearchQuery
 import dev.lumenara.data.Item
 import dev.lumenara.data.ProgramHit
-import dev.lumenara.design.Ink
 import dev.lumenara.design.FocusCard
 import dev.lumenara.design.LumenButton
 import dev.lumenara.design.LumenButtonStyle
@@ -288,9 +287,9 @@ private fun ProgramCard(hit: ProgramHit, channel: Item, now: Long, focus: () -> 
         .onFocusChanged { if (it.isFocused) focus() }.testTag("search-program-${channel.id}-${slot.start}")) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(slot.title, fontSize = 18.sp, maxLines = 2)
-            Text(channel.title, color = Ink.muted, fontSize = 15.sp)
+            Text(channel.title, color = LumenColors.textSecondary, fontSize = 15.sp)
             Text("$label · ${time.format(Instant.ofEpochMilli(slot.start))}–${time.format(Instant.ofEpochMilli(slot.end))}", fontSize = 13.sp)
-            if (now in slot.start until slot.end) Text("Şimdi", color = Ink.accent, fontSize = 13.sp)
+            if (now in slot.start until slot.end) Text("Şimdi", color = LumenColors.accent, fontSize = 13.sp)
         }
     }
 }
