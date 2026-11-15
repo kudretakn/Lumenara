@@ -4,6 +4,7 @@ import android.graphics.BitmapFactory
 import android.graphics.drawable.BitmapDrawable
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.platform.app.InstrumentationRegistry
@@ -264,18 +265,27 @@ class CinemaJourneyTest {
                 screen.openCategory("Sinema")
                 val movieCard = describedIn("Kadife Gece", "poster-grid")
                 screen.onNodeWithTag("poster-grid").performScrollToNode(movieCard)
+                focus(screen.onNode(movieCard))
+                val posterBounds = screen.onNode(movieCard).fetchSemanticsNode().boundsInRoot
+                assertEquals("Afiş oranı 2:3 kalmalı", 2f / 3f, posterBounds.width / posterBounds.height, .02f)
+                val gridCards = screen.onAllNodes(hasContentDescription("Açık Deniz") or
+                    hasContentDescription("Kızıl Ufuk") or hasContentDescription("Kumların Ötesi") or
+                    hasContentDescription("Gece Hattı") or hasContentDescription("Mavi Sessizlik") or
+                    hasContentDescription("Son Sefer") or hasContentDescription("Kadife Gece"))
+                    .fetchSemanticsNodes().filter { it.boundsInRoot.width > 0 }
+                assertEquals("Yedi afiş ilk satıra sığmalı", 7, gridCards.size)
+                assertTrue(gridCards.maxOf { it.boundsInRoot.top } - gridCards.minOf { it.boundsInRoot.top } < 20f)
                 assertTrue("Afiş adı ekranın içinde kalmalı",
                     screen.onNode(hasText("Kadife Gece") and hasAnyAncestor(hasTestTag("poster-grid")))
                         .fetchSemanticsNode().boundsInRoot.bottom <= screen.onRoot().fetchSemanticsNode().boundsInRoot.bottom)
-                focus(screen.onNode(movieCard))
                 capture("cinema-focus")
                 screen.ok()
-                node("+ Listem").assertExists()
+                node("Listem").assertExists()
                 node("Oynat").assertIsFocused()
                 capture("cinema-details")
                 capture("screens/details")
-                select("+ Listem")
-                node("✓ Listem").assertExists()
+                select("Listem")
+                waitFor(hasText("Listem") and SemanticsMatcher.expectValue(SemanticsProperties.Selected, true))
                 screen.back()
                 section("Filmler")
                 screen.openCategory("Sinema")

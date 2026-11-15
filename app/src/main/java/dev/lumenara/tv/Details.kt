@@ -1,226 +1,204 @@
 package dev.lumenara.tv
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.focusable
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.*
-import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.*
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.*
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.tv.material3.*
+import androidx.tv.material3.Text
+import dev.lumenara.catalog.displayTitle
+import dev.lumenara.catalog.productionName
 import dev.lumenara.data.*
-import dev.lumenara.design.Ink
+import dev.lumenara.design.*
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 
 @Composable
-internal fun Details(
-    model: LibraryModel,
-    item: Item,
-    play: (Item, List<Item>) -> Unit,
-    back: () -> Unit,
-) {
+internal fun Details(model: LibraryModel, item: Item, play: (Item, List<Item>) -> Unit, back: () -> Unit) {
     if (item.kind == "SERIES") {
         SeriesDetails(model, item, play, back)
         return
     }
-    val mark by
-        remember(item.id) { model.repo.library.observeMark(item.id) }
-            .collectAsStateWithLifecycle(null)
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val info by
-        produceState(MovieInfo.from(item), item.id) {
-            try {
-                value = model.repo.details(item)
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                model.notice.value = "Ek film bilgileri alınamadı."
-            }
-        }
+    val mark by remember(item.id) { model.repo.library.observeMark(item.id) }
+        .collectAsStateWithLifecycle(null)
+    val info by produceState(MovieInfo.from(item), item.id) {
+        try { value = model.repo.details(item) }
+        catch (e: CancellationException) { throw e }
+        catch (_: Exception) { model.notice.value = "Ek film bilgileri alınamadı." }
+    }
     val primary = remember { FocusRequester() }
     LaunchedEffect(item.id) { primary.requestFocus() }
     Box(Modifier.fillMaxSize()) {
         CinemaBackdrop(model, item, info)
-        LazyColumn(
-            Modifier.fillMaxSize().testTag("details-content").focusRestorer().focusGroup(),
-            contentPadding = PaddingValues(horizontal = 48.dp, vertical = 27.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            item {
-                Column(
-                    Modifier.widthIn(max = 510.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Text(
-                        item.category.uppercase(java.util.Locale.forLanguageTag("tr")),
-                        color = Ink.accent,
-                        letterSpacing = 2.sp,
-                        fontSize = 11.sp,
-                    )
-                    Text(
-                        item.title,
-                        fontSize = 42.sp,
-                        lineHeight = 46.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    MovieMeta(item, info)
-                    if (info.collection.isNotBlank())
-                        Text(info.collection, color = Ink.muted, fontSize = 12.sp)
-                }
-            }
-            item {
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    contentPadding = PaddingValues(5.dp),
-                ) {
-                    item {
-                        Button(
-                            modifier = Modifier.focusRequester(primary),
-                            onClick = {
-                                play(item, listOf(item))
-                            },
-                            colors =
-                                ButtonDefaults.colors(
-                                    containerColor = Ink.focus,
-                                    contentColor = Ink.background,
-                                ),
-                        ) {
-                            NavIcon(2, Modifier.size(16.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                if ((mark?.position ?: 0) > 0) "Devam et" else "Oynat"
-                            )
-                        }
-                    }
-                    item {
-                        Button(onClick = { model.mark(item, false) }) {
-                            Text(
-                                if (mark?.listed == true) "✓ Listem" else "+ Listem"
-                            )
-                        }
-                    }
-                    item {
-                        Button(onClick = { model.mark(item, true) }) {
-                            Text(if (mark?.favorite == true) "Favoriden çıkar" else "Favoriye ekle")
-                        }
-                    }
-                    if (info.trailer.isNotEmpty())
-                        item {
-                            Button(
-                                onClick = {
-                                    runCatching {
-                                        context.startActivity(
-                                            android.content.Intent(
-                                                android.content.Intent.ACTION_VIEW,
-                                                android.net.Uri.parse(
-                                                    "https://www.youtube.com/watch?v=" +
-                                                        info.trailer
-                                                ),
-                                            )
-                                        )
-                                    }
-                                        .onFailure {
-                                            model.notice.value =
-                                                "Fragman için uygun uygulama bulunamadı."
-                                        }
-                                }
-                            ) {
-                                Text("Fragman")
-                            }
-                        }
-                }
-            }
-            item { VersionChoice(model, item) }
+        LazyColumn(Modifier.fillMaxSize().testTag("details-content").focusRestorer().focusGroup(),
+            contentPadding = PaddingValues(start = Spacing.screenHorizontal, end = Spacing.screenHorizontal,
+                top = 156.dp, bottom = Spacing.screenVertical),
+            verticalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
+            item { DetailHeading(item, info) }
             if (info.summary.isNotBlank()) item {
-                Text(info.summary, Modifier.widthIn(max = 460.dp), fontSize = 14.sp,
-                    lineHeight = 21.sp, color = Ink.text.copy(alpha = .85f))
+                Text(info.summary, Modifier.widthIn(max = 560.dp), style = LumenType.body,
+                    color = LumenColors.textPrimary, maxLines = 3, overflow = TextOverflow.Ellipsis)
             }
-            if (info.people.isNotEmpty())
-                item {
-                    Column(
-                        Modifier.padding(top = 20.dp),
-                        verticalArrangement = Arrangement.spacedBy(14.dp),
-                    ) {
-                        Text("Oyuncular", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-                        LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(22.dp),
-                            contentPadding = PaddingValues(4.dp),
-                        ) {
-                            items(info.people) { person ->
-                                var focused by remember { mutableStateOf(false) }
-                                Column(
-                                    Modifier.width(96.dp)
-                                        .onFocusChanged { focused = it.isFocused }
-                                        .focusable(),
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                ) {
-                                    Box(
-                                        Modifier.size(88.dp)
-                                            .border(
-                                                if (focused) 2.dp else 0.dp,
-                                                if (focused) Ink.focus
-                                                else androidx.compose.ui.graphics.Color.Transparent,
-                                                CircleShape,
-                                            )
-                                            .clip(CircleShape)
-                                            .background(Ink.surface),
-                                        contentAlignment = Alignment.Center,
-                                    ) {
-                                        Text(
-                                            person.name.take(1),
-                                            fontSize = 26.sp,
-                                            color = Ink.accent,
-                                        )
-                                        if (person.portrait.isNotBlank())
-                                            Artwork(model, item, person.portrait,
-                                                Modifier.fillMaxSize(),
-                                                contentScale =
-                                                    androidx.compose.ui.layout.ContentScale.Crop,
-                                                role = "person",
-                                            )
-                                    }
-                                    Text(
-                                        person.name,
-                                        Modifier.padding(top = 9.dp),
-                                        fontSize = 12.sp,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                    Text(
-                                        person.role,
-                                        color = Ink.muted,
-                                        fontSize = 11.sp,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.unit), verticalAlignment = Alignment.CenterVertically) {
+                    LumenButton(onClick = { play(item, listOf(item)) }, modifier = Modifier.focusRequester(primary)) {
+                        LumenIcon(LumenIcon.Play, null)
+                        Text(if ((mark?.position ?: 0) > 0) "Devam et" else "Oynat")
+                    }
+                    DetailSecondaryActions(model, item, mark, info)
+                }
+            }
+            item { DetailCast(info) }
+            if (item.kind == "LIVE") item { GuidePanel(model, item) { replay -> play(replay, listOf(replay)) } }
+        }
+    }
+}
+
+@Composable
+internal fun DetailHeading(item: Item, info: MovieInfo) {
+    Column(Modifier.widthIn(max = 560.dp), verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+        Text(item.title.displayTitle(), style = LumenType.display, color = LumenColors.textPrimary,
+            maxLines = 2, overflow = TextOverflow.Ellipsis)
+        val minutes = info.minutes.toIntOrNull()
+        val duration = if (minutes != null && minutes >= 60) "${minutes / 60} sa ${minutes % 60} dk"
+            else info.minutes.takeIf { it.isNotBlank() }?.let { "$it dk" }.orEmpty()
+        val metadata = listOf(info.year, info.genre.ifBlank { item.genre }, duration)
+            .filter { it.isNotBlank() }.joinToString(" · ")
+        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.unit), verticalAlignment = Alignment.CenterVertically) {
+            if (metadata.isNotEmpty()) Text(metadata, style = LumenType.meta, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            info.rating.toDoubleOrNull()?.takeIf { it > 0 }?.let { rating ->
+                LumenIcon(LumenIcon.Star, null, tint = LumenColors.textSecondary, size = IconSizes.meta)
+                Text("%.1f".format(java.util.Locale.US, rating), style = LumenType.meta)
+            }
+        }
+        if (info.collection.isNotBlank()) Text(info.collection, style = LumenType.meta)
+    }
+}
+
+@Composable
+internal fun DetailSecondaryActions(model: LibraryModel, item: Item, mark: Mark?, info: MovieInfo) {
+    DetailLibraryActions(model, item, mark)
+    DetailVersionPicker(model, item)
+    DetailTrailer(model, info)
+}
+
+@Composable
+private fun DetailLibraryActions(model: LibraryModel, item: Item, mark: Mark?) {
+    LumenButton(onClick = { model.mark(item, false) }, style = LumenButtonStyle.Secondary,
+        modifier = Modifier.semantics { selected = mark?.listed == true }) {
+        LumenIcon(if (mark?.listed == true) LumenIcon.Check else LumenIcon.Plus, null)
+        Text("Listem")
+    }
+    LumenButton(onClick = { model.mark(item, true) }, style = LumenButtonStyle.Secondary,
+        modifier = Modifier.semantics {
+            contentDescription = if (mark?.favorite == true) "Favoriden çıkar" else "Favoriye ekle"
+        }) {
+        LumenIcon(LumenIcon.Heart, null)
+    }
+}
+
+@Composable
+internal fun DetailCast(info: MovieInfo) {
+    val cast = info.people.joinToString(" · ") { it.name }.ifBlank { info.cast.replace(", ", " · ") }
+    if (cast.isNotBlank()) Column(Modifier.widthIn(max = 760.dp).padding(top = Spacing.unit),
+        verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+        Text("OYUNCULAR", style = LumenType.caption, color = LumenColors.textSecondary)
+        Text(cast, style = LumenType.meta, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+private fun DetailTrailer(model: LibraryModel, info: MovieInfo) {
+    val context = LocalContext.current
+    if (info.trailer.isNotBlank()) LumenButton(style = LumenButtonStyle.Secondary, onClick = {
+        runCatching {
+            context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,
+                android.net.Uri.parse("https://www.youtube.com/watch?v=${info.trailer}")))
+        }.onFailure { model.notice.value = "Fragman için uygun uygulama bulunamadı." }
+    }) { Text("Fragman") }
+}
+
+/** D0 has no dropdown primitive; keep this detail-only control beside its action row. */
+@Composable
+private fun DetailVersionPicker(model: LibraryModel, item: Item) {
+    var choices by remember(item.id) { mutableStateOf(emptyList<Item>()) }
+    var chosen by remember(item.id) { mutableStateOf("") }
+    var expanded by remember(item.id) { mutableStateOf(false) }
+    var message by remember(item.id) { mutableStateOf("") }
+    var saving by remember { mutableStateOf(false) }
+    var restore by remember { mutableStateOf(false) }
+    val trigger = remember { FocusRequester() }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(item.id) {
+        try {
+            choices = model.repo.versions(item).distinctBy { productionName(it.title, it.year).version }
+            chosen = model.repo.production(model.repo.selectedVersion(item)).id
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) { model.notice.value = "Sürüm bilgisi alınamadı." }
+    }
+    LaunchedEffect(expanded, restore) {
+        if (!expanded && restore) { trigger.requestFocus(); restore = false }
+    }
+    fun dismiss() { if (!saving) { expanded = false; restore = true } }
+    BackHandler(expanded) { dismiss() }
+    if (choices.size > 1) Box {
+        val selected = choices.firstOrNull { it.id == chosen }
+        LumenButton(onClick = { expanded = true }, style = LumenButtonStyle.Secondary,
+            modifier = Modifier.testTag("version-picker").focusRequester(trigger)) {
+            LumenIcon(LumenIcon.Audio, null)
+            Text(selected?.let { productionName(it.title, it.year).version.label } ?: "Dublaj")
+            LumenIcon(LumenIcon.ChevronDown, null)
+        }
+        if (expanded) {
+            val first = remember { FocusRequester() }
+            val offset = with(LocalDensity.current) { 56.dp.roundToPx() }
+            Popup(alignment = Alignment.TopStart, offset = IntOffset(0, offset),
+                onDismissRequest = { dismiss() }, properties = PopupProperties(focusable = true)) {
+                Panel(Modifier.width(280.dp).testTag("version-menu")) {
+                    Column(Modifier.padding(Spacing.unit).focusGroup()) {
+                        choices.forEachIndexed { index, version ->
+                            val name = productionName(version.title, version.year).version
+                            ListRow(onClick = {
+                                saving = true
+                                scope.launch {
+                                    try {
+                                        model.repo.chooseVersion(item, version)
+                                        chosen = version.id
+                                        expanded = false
+                                        restore = true
+                                    } catch (e: CancellationException) { throw e }
+                                    catch (_: Exception) { message = "Seçilen sürüm açılamadı." }
+                                    finally { saving = false }
                                 }
+                            }, selected = version.id == chosen, enabled = !saving,
+                                modifier = Modifier.testTag("version-${name.name}")
+                                    .then(if (index == 0) Modifier.focusRequester(first) else Modifier)) {
+                                Text(name.label, Modifier.weight(1f), style = LumenType.label)
+                                if (version.id == chosen) LumenIcon(LumenIcon.Check, null)
                             }
+                        }
+                        if (message.isNotBlank()) Row(Modifier.padding(Spacing.unit), verticalAlignment = Alignment.CenterVertically) {
+                            LumenIcon(LumenIcon.Info, null, tint = LumenColors.error)
+                            Text(message, style = LumenType.meta)
                         }
                     }
                 }
-            else if (info.cast.isNotBlank())
-                item {
-                    Column(
-                        Modifier.padding(top = 20.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Text("Oyuncular", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-                        Text(info.cast, color = Ink.muted, fontSize = 14.sp)
-                    }
-                }
-            if (item.kind == "LIVE")
-                item { GuidePanel(model, item) { replay -> play(replay, listOf(replay)) } }
-            item { Button(onClick = back) { Text("Geri") } }
+            }
+            LaunchedEffect(Unit) { withFrameNanos { }; first.requestFocus() }
         }
     }
 }
