@@ -63,7 +63,7 @@ internal fun SettingsScreen(
     val installation by UpdateInstaller.state.collectAsStateWithLifecycle()
     var awaitingInstallPermission by rememberSaveable { mutableStateOf(false) }
     val install: (Update) -> Unit = { info ->
-        model.job("") { UpdateInstaller.install(context.applicationContext, info) }
+        model.job("") { UpdateInstaller.install(context.applicationContext, info, model::diagnostic) }
     }
     val installPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -118,8 +118,8 @@ internal fun SettingsScreen(
         ) { uri ->
             val info = release
             if (uri != null && info != null)
-                model.job("İmzası ve özeti doğrulanan APK kaydedildi.") {
-                    val file = Updates.verifiedFile(context, info)
+                model.job("Özeti doğrulanan APK kaydedildi.") {
+                    val file = Updates.verifiedFile(context, info, onDiagnostic = model::diagnostic)
                     try {
                         withContext(Dispatchers.IO) {
                             checkNotNull(context.contentResolver.openOutputStream(uri)).use { out ->

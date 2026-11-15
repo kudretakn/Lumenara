@@ -98,9 +98,10 @@ constructor(val repo: Repository, val prefs: Preferences) : androidx.lifecycle.V
                 notice.value = e.message.orEmpty()
             } catch (_: java.net.SocketTimeoutException) {
                 notice.value = "Bağlantı zaman aşımına uğradı. Yeniden deneyin."
-            } catch (_: Exception) {
-                notice.value =
-                    "İşlem tamamlanamadı. Adresi, bağlantıyı ve kaynak izinlerini kontrol edin."
+            } catch (e: Exception) {
+                val message = describeFailure(e)
+                notice.value = message
+                diagnostic("${e.javaClass.simpleName}: $message")
             } finally {
                 busy.value = false
             }

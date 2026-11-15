@@ -26,11 +26,11 @@ internal object UpdateInstaller {
         state.value = UpdateInstallState("Kurulamadı: $reason")
     }
 
-    suspend fun install(context: Context, update: Update) {
+    suspend fun install(context: Context, update: Update, onDiagnostic: (String) -> Unit = {}) {
         if (state.value.active) return
         state.value = UpdateInstallState("İndiriliyor…", active = true)
         try {
-            val file = Updates.verifiedFile(context, update) {
+            val file = Updates.verifiedFile(context, update, onDiagnostic = onDiagnostic) {
                 state.value = UpdateInstallState("Doğrulanıyor…", active = true)
             }
             try {

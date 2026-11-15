@@ -67,6 +67,7 @@ object Updates {
     suspend fun verifiedFile(
         context: Context,
         update: Update,
+        onDiagnostic: (String) -> Unit = {},
         onVerifying: () -> Unit = {},
     ): File =
         withContext(Dispatchers.IO) {
@@ -102,15 +103,29 @@ object Updates {
                 fun code(info: android.content.pm.PackageInfo) =
                     if (Build.VERSION.SDK_INT >= 28) info.longVersionCode
                     else info.versionCode.toLong()
-                if (
-                    archive.packageName != installed.packageName ||
-                        code(archive) <= code(installed) ||
-                        signers(archive).isEmpty() ||
-                        signers(archive) != signers(installed)
+                var archiveSigners = signers(archive)
+                if (archiveSigners.isEmpty() && Build.VERSION.SDK_INT < 33) {
+                    // Some API 28–32 devices omit signingInfo for APK archives.
+                    archiveSigners = runCatching {
+                        pm.getPackageArchiveInfo(file.path, PackageManager.GET_SIGNATURES)
+                            ?.signatures?.toSet().orEmpty()
+                    }.getOrDefault(emptySet())
+                }
+                val installedSigners = signers(installed)
+                val mismatch = updateMismatch(
+                    archive.packageName == installed.packageName,
+                    code(archive),
+                    code(installed),
+                    archiveSigners,
+                    installedSigners,
                 )
-                    throw SourceFailure(
-                        "APK paketi, sürüm kodu veya imzası yüklü uygulamayla uyumsuz."
-                    )
+                if (mismatch != null) {
+                    onDiagnostic("Update: ${mismatch.message}")
+                    throw SourceFailure(mismatch.message)
+                }
+                if (archiveSigners.isEmpty() || installedSigners.isEmpty()) {
+                    onDiagnostic("Update: signer metadata unavailable; deferring signature check to PackageInstaller.")
+                }
                 file
             } catch (e: Throwable) {
                 file.delete()
