@@ -52,7 +52,7 @@ class RemoteNavigationTest {
                 screen.openHubCard("Ayarlar")
                 waitFor(hasText("IPTV Kaynakları") and isFocused())
                 screen.ok()
-                waitFor(hasText("✓ M3U"))
+                waitFor(hasText("Liste adresi gir"))
                 screen.back()
                 waitFor(hasText("IPTV Kaynakları") and isFocused())
                 screen.back()
@@ -70,11 +70,11 @@ class RemoteNavigationTest {
         }
     }
     @Test fun emptySetupAlsoRequiresTwoBackPresses() {
-        screen.waitUntil(30_000) { screen.onAllNodesWithText("✓ M3U").fetchSemanticsNodes().isNotEmpty() }
+        screen.waitUntil(30_000) { screen.onAllNodesWithText("Liste adresi gir").fetchSemanticsNodes().isNotEmpty() }
         val activity = screen.activity
         screen.back()
         screen.waitUntil(30_000) { screen.onAllNodesWithTag("exit-confirmation").fetchSemanticsNodes().isNotEmpty() }
-        screen.onNodeWithText("✓ M3U").assertExists()
+        screen.onNodeWithText("Liste adresi gir").assertExists()
         assertFalse(activity.isFinishing)
         screen.waitUntil(30_000) { screen.onAllNodesWithTag("exit-confirmation").fetchSemanticsNodes().isEmpty() }
         screen.back()

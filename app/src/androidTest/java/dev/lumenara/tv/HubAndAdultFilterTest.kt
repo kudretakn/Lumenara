@@ -30,6 +30,7 @@ class HubAndAdultFilterTest {
 
     private fun toggleAdult() {
         screen.openHubCard("Ayarlar")
+        screen.onNodeWithTag("settings-group-İçerik (+18)").performClick()
         screen.onNodeWithTag("settings-list").performScrollToNode(hasTestTag("show-adult"))
         screen.onNodeWithTag("show-adult").performSemanticsAction(SemanticsActions.RequestFocus)
         waitFor(hasTestTag("show-adult") and isFocused())

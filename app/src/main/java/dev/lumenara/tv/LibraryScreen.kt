@@ -167,7 +167,6 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
                     when (section) {
                         "IPTV Kaynakları" -> {
                             LumenaraLogo(showName = true)
-                            Text("IPTV Kaynakları", fontSize = 28.sp)
                             Setup(model, available, openRestore = { section = "Yedek geri yükle" }) { section = "Ana Sayfa" }
                         }
                         "Yedek geri yükle" -> BackupScreen(model, restore = true,
@@ -175,8 +174,6 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
                             section = if (available.isEmpty()) "IPTV Kaynakları" else "Ana Sayfa"
                         }
                         "Ayarlar" -> {
-                            Text("Ayarlar", fontSize = 28.sp)
-                            Spacer(Modifier.height(14.dp))
                             SettingsScreen(model, available, settingsEntry) {
                                 sourceParent = "Ayarlar"
                                 section = "IPTV Kaynakları"

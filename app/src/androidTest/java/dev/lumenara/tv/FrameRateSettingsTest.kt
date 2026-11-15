@@ -63,6 +63,7 @@ class FrameRateSettingsTest {
         val prefs = Preferences(InstrumentationRegistry.getInstrumentation().targetContext)
         screen.waitUntil(30_000) { screen.onAllNodesWithTag("hub").fetchSemanticsNodes().isNotEmpty() }
         screen.openHubCard("Ayarlar")
+        screen.onNodeWithTag("settings-group-Oynatıcı").performClick()
         for (next in listOf("Her zaman", "Kapalı", FRAME_RATE_DEFAULT)) {
             screen.onNodeWithTag("settings-list").performScrollToNode(hasText("Kare hızını eşle", substring = true))
             val choice = hasText("Kare hızını eşle", substring = true)

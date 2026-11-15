@@ -78,10 +78,11 @@ class LibraryJourneyTest {
                 screen.ok()
             }
             try {
-                button("✓ M3U")
+                select("Liste adresi gir")
                 val fields = screen.onAllNodes(hasSetTextAction())
                 fields[0].performTextReplacement(name)
                 fields[1].performTextReplacement(server.url("/list").toString())
+                select("Gelişmiş")
                 select("HTTP uyumluluğu · Kapalı")
                 button("HTTP uyumluluğu · Açık").assertExists()
                 select("Bağlantıyı sına ve ekle")
