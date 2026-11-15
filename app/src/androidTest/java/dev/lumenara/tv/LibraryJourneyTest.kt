@@ -44,7 +44,8 @@ class LibraryJourneyTest {
                         if (request.path == "/list")
                             return MockResponse()
                                 .setBody(
-                                    "#EXTM3U\n#EXTINF:-1 group-title=\"Spor\",Test Kanalı\n${server.url("/live/1")}\n"
+                                    "#EXTM3U\n#EXTINF:-1 group-title=\"Spor\",Test Kanalı\n${server.url("/live/1")}\n" +
+                                        "#EXTINF:-1 group-title=\"Filmler\",Gece Treni\n${server.url("/movie/1.mp4")}\n"
                                 )
                         received.countDown()
                         return MockResponse()
@@ -77,11 +78,20 @@ class LibraryJourneyTest {
                 }
                 screen.ok()
             }
+            fun capture(name: String) {
+                // Include the completed TV focus animation in the device screenshot.
+                val readyAt = android.os.SystemClock.uptimeMillis() + 300
+                screen.waitUntil(30_000) { android.os.SystemClock.uptimeMillis() >= readyAt }
+                val image = File(context.getExternalFilesDir(null), "screens/$name.png")
+                checkNotNull(image.parentFile).mkdirs()
+                assertTrue("Ekran görüntüsü: $name", device.takeScreenshot(image))
+            }
             try {
-                button("✓ M3U")
+                select("Liste adresi gir")
                 val fields = screen.onAllNodes(hasSetTextAction())
                 fields[0].performTextReplacement(name)
                 fields[1].performTextReplacement(server.url("/list").toString())
+                select("Gelişmiş")
                 select("HTTP uyumluluğu · Kapalı")
                 button("HTTP uyumluluğu · Açık").assertExists()
                 select("Bağlantıyı sına ve ekle")
@@ -98,9 +108,79 @@ class LibraryJourneyTest {
                             "Maç Sonu", "Karşılaşmanın değerlendirmesi.", "mac sonu"),
                     ))
                     repo.guide.map(Mapping(item.id, "live-journey", "sport"))
+                    preferences.set("recent_live", "")
+                    preferences.recordLive(item.id)
+                    val movie = repo.library.browse(source.id, "MOVIE", "", "", "", 1).first().single()
+                    repo.updateMark(movie.id) {
+                        it.copy(position = 900_000, duration = 5_400_000, updated = now)
+                    }
                     item
                 }
+                screen.waitUntil(30_000) {
+                    screen.onAllNodes(hasTestTag("hub-Canlı TV") and isFocused()).fetchSemanticsNodes().isNotEmpty()
+                }
+                capture("hub")
+                // The section uses the design's 48 dp safe inset, including the app's UI scale.
+                val sectionLeft = screen.onNodeWithTag("section-Ana Sayfa").fetchSemanticsNode().boundsInRoot.left
+                val density = sectionLeft / 48f
+                val columnWidth = screen.onNodeWithTag("hub-slot-Listem").fetchSemanticsNode().boundsInRoot.width
+                listOf("Canlı TV" to "Listem", "Filmler" to "Ara", "Diziler" to "Ayarlar").forEach { (top, bottom) ->
+                    // Focus scales the drawing; clipped semantics bounds are not grid geometry.
+                    val upper = screen.onNodeWithTag("hub-slot-$top").fetchSemanticsNode().boundsInRoot
+                    val lower = screen.onNodeWithTag("hub-slot-$bottom").fetchSemanticsNode().boundsInRoot
+                    assertEquals("Hub kolonları aynı merkezde kalmalı", upper.center.x, lower.center.x, density)
+                    assertEquals("Kolonların sol kenarları hizalı kalmalı", upper.left, lower.left, density)
+                    assertEquals("Üst kolonlar eşit genişlikte kalmalı", columnWidth, upper.width, density)
+                    assertEquals("Alt kolonlar eşit genişlikte kalmalı", columnWidth, lower.width, density)
+                    assertEquals("Birincil kart yüksekliği", 100f, upper.height / density, 1f)
+                    assertEquals("İkincil kart yüksekliği", 40f, lower.height / density, 1f)
+                }
+                assertEquals("Ortak sol kolon", sectionLeft,
+                    screen.onNodeWithTag("hub-slot-Listem").fetchSemanticsNode().boundsInRoot.left, density)
+                screen.onNodeWithTag("hub").performScrollToNode(hasTestTag("channel-shelf-Son kanal"))
+                val recentCard = hasTestTag("live-channel-${channel.id}") and
+                    hasAnyAncestor(hasTestTag("channel-shelf-Son kanal"))
+                screen.onNodeWithTag("hub").performScrollToIndex(0)
+                screen.waitUntil(30_000) { screen.onAllNodes(recentCard).fetchSemanticsNodes().isNotEmpty() }
+                val hubViewport = screen.onNodeWithTag("hub").fetchSemanticsNode().boundsInRoot
+                listOf("Canlı TV", "Filmler", "Diziler", "Listem", "Ara", "Ayarlar").forEach { name ->
+                    val bounds = screen.onNodeWithTag("hub-slot-$name").assertIsDisplayed()
+                        .fetchSemanticsNode().boundsInRoot
+                    assertTrue("Altı gezinme kartı ilk ekranda tamamen görünmeli",
+                        bounds.top >= hubViewport.top && bounds.bottom <= hubViewport.bottom)
+                }
+                val shelfCard = screen.onNode(recentCard).assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+                assertEquals("Hub raf kartı genişliği", 110f, shelfCard.width / density, 1f)
+                assertEquals("Hub raf görseli 16:9 kalmalı", 16f / 9f, shelfCard.width / shelfCard.height, .02f)
+                assertTrue("En az bir raf kartı gezinmeyle aynı ilk ekranda tamamen görünmeli",
+                    shelfCard.top >= hubViewport.top && shelfCard.bottom <= hubViewport.bottom)
+                screen.onNode(recentCard).performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus)
+                screen.waitUntil(30_000) { screen.onAllNodes(recentCard and isFocused()).fetchSemanticsNodes().isNotEmpty() }
+                screen.onNodeWithTag("hub").performScrollToNode(hasTestTag("shelf-Kaldığın yerden devam et"))
+                button("75 dk kaldı").assertIsDisplayed()
+                capture("home-shelves")
+                listOf("channel-shelf-Son kanal", "shelf-Kaldığın yerden devam et").forEach { tag ->
+                    assertEquals("Raflar aynı sol kolonda başlamalı", 48f,
+                        screen.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot.left / density, 1f)
+                }
+                assertEquals("Hub rafları yayın başlatmamalı", 1L, received.count)
                 screen.openHubCard("Canlı TV")
+                screen.waitUntil(30_000) {
+                    screen.onAllNodesWithTag("category-Son izlenenler").fetchSemanticsNodes().isNotEmpty()
+                }
+                val category = screen.onNodeWithTag("category-Son izlenenler").fetchSemanticsNode().boundsInRoot
+                val categoryGrid = screen.onNodeWithTag("category-grid").fetchSemanticsNode().boundsInRoot
+                assertEquals("Kategori kartı genişliği", (categoryGrid.width / density - 5 * 10f) / 6,
+                    category.width / density, 1f)
+                assertEquals("Kategori kartı yüksekliği", 60f, category.height / density, 1f)
+                screen.onNodeWithTag("category-search")
+                    .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus)
+                screen.ok()
+                screen.onNodeWithTag("category-search-field").performTextReplacement("Spor")
+                screen.onNodeWithTag("category-Spor").assertExists()
+                screen.onNodeWithTag("category-Tüm kanallar").assertDoesNotExist()
+                screen.back()
+                screen.onNodeWithTag("category-search").assertIsFocused()
                 screen.openCategory("Spor")
                 screen.waitUntil(30_000) {
                     screen.onAllNodes(hasTestTag("live-channel-${channel.id}") and isFocused())
@@ -112,9 +192,7 @@ class LibraryJourneyTest {
                 assertEquals(1L, received.count)
                 screen.onNodeWithText("Canlı Maç").assertExists()
                 screen.onNodeWithTag("live-preview").assertDoesNotExist()
-                val image = File(context.getExternalFilesDir(null), "screens/live.png")
-                checkNotNull(image.parentFile).mkdirs()
-                assertTrue("Canlı TV ekran görüntüsü", device.takeScreenshot(image))
+                capture("live")
                 screen.ok()
                 screen.waitUntil(30_000) {
                     screen.onAllNodes(hasContentDescription("Tam ekran oynatıcı") and isFocused())
@@ -144,8 +222,20 @@ class LibraryJourneyTest {
                 // Long OK keeps the existing favorite/EPG operations reachable.
                 screen.onNodeWithTag("live-channel-${channel.id}").assertIsFocused()
                 screen.longPressOkNative()
-                button("Favoriye ekle").assertExists()
+                // DESIGN-0.5 detail actions use an icon-only favorite button.
+                val inDetails = hasAnyAncestor(hasTestTag("details-content"))
+                val favorite = hasContentDescription("Favoriye ekle") and hasClickAction() and inDetails
+                screen.waitUntil(30_000) {
+                    screen.onAllNodes(favorite).fetchSemanticsNodes().isNotEmpty()
+                }
+                screen.onNode(hasText(channel.title) and inDetails).assertIsDisplayed()
+                screen.onNode(favorite).assertIsDisplayed().assertIsEnabled()
+                screen.onNode(hasText("EPG kanalı · sport") and inDetails).assertIsDisplayed()
                 screen.back()
+                screen.waitUntil(30_000) {
+                    screen.onAllNodes(hasTestTag("live-channel-${channel.id}") and isFocused())
+                        .fetchSemanticsNodes().isNotEmpty()
+                }
                 screen.back()
                 screen.openCategory("Yayın akışı")
                 button("Kanallar").assertExists()

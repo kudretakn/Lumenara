@@ -28,7 +28,9 @@ class AudioSubtitleTest {
         waitFor(matcher)
         screen.onNode(matcher).performSemanticsAction(SemanticsActions.RequestFocus)
         waitFor(matcher and isFocused())
-        screen.ok()
+        // Keep remote activation in the window containing this verified focused row.
+        screen.onNode(matcher and isFocused()).performKeyInput { pressKey(Key.DirectionCenter) }
+        screen.waitForIdle()
     }
     private fun capture(name: String) {
         screen.waitForIdle()
@@ -39,6 +41,12 @@ class AudioSubtitleTest {
     }
     private fun optionsScrollTo(matcher: SemanticsMatcher) {
         screen.onNodeWithTag("player-options").performScrollToNode(matcher)
+    }
+    private fun assertOptionsKeepRemoteFocus() {
+        val focusedOption = isFocused() and hasAnyAncestor(hasTestTag("player-options"))
+        waitFor(focusedOption)
+        screen.dpad(Key.DirectionLeft)
+        screen.onNode(focusedOption).assertIsFocused()
     }
 
     @Test fun xtreamVersionsShareStateAndSubtitleSearchAttachesAndReusesCache() {
@@ -125,13 +133,17 @@ class AudioSubtitleTest {
                 waitFor(card)
                 screen.onAllNodes(card).assertCountEquals(1)
                 select(card)
-                screen.onNodeWithTag("details-content").performScrollToNode(hasTestTag("version-SUBTITLED"))
-                select(hasTestTag("version-SUBTITLED"))
+                screen.onNodeWithTag("details-content").performScrollToNode(hasTestTag("version-picker"))
+                select(hasTestTag("version-picker"))
+                waitFor(hasTestTag("version-menu"))
+                waitFor(isFocused() and hasAnyAncestor(hasTestTag("version-menu")))
                 capture("versions")
+                select(hasTestTag("version-SUBTITLED"))
                 screen.onNodeWithTag("details-content").performScrollToIndex(0)
                 select(hasText("Devam et"))
                 screen.waitUntil(30_000) { videoRequested.get() == "102.mp4" }
                 screen.dpad(Key.Menu)
+                assertOptionsKeepRemoteFocus()
                 optionsScrollTo(hasTestTag("version-DUBBED"))
                 select(hasTestTag("version-DUBBED"))
                 screen.waitUntil(30_000) { videoRequested.get() == "101.mp4" }
@@ -140,13 +152,23 @@ class AudioSubtitleTest {
                 optionsScrollTo(hasTestTag("subtitle-search"))
                 select(hasTestTag("subtitle-search"))
                 waitFor(hasTestTag("subtitle-result-0"))
+                screen.onAllNodesWithTag("subtitle-results").assertCountEquals(1)
+                screen.onAllNodesWithTag("player-options").assertCountEquals(0)
                 capture("subtitle-search")
+                // Back restores the search row in the same options panel.
+                screen.back()
+                waitFor(hasTestTag("subtitle-search") and isFocused())
+                select(hasTestTag("subtitle-search"))
+                waitFor(hasTestTag("subtitle-result-0"))
                 select(hasTestTag("subtitle-result-0"))
-                waitFor(hasText("Altyazı eklendi · OpenSubtitles kalan indirme: 8"))
+                waitFor(hasText("Türkçe altyazı eklendi"))
                 val cue = SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Altyazı · Türkçe altyazı sınaması")
                 waitFor(cue)
+                screen.dpad(Key.DirectionRight)
+                waitFor(hasTestTag("vod-timeline"))
+                screen.onNode(hasText("Kıyı") and hasAnyAncestor(hasTestTag("vod-timeline"))).assertExists()
                 capture("subtitle-playing")
-                assertEquals(1, searches.get()); assertEquals(1, downloads.get())
+                assertEquals(2, searches.get()); assertEquals(1, downloads.get())
                 val key = runBlocking { repo.preferenceKey(movie) }
                 assertNotNull(repo.subtitles.cache.find(key))
                 // Close and reopen: the same UTF-8 cache is attached with no subtitle request.
@@ -157,21 +179,32 @@ class AudioSubtitleTest {
                 screen.onNodeWithTag("details-content").performScrollToIndex(0)
                 select(hasText("Devam et"))
                 waitFor(cue)
-                assertEquals(1, searches.get()); assertEquals(1, downloads.get())
+                assertEquals(2, searches.get()); assertEquals(1, downloads.get())
                 screen.dpad(Key.Menu)
                 optionsScrollTo(hasText("+0,5 sn"))
                 select(hasText("+0,5 sn"))
                 waitFor(hasText("Altyazı kaydırma · 0.5 sn"))
                 screen.waitUntil(5000) { runBlocking { prefs.text("delay_$key").first() } == "500" }
-                optionsScrollTo(hasText("VLC ile aç"))
-                select(hasText("VLC ile aç"))
+                optionsScrollTo(hasText("Motor: Media3/VLC"))
+                select(hasText("Motor: Media3/VLC"))
                 waitFor(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "İndirilen altyazı etkin"))
                 screen.dpad(Key.Menu)
+                assertOptionsKeepRemoteFocus()
                 optionsScrollTo(hasText("Altyazı gecikmesi · 500 ms"))
                 waitFor(hasText("Altyazı gecikmesi · 500 ms"))
                 select(hasText("−0,5 sn"))
                 waitFor(hasText("Altyazı gecikmesi · 0 ms"))
-                assertEquals(1, searches.get()); assertEquals(1, downloads.get())
+                screen.back()
+                screen.dpad(Key.DirectionRight)
+                waitFor(hasTestTag("vod-timeline"))
+                capture("subtitle-playing-vlc")
+                screen.dpad(Key.Menu)
+                optionsScrollTo(hasTestTag("subtitle-search"))
+                select(hasTestTag("subtitle-search"))
+                waitFor(hasTestTag("subtitle-result-0"))
+                screen.onAllNodesWithTag("player-options").assertCountEquals(0)
+                capture("subtitle-search-vlc")
+                assertEquals(3, searches.get()); assertEquals(1, downloads.get())
                 runBlocking {
                     val marks = versions.map { repo.library.mark(it.id)!! }
                     assertEquals(1, marks.map { it.position }.distinct().size)

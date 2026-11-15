@@ -110,6 +110,10 @@ class ProgramDiscoveryTest {
                     val secondLeft = screen.onNodeWithTag("live-channel-${long.id}").fetchSemanticsNode().boundsInRoot.left
                     first < second || first == second && firstLeft < secondLeft
                 }
+                screen.onNodeWithContentDescription("Kanal ara")
+                    .performSemanticsAction(SemanticsActions.RequestFocus)
+                screen.ok()
+                await(hasSetTextAction())
                 screen.onNode(hasSetTextAction()).performTextInput("uzun")
                 screen.waitUntil(30_000) { screen.onAllNodesWithTag("live-channel-${short.id}").fetchSemanticsNodes().isEmpty() }
                 screen.onNodeWithTag("live-channel-${long.id}").assertExists()

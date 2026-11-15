@@ -1,8 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Lumenara — Sahne ışığı">
-<title>Lumenara — Sahne ışığı</title>
-<defs><linearGradient id="beam" x1="256" y1="140" x2="256" y2="350" gradientUnits="userSpaceOnUse"><stop stop-color="#F4C77B"/><stop offset="1" stop-color="#F4C77B" stop-opacity=".12"/></linearGradient></defs>
-<rect width="512" height="512" rx="112" fill="#0B0E13"/>
-<path d="M230 142 H282 L354 344 Q256 374 158 344 Z" fill="url(#beam)"/>
-  <rect x="226" y="126" width="60" height="22" rx="11" fill="#F8DBA8"/>
-  <path d="M150 381 H362" fill="none" stroke="#F4C77B" stroke-width="18" stroke-linecap="round"/>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28" role="img" aria-label="Lumenara"><path d="M11 4H17L23 22Q14 25 5 22Z" fill="#E8B65A"/><path d="M11 3H17M3 27H25" fill="none" stroke="#E8B65A" stroke-width="2" stroke-linecap="round"/></svg>

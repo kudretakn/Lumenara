@@ -1,13 +1,23 @@
 package dev.lumenara.tv
 
 import android.view.KeyEvent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.foundation.lazy.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.focus.*
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
@@ -15,11 +25,20 @@ import dev.lumenara.data.Item
 import dev.lumenara.data.nextItem
 import dev.lumenara.design.*
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 /** Shared remote contract and real-time deadlines for both playback engines. */
 @Stable
 internal class FullscreenState {
     var guide by mutableStateOf(false)
+    // One onboarding use per playback session, shared by both engines and channel switches.
+    var hintClaimed by mutableStateOf(false)
+    var showLiveHint by mutableStateOf(false)
     var bannerUntil by mutableLongStateOf(0)
     var activity by mutableLongStateOf(0)
     var now by mutableLongStateOf(System.currentTimeMillis())
@@ -92,63 +111,121 @@ internal fun BoxScope.FullscreenOverlay(
     select: (Item, List<Item>) -> Unit, options: () -> Unit,
     position: () -> Long, duration: () -> Long, next: (() -> Unit)?,
 ) {
-    if (state.guide && item.kind == "LIVE") {
+    LaunchedEffect(state, item.kind == "LIVE") {
+        if (item.kind == "LIVE" && !state.hintClaimed) {
+            hintCounterLock.withLock {
+                if (!state.hintClaimed) {
+                    val used = model.prefs.text(LIVE_HINT_USES).first().toIntOrNull()?.coerceIn(0, 3) ?: 0
+                    state.showLiveHint = used < 3
+                    model.prefs.set(LIVE_HINT_USES, (used + 1).coerceAtMost(3).toString())
+                    state.hintClaimed = true
+                }
+            }
+        }
+    }
+    val panelSlidePx = with(LocalDensity.current) { Motion.panelSlide.roundToPx() }
+    AnimatedVisibility(state.guide && item.kind == "LIVE",
+        enter = slideInHorizontally(tween(Motion.panelEnterMillis)) { -panelSlidePx } +
+            fadeIn(tween(Motion.panelEnterMillis)),
+        exit = ExitTransition.None) {
         MiniGuide(model, item, state, select, options)
-    } else if (state.finished && next != null) {
-        GlassPanel(Modifier.align(Alignment.BottomEnd).padding(48.dp, 27.dp).width(320.dp)) {
+    }
+    if (!state.guide && state.finished && next != null) {
+        Panel(Modifier.align(Alignment.BottomEnd).padding(Spacing.screenHorizontal, Spacing.screenVertical).width(320.dp)) {
             val focus = remember { FocusRequester() }
             LaunchedEffect(Unit) { focus.requestFocus() }
-            FocusCard(next, Modifier.padding(16.dp).fillMaxWidth().focusRequester(focus)) {
-                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Sonraki bölüm  ▶", fontSize = 20.sp)
+            LumenButton(next, Modifier.padding(Spacing.cardGap).fillMaxWidth().focusRequester(focus)) {
+                LumenIcon(LumenIcon.Play, contentDescription = null)
+                Column {
+                    Text("Sonraki bölüm", style = LumenType.cardTitle)
                     group.nextItem(item)?.let { episode ->
                         val name = dev.lumenara.catalog.episodeName(episode.title, episode.category)
-                        Text("S${name.season} B${name.episode} · ${name.title}", color = Ink.muted, fontSize = 14.sp, maxLines = 2)
+                        Text("S${name.season} B${name.episode} · ${name.title}", style = LumenType.meta, maxLines = 2,
+                            color = LumenColors.onFocus)
                     }
                 }
             }
         }
-    } else if (state.bannerUntil > state.now) {
+    }
+    val bannerVisible = !state.guide && !(state.finished && next != null) && state.bannerUntil > state.now
+    if (bannerVisible) {
         LaunchedEffect(item.id, state.bannerRequest) {
-            // The first callback precedes drawing; the next frame confirms that
-            // the banner had a chance to draw, even after a stalled UI thread.
-            withFrameNanos { }
-            withFrameNanos { }
+            // Two frames let the banner draw before its wall-clock deadline starts.
+            withFrameNanos { }; withFrameNanos { }
             state.now = System.currentTimeMillis()
-            state.bannerUntil = state.now + 4000
+            state.bannerUntil = state.now + Motion.bannerAutoHideMillis
         }
-        GlassPanel(Modifier.align(Alignment.BottomCenter).padding(horizontal = 48.dp, vertical = 27.dp)
-            .fillMaxWidth().testTag(if (item.kind == "LIVE") "fullscreen-banner" else "vod-timeline")) {
-            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (item.kind == "LIVE") {
-                    val numbers = liveChannelNumbers(model, item.source, listOf(item))
-                    val slots = liveProgrammes(model, item, state.now / 30_000 * 30_000, 86_400_000)
-                    val current = slots.firstOrNull { state.now >= it.start && state.now < it.end }
-                    val following = slots.firstOrNull { it.start >= (current?.end ?: state.now) }
-                    val logo by produceState<String?>(null, item.id) { value = model.repo.poster(item) }
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text("${numbers[item.id] ?: 1}", color = Ink.muted)
-                        Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
-                            Text(item.title.take(1), color = Ink.accent)
-                            if (logo != null) Artwork(model, item, logo, Modifier.fillMaxSize())
-                        }
-                        Text(item.title, fontSize = 28.sp, maxLines = 1)
-                    }
-                    Text(current?.title ?: "Program bilgisi yok", fontSize = 20.sp, maxLines = 1)
-                    ProgressLine(current?.let { (state.now - it.start).toFloat() / (it.end - it.start).coerceAtLeast(1) } ?: 0f)
-                    Text("Sonra: ${following?.title ?: "—"}", color = Ink.muted, maxLines = 1)
-                    Text("OK / ← Mini rehber    •    Uzun OK / Menü: Seçenekler", fontSize = 12.sp, color = Ink.muted)
-                } else {
-                    val elapsed = position().coerceAtLeast(0)
-                    val total = duration().coerceAtLeast(0)
-                    Text(item.title, fontSize = 28.sp, maxLines = 1)
+    }
+    AnimatedVisibility(bannerVisible, Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
+        enter = fadeIn(tween(Motion.bannerFadeMillis)), exit = fadeOut(tween(Motion.bannerFadeMillis))) {
+        Box(Modifier.fillMaxWidth().height(200.dp).background(LumenBrushes.scrim)
+            .testTag(if (item.kind == "LIVE") "fullscreen-banner" else "vod-timeline")) {
+            if (item.kind == "LIVE") {
+                LiveBanner(model, item, state)
+            } else {
+                val elapsed = position().coerceAtLeast(0)
+                val total = duration().coerceAtLeast(0)
+                Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                    .padding(horizontal = Spacing.screenHorizontal, vertical = Spacing.screenVertical),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+                    Text(playbackDisplayTitle(item), style = LumenType.title, color = LumenColors.textPrimary, maxLines = 1)
                     ProgressLine(if (total > 0) elapsed.toFloat() / total else 0f)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text(playbackTime(elapsed)); Text("−${playbackTime((total - elapsed).coerceAtLeast(0))}")
+                        Text(playbackTime(elapsed), style = LumenType.meta)
+                        Text("${playbackTime((total - elapsed).coerceAtLeast(0))} kaldı", style = LumenType.meta)
                     }
-                    Text("← −10 sn    •    +10 sn →    •    OK: Seçenekler", color = Ink.muted, fontSize = 12.sp)
                 }
             }
+        }
+    }
+}
+
+internal const val LIVE_HINT_USES = "live_hint_uses"
+private val hintCounterLock = Mutex()
+private val bannerTime = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault())
+private fun clockTime(ms: Long): String = bannerTime.format(Instant.ofEpochMilli(ms))
+
+@Composable
+private fun BoxScope.LiveBanner(model: LibraryModel, item: Item, state: FullscreenState) {
+    val numbers = liveChannelNumbers(model, item.source, listOf(item))
+    val slots = liveProgrammes(model, item, state.now / 30_000 * 30_000, 86_400_000)
+    val current = slots.firstOrNull { state.now >= it.start && state.now < it.end }
+    val following = slots.firstOrNull { it.start >= (current?.end ?: state.now) }
+    val logo by produceState<String?>(null, item.id, item.logo) { value = model.repo.poster(item) }
+    Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+        .padding(horizontal = Spacing.screenHorizontal, vertical = Spacing.screenVertical),
+        verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+        Row(verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
+            ChannelLogo(model, item, logo, Modifier.size(96.dp, 54.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+                Row(verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+                    Text("${numbers[item.id] ?: 1}", style = LumenType.meta)
+                    Text(item.title, Modifier.weight(1f), style = LumenType.title,
+                        color = LumenColors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Box(Modifier.size(6.dp).background(LumenColors.live, androidx.compose.foundation.shape.CircleShape))
+                    Text("CANLI", style = LumenType.caption, color = LumenColors.live)
+                    Text(clockTime(state.now), style = LumenType.meta, color = LumenColors.textPrimary)
+                }
+                if (current != null) {
+                    Row(verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
+                        Text(current.title, Modifier.weight(1f), style = LumenType.body,
+                            color = LumenColors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("${clockTime(current.start)} – ${clockTime(current.end)}", style = LumenType.meta)
+                    }
+                    ProgressLine((state.now - current.start).toFloat() / (current.end - current.start).coerceAtLeast(1),
+                        Modifier.widthIn(max = 560.dp))
+                }
+                if (following != null) Text("Sonra  ${clockTime(following.start)}  ${following.title}",
+                    style = LumenType.meta, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        if (state.showLiveHint) Row(Modifier.align(Alignment.End),
+            verticalAlignment = Alignment.CenterVertically) {
+            LumenIcon(LumenIcon.ChevronLeft, contentDescription = null, tint = LumenColors.textSecondary, size = 20.dp)
+            Text("Kanallar  ·  Basılı tut: Seçenekler", Modifier.testTag("live-first-use-hint"), style = LumenType.meta)
         }
     }
 }
@@ -161,54 +238,62 @@ private fun MiniGuide(model: LibraryModel, playing: Item, state: FullscreenState
     var category by remember { mutableStateOf("") }
     val categories by remember(playing.source) { model.repo.categories("LIVE", playing.source) }
         .collectAsStateWithLifecycle(emptyList())
+    val choices = (listOf("") + categories).distinct()
+    fun changeCategory(delta: Int) {
+        val index = choices.indexOf(category).coerceAtLeast(0)
+        category = choices[Math.floorMod(index + delta, choices.size)]
+        state.activity = System.currentTimeMillis()
+    }
     val channels = rememberLivePages(model, playing.source, category, returnId = playing.id)
     val numbers = liveChannelNumbers(model, playing.source, channels.loaded())
     val list = rememberLazyListState()
     val currentFocus = remember(category) { FocusRequester() }
     val target = channels.anchor ?: 0
     var positioned by remember(category) { mutableStateOf(false) }
+    var focusPending by remember(category) { mutableStateOf(true) }
     LaunchedEffect(channels[target], category) {
         if (channels[target] != null && !positioned) { list.scrollToItem(target); positioned = true }
     }
     LaunchedEffect(channels, positioned) {
         if (positioned) snapshotFlow { list.firstVisibleItemIndex }.collect { channels.focused(it) }
     }
-    GlassPanel(Modifier.fillMaxWidth(.42f).padding(start = 12.dp, top = 12.dp, bottom = 12.dp)
-        .fillMaxHeight().testTag("mini-guide").onPreviewKeyEvent {
-            state.activity = System.currentTimeMillis(); false
-        }) {
-        Column(Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Mini rehber", fontSize = 18.sp)
-                Pill("Seçenekler", false, { state.guide = false; options() })
-            }
-            LazyRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(horizontal = 4.dp)) {
-                items((listOf("") + categories).distinct(), key = { it }) { name ->
-                    Pill(name.ifEmpty { "Tümü" }, category == name, { category = name })
+    Panel(Modifier.width(400.dp).fillMaxHeight().testTag("mini-guide").onPreviewKeyEvent {
+        state.activity = System.currentTimeMillis(); false
+    }, shape = RectangleShape) {
+        Column(Modifier.fillMaxSize()) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = Spacing.cardGap, vertical = Spacing.screenVertical),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+                Text(category.ifEmpty { "Tüm kanallar" }, Modifier.weight(1f), style = LumenType.title,
+                    color = LumenColors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                LumenButton({ changeCategory(-1) }, style = LumenButtonStyle.Secondary) {
+                    LumenIcon(LumenIcon.ChevronLeft, contentDescription = "Önceki kategori")
+                }
+                LumenButton({ changeCategory(1) }, style = LumenButtonStyle.Secondary) {
+                    LumenIcon(LumenIcon.ChevronRight, contentDescription = "Sonraki kategori")
+                }
+                LumenButton({ state.guide = false; options() }, style = LumenButtonStyle.Secondary) {
+                    LumenIcon(LumenIcon.Settings, contentDescription = "Seçenekler")
                 }
             }
-            BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
-                // TV commonly exposes 540 dp vertically: shrink below 80 dp to keep eight rows visible.
-                val rowHeight = minOf(80.dp, (maxHeight - 16.dp - 4.dp * 7) / 8)
-                LazyColumn(Modifier.fillMaxSize().testTag("mini-guide-channels"), state = list,
-                    verticalArrangement = Arrangement.spacedBy(4.dp), contentPadding = PaddingValues(8.dp)) {
-                    items(channels.count, key = { it }) { index ->
-                        val row = channels[index]
-                        if (row == null) {
-                            Box(Modifier.fillMaxWidth().height(rowHeight))
-                            return@items
-                        }
-                        val isTarget = index == target
-                        if (isTarget && positioned) LaunchedEffect(category, positioned) { currentFocus.requestFocus() }
-                        LiveChannelRow(model, row, numbers[row.id] ?: 1, state.now / 30_000 * 30_000,
-                            { Perf.mark("channel"); state.guide = false; state.showBanner(); select(row, channels.loaded()) },
-                            { state.guide = false; options() },
-                            { channels.focused(index); state.activity = System.currentTimeMillis() },
-                            if (isTarget) Modifier.focusRequester(currentFocus) else Modifier,
-                            selected = row.id == playing.id, compactHeight = rowHeight)
+            LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("mini-guide-channels"), state = list,
+                contentPadding = PaddingValues(end = Spacing.unit, bottom = Spacing.screenVertical)) {
+                items(channels.count, key = { it }) { index ->
+                    val row = channels[index]
+                    if (row == null) {
+                        Box(Modifier.fillMaxWidth().height(64.dp))
+                        return@items
                     }
+                    val isTarget = index == target
+                    if (isTarget && positioned && focusPending) LaunchedEffect(category, positioned) {
+                        currentFocus.requestFocus(); focusPending = false
+                    }
+                    LiveChannelRow(model, row, numbers[row.id] ?: 1, state.now / 30_000 * 30_000,
+                        { Perf.mark("channel"); state.guide = false; state.showBanner(); select(row, channels.loaded()) },
+                        { state.guide = false; options() },
+                        { channels.focused(index); state.activity = System.currentTimeMillis() },
+                        if (isTarget) Modifier.focusRequester(currentFocus) else Modifier,
+                        selected = row.id == playing.id, compactHeight = 64.dp)
                 }
             }
         }

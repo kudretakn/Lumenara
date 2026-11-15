@@ -20,8 +20,7 @@ import androidx.tv.material3.*
 import dev.lumenara.data.Item
 import dev.lumenara.data.nextItem
 import dev.lumenara.data.seriesOrder
-import dev.lumenara.design.Ink
-import dev.lumenara.design.glass
+import dev.lumenara.design.*
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -507,29 +506,45 @@ internal fun VlcScreen(
             sleepTimer.cancel()
             onSleepTimerChanged()
         }
-        if (panel) {
+        val optionsState = rememberLazyListState()
+        LaunchedEffect(panel) { if (!panel) optionsState.scrollToItem(0) }
+        if (panel && !subtitleSearch.open) {
             val first = remember { FocusRequester() }
-            LaunchedEffect(Unit) { first.requestFocus() }
+            var audioExpanded by remember { mutableStateOf(false) }
+            var textExpanded by remember { mutableStateOf(false) }
+            val audioFocus = remember { FocusRequester() }
+            val textFocus = remember { FocusRequester() }
+            BackHandler(audioExpanded || textExpanded) {
+                if (textExpanded) { textExpanded = false; textFocus.requestFocus() }
+                else { audioExpanded = false; audioFocus.requestFocus() }
+            }
+            LaunchedEffect(Unit) {
+                withFrameNanos { }
+                if (!subtitleSearch.restore) first.requestFocus()
+            }
             LazyColumn(
-                Modifier.width(420.dp).fillMaxHeight().testTag("player-options").padding(start = 48.dp, top = 27.dp, bottom = 27.dp).glass().padding(16.dp),
+                state = optionsState,
+                modifier = Modifier.align(Alignment.CenterEnd).width(400.dp).fillMaxHeight().background(LumenColors.surface1).testTag("player-options").padding(horizontal = Spacing.titleGap, vertical = Spacing.screenVertical)
+                    .focusProperties { onExit = { cancelFocusChange() } }.focusGroup(),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 item {
-                    Text("Seçenekler", fontSize = 20.sp)
-                    Text(item.title)
-                    if (message.isNotEmpty()) Text(message, color = Ink.accent)
+                    Text("Seçenekler", style = LumenType.title)
+                    Text(playbackDisplayTitle(item), style = LumenType.cardTitle, maxLines = 2)
+                    if (message.isNotEmpty()) Text(message, color = LumenColors.accent)
                 }
+                item { PlaybackSection("OYNATICI") }
                 item { SleepTimerChoices(sleepTimer, item.kind == "EPISODE", onSleepTimerChanged) }
                 item {
-                    Button(modifier = Modifier.focusRequester(first), onClick = { panel = false }) {
+                    PlayerOption(modifier = Modifier.focusRequester(first), onClick = { panel = false }) {
                         Text("Yayına dön")
                     }
                 }
                 if (message.isNotEmpty()) item {
-                    Button(onClick = { message = ""; panel = false; retry.manual() }) { Text("Yeniden dene") }
+                    PlayerOption(onClick = { message = ""; panel = false; retry.manual() }) { Text("Yeniden dene") }
                 }
                 item {
-                    Button(onClick = { exo(player?.time ?: position) }) { Text("Media3 ile aç") }
+                    PlayerOption(onClick = { exo(player?.time ?: position) }) { Text("Motor: VLC/Media3") }
                 }
                 item { VersionChoice(model, item) { version ->
                     scope.launch {
@@ -542,6 +557,7 @@ internal fun VlcScreen(
                         select(version, rows)
                     }
                 } }
+                item { PlaybackSection("ALTYAZI") }
                 item { SubtitleSearch(subtitleSearch) }
                 item { Subtitles { configuration -> scope.launch {
                     model.prefs.set("text_$preferenceKey", if (configuration == null) "off" else "tr")
@@ -555,31 +571,54 @@ internal fun VlcScreen(
                                 panel = false
                             }
                         }
+                    item { PlaybackSection("GÖRÜNTÜ") }
                     item {
-                        Button(onClick = { if (p.isPlaying) p.pause() else p.play() }) {
+                        PlayerOption(onClick = { if (p.isPlaying) p.pause() else p.play() }) {
                             Text("Duraklat / devam")
                         }
                     }
                     if (p.isSeekable)
                         item {
-                            Row {
-                                Button(onClick = { p.setTime((p.time - 10000).coerceAtLeast(0)) }) {
+                            Column {
+                                PlayerOption(onClick = { p.setTime((p.time - 10000).coerceAtLeast(0)) }) {
                                     Text("−10 sn")
                                 }
-                                Button(onClick = { p.setTime(p.time + 10000) }) { Text("+10 sn") }
+                                PlayerOption(onClick = { p.setTime(p.time + 10000) }) { Text("+10 sn") }
                             }
                         }
-                    items(audioTracks) { track ->
-                        Button(onClick = {
+                    item { PlaybackSection("SES") }
+                    item {
+                        PlayerOption(onClick = { audioExpanded = !audioExpanded },
+                            modifier = Modifier.focusRequester(audioFocus), icon = LumenIcon.Audio) {
+                            Text("Ses", Modifier.weight(1f))
+                            Text(audioTracks.firstOrNull { it.id == p.audioTrack }?.name.orEmpty(),
+                                style = LumenType.meta, maxLines = 1, modifier = Modifier.weight(1f))
+                        }
+                    }
+                    if (audioExpanded) items(audioTracks) { track ->
+                        PlayerOption(onClick = {
                             p.setAudioTrack(track.id)
+                            audioExpanded = false
+                            audioFocus.requestFocus()
                             scope.launch { model.prefs.set("audio_$preferenceKey", trackChoice(languages[track.id], track.id.toString())) }
                         }) {
                             Text("Ses · ${languageName(languages[track.id])} · ${track.name}")
                         }
                     }
-                    items(textTracks) { track ->
-                        Button(onClick = {
+                    item { PlaybackSection("ALTYAZI") }
+                    item {
+                        PlayerOption(onClick = { textExpanded = !textExpanded },
+                            modifier = Modifier.focusRequester(textFocus), icon = LumenIcon.Subtitles) {
+                            Text("Altyazı", Modifier.weight(1f))
+                            Text(textTracks.firstOrNull { it.id == p.spuTrack }?.name ?: "Kapalı",
+                                style = LumenType.meta, maxLines = 1, modifier = Modifier.weight(1f))
+                        }
+                    }
+                    if (textExpanded) items(textTracks) { track ->
+                        PlayerOption(onClick = {
                             p.setSpuTrack(track.id)
+                            textExpanded = false
+                            textFocus.requestFocus()
                             scope.launch { model.prefs.set("text_$preferenceKey", if (track.id < 0) "off" else trackChoice(languages[track.id], track.id.toString())) }
                         }) {
                             Text(if (track.id < 0) "Altyazıyı kapat" else "Altyazı · ${languageName(languages[track.id])} · ${track.name}")
@@ -587,8 +626,8 @@ internal fun VlcScreen(
                     }
                     item {
                         Text("Altyazı gecikmesi · $delayMs ms")
-                        Row {
-                            for (step in listOf(-500L, 500L)) Button(
+                        Column {
+                            for (step in listOf(-500L, 500L)) PlayerOption(
                                 onClick = {
                                     delayMs = (delayMs + step).coerceIn(-60_000, 60_000)
                                     scope.launch { model.prefs.set("delay_$preferenceKey", delayMs.toString()) }

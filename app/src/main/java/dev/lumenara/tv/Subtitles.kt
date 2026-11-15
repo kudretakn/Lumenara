@@ -8,9 +8,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.*
 import androidx.tv.material3.*
-import dev.lumenara.design.Ink
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -21,7 +19,7 @@ import dev.lumenara.catalog.SubtitleType
 import dev.lumenara.catalog.productionName
 import dev.lumenara.catalog.languageName
 import dev.lumenara.data.*
-import dev.lumenara.design.GlassPanel
+import dev.lumenara.design.*
 import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -58,13 +56,13 @@ internal fun Subtitles(attach: (MediaItem.SubtitleConfiguration?) -> Unit) {
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             uri?.let(::add)
         }
-    Button(onClick = { editor = !editor }) { Text("Harici altyazı") }
+    PlayerOption(onClick = { editor = !editor }) { Text("Harici altyazı") }
     if (editor)
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Button(onClick = { format = (format + 1) % formats.size }) {
+            PlayerOption(onClick = { format = (format + 1) % formats.size }) {
                 Text("Biçim · ${formats[format].first}")
             }
-            Button(
+            PlayerOption(
                 onClick = {
                     runCatching { file.launch(arrayOf("*/*")) }
                         .onFailure { message = "Dosya seçici bulunamadı." }
@@ -73,7 +71,7 @@ internal fun Subtitles(attach: (MediaItem.SubtitleConfiguration?) -> Unit) {
                 Text("Dosya seç")
             }
             Field("Altyazı adresi", address, { address = it })
-            Button(
+            PlayerOption(
                 onClick = {
                     val uri = Uri.parse(address.trim())
                     if (uri.scheme !in listOf("https", "http") || uri.host == null)
@@ -83,8 +81,8 @@ internal fun Subtitles(attach: (MediaItem.SubtitleConfiguration?) -> Unit) {
             ) {
                 Text("Adresten ekle")
             }
-            Button(onClick = { attach(null) }) { Text("Harici altyazıyı kaldır") }
-            if (message.isNotBlank()) Text(message, color = Ink.accent)
+            PlayerOption(onClick = { attach(null) }) { Text("Harici altyazıyı kaldır") }
+            if (message.isNotBlank()) Text(message, color = LumenColors.textSecondary)
         }
 }
 
@@ -105,7 +103,7 @@ internal fun VersionChoice(model: LibraryModel, item: Item,
     if (choices.size > 1) Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text("Dublaj / Altyazılı")
         for (version in choices.distinctBy { productionName(it.title, it.year).version }) {
-            Button(onClick = {
+            PlayerOption(onClick = {
                 scope.launch {
                     try {
                         val resolved = model.repo.chooseVersion(item, version)
@@ -115,7 +113,8 @@ internal fun VersionChoice(model: LibraryModel, item: Item,
                     catch (_: Exception) { message = "Bu bölüm seçilen sürümde bulunamadı." }
                 }
             }, modifier = Modifier.testTag("version-${productionName(version.title, version.year).version.name}")) {
-                Text((if (chosen == version.id) "✓ " else "") + productionName(version.title, version.year).version.label)
+                if (chosen == version.id) LumenIcon(LumenIcon.Check, null)
+                Text(productionName(version.title, version.year).version.label)
             }
         }
         if (message.isNotBlank()) Text(message)
@@ -139,7 +138,7 @@ internal class SubtitleSearchState(
         private set
     var remaining by mutableStateOf<Int?>(null)
     val searchFocus = FocusRequester()
-    var searchAttached = false
+    var searchAttached by mutableStateOf(false)
     var restore by mutableStateOf(false)
 
     fun dismiss() {
@@ -188,7 +187,7 @@ internal class SubtitleSearchState(
                 remaining = downloaded.second
                 downloaded.second?.let { model.prefs.set("subtitle_remaining", it.toString()) }
                 model.prefs.set("text_$key", "downloaded")
-                status("Altyazı eklendi" + (downloaded.second?.let { " · OpenSubtitles kalan indirme: $it" } ?: ""))
+                status("Türkçe altyazı eklendi")
                 attach(subtitleConfiguration(downloaded.first))
                 message = "Altyazı eklendi."
                 dismiss()
@@ -238,10 +237,9 @@ internal fun SubtitleSearch(state: SubtitleSearchState) {
         onDispose { state.searchAttached = false }
     }
     Column {
-        Button(onClick = state::search, enabled = !state.loading || !state.open,
+        PlayerOption(onClick = state::search, enabled = !state.loading || !state.open,
             modifier = Modifier.focusRequester(state.searchFocus).testTag("subtitle-search")) { Text("Altyazı ara") }
-        if (!state.open && state.message.isNotBlank()) Text(state.message, color = Ink.accent)
-        state.remaining?.let { Text("OpenSubtitles · kalan indirme: $it") }
+        if (!state.open && state.message.isNotBlank()) Text(state.message, color = LumenColors.textSecondary)
     }
 }
 
@@ -251,8 +249,10 @@ internal fun SubtitleResults(state: SubtitleSearchState, panel: Boolean, playerF
     LaunchedEffect(state.open, state.restore, panel) {
         if (!state.open && state.restore) {
             withFrameNanos { }
-            if (panel && state.searchAttached) state.searchFocus.requestFocus()
-            else playerFocus.requestFocus()
+            if (panel) {
+                snapshotFlow { state.searchAttached }.first { it }
+                state.searchFocus.requestFocus()
+            } else playerFocus.requestFocus()
             state.restore = false
         }
     }
@@ -266,41 +266,42 @@ internal fun SubtitleResults(state: SubtitleSearchState, panel: Boolean, playerF
             list.scrollToItem(1)
             withFrameNanos { }
             first.requestFocus()
-        } else close.requestFocus()
+        } else {
+            withFrameNanos { }
+            close.requestFocus()
+        }
     }
-    Box(
-        Modifier.fillMaxSize()
-            .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = .64f))
+    Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.CenterEnd) {
+        Panel(Modifier.width(400.dp).fillMaxHeight().testTag("subtitle-results")
             .pointerInput(Unit) { detectTapGestures { } }
-            .focusProperties { onExit = { cancelFocusChange() } }
-            .focusGroup(),
-        contentAlignment = androidx.compose.ui.Alignment.Center,
-    ) {
-        GlassPanel(Modifier.padding(32.dp).widthIn(max = 760.dp).fillMaxWidth()
-            .heightIn(max = 440.dp).testTag("subtitle-results")) {
-            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Altyazı ara · Türkçe")
-                Button(onClick = state::dismiss, modifier = Modifier.focusRequester(close)) { Text("Kapat") }
-                LazyColumn(state = list, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            .focusProperties { onExit = { cancelFocusChange() } }.focusGroup(),
+            shape = androidx.compose.ui.graphics.RectangleShape) {
+            Column(Modifier.padding(horizontal = Spacing.titleGap, vertical = Spacing.screenVertical),
+                verticalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
+                Text("Altyazı ara", style = LumenType.title)
+                Text("Türkçe", style = LumenType.meta)
+                LazyColumn(state = list, modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
                     item {
-                        if (state.loading) Text("Altyazılar yükleniyor…")
-                        if (state.message.isNotBlank()) Text(state.message)
-                        state.remaining?.let { Text("OpenSubtitles · kalan indirme: $it") }
+                        if (state.loading) Text("Altyazılar yükleniyor…", style = LumenType.body)
+                        if (state.message.isNotBlank()) Text(state.message, style = LumenType.body)
                     }
                     items(state.results.size) { index ->
                         val result = state.results[index]
-                        Button(enabled = !state.loading,
+                        PlayerOption(enabled = !state.loading,
                             modifier = Modifier.then(if (index == 0) Modifier.focusRequester(first) else Modifier)
                                 .testTag("subtitle-result-$index"),
                             onClick = { state.select(result) }) {
                             Column {
-                                Text("${languageName(result.language)} · ${result.release}")
-                                Text("${result.downloads} indirme · ${result.source}")
+                                Text("${languageName(result.language)} · ${result.release}", style = LumenType.cardTitle, maxLines = 2)
+                                Text("${result.downloads} indirme · ${result.source}", style = LumenType.meta)
                             }
                         }
                     }
-                    if (!state.loading) item { Button(onClick = state::search) { Text("Yeniden ara") } }
+                    if (!state.loading) item { PlayerOption(onClick = state::search) { Text("Yeniden ara") } }
                 }
+                LumenButton(onClick = state::dismiss, modifier = Modifier.focusRequester(close),
+                    style = LumenButtonStyle.Secondary) { Text("Kapat") }
             }
         }
     }
@@ -324,7 +325,7 @@ internal fun SubtitleKeys(model: LibraryModel) {
         Text("İnternetten altyazı")
         if (model.repo.subtitles.hasBuiltInOpenKey) Text("Yerleşik OpenSubtitles anahtarı var; alan boşsa o kullanılır.")
         fields.forEach { (key, label) -> Field(label, values[key].orEmpty(), { values[key] = it }, true) }
-        Button(onClick = { scope.launch {
+        PlayerOption(onClick = { scope.launch {
             try { fields.forEach { model.prefs.setSecret(it.first, values[it.first].orEmpty()) }; message = "Altyazı ayarları kaydedildi." }
             catch (e: CancellationException) { throw e }
             catch (_: Exception) { message = "Altyazı ayarları kaydedilemedi." }
@@ -337,11 +338,11 @@ internal fun SubtitleKeys(model: LibraryModel) {
 internal fun BoxScope.SubtitleNotice(message: String, clear: () -> Unit) {
     if (message.isBlank()) return
     LaunchedEffect(message) {
-        val until = System.currentTimeMillis() + 4000
+        val until = System.currentTimeMillis() + Motion.toastDurationMillis
         wallClockTicks(250).first { it >= until }
         clear()
     }
-    GlassPanel(Modifier.align(androidx.compose.ui.Alignment.TopEnd).padding(horizontal = 48.dp, vertical = 27.dp)) {
-        Text(message, Modifier.padding(16.dp))
+    Panel(Modifier.align(androidx.compose.ui.Alignment.TopEnd).padding(horizontal = Spacing.screenHorizontal, vertical = Spacing.screenVertical)) {
+        Text(message, Modifier.padding(Spacing.cardGap), style = LumenType.label)
     }
 }

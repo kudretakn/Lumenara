@@ -1,5 +1,10 @@
 package dev.lumenara.tv
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
@@ -12,20 +17,15 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
 import dev.lumenara.catalog.searchable
 import dev.lumenara.data.Item
-import dev.lumenara.data.Slot
 import dev.lumenara.design.*
 import kotlinx.coroutines.flow.*
 
@@ -44,7 +44,7 @@ internal fun LiveScreen(
     var category by rememberSaveable(source) { mutableStateOf<String?>(null) }
     var categoryTitle by rememberSaveable(source) { mutableStateOf("") }
     var query by rememberSaveable(source, category) { mutableStateOf("") }
-    var limit by rememberSaveable(source, category, query) { mutableIntStateOf(80) }
+    var limit by rememberSaveable(source, category, query) { mutableIntStateOf(LIVE_PAGE_SIZE) }
     var focusedId by rememberSaveable(source) { mutableStateOf<String?>(null) }
     val pages = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -109,10 +109,14 @@ internal fun LiveScreen(
             val channelNumbers = liveChannelNumbers(model, source, paged?.loaded() ?: rows.orEmpty())
             pages.SaveableStateProvider("channels-$category") {
                 LiveChannelGrid(model, categoryTitle, rows, channelNumbers, now, query, { query = it },
-                    limit, { limit += 80 }, returnToChannel ?: focusedId, { item ->
+                    limit, { limit += LIVE_PAGE_SIZE }, returnToChannel ?: focusedId, { item ->
                         focusedId = item.id
                         numberSource = item.source
-                    }, onChannelFocusRestored, open, play, paged)
+                    }, onChannelFocusRestored, open, play, paged, entries.orEmpty().filter { it.id != "timeline" }) {
+                        category = it.id
+                        categoryTitle = it.name
+                        query = ""
+                    }
             }
         }
         NumberEntry(numbers)
@@ -123,13 +127,25 @@ internal fun LiveScreen(
 private fun LiveChannelGrid(model: LibraryModel, title: String, result: List<Item>?,
     numbers: Map<String, Int>, now: Long, query: String, search: (String) -> Unit,
     limit: Int, more: () -> Unit, returnId: String?, focused: (Item) -> Unit,
-    restored: () -> Unit, open: (Item) -> Unit, play: (Item, List<Item>) -> Unit, paged: LivePages? = null) {
+    restored: () -> Unit, open: (Item) -> Unit, play: (Item, List<Item>) -> Unit, paged: LivePages? = null,
+    filters: List<CategoryEntry> = emptyList(), filter: (CategoryEntry) -> Unit = {}) {
     val rows = result.orEmpty()
     val loading = if (paged != null) !paged.countLoaded else result == null
     val grid = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
-    PrefetchArtwork(model, grid, rows, columns = 4)
+    PrefetchArtwork(model, grid, rows, columns = LIVE_GRID_COLUMNS, paged = paged)
     val focus = remember { FocusRequester() }
     val searchFocus = remember { FocusRequester() }
+    val fieldFocus = remember { FocusRequester() }
+    val filterFocus = remember { FocusRequester() }
+    var searching by rememberSaveable { mutableStateOf(query.isNotEmpty()) }
+    var filtering by remember { mutableStateOf(false) }
+    androidx.activity.compose.BackHandler(searching || filtering) {
+        when {
+            filtering -> { filtering = false; filterFocus.requestFocus() }
+            else -> { searching = false; search(""); searchFocus.requestFocus() }
+        }
+    }
+    LaunchedEffect(searching) { if (searching) { withFrameNanos { }; fieldFocus.requestFocus() } }
     var positioned by remember(paged, query) { mutableStateOf(false) }
     var requestPending by remember(paged, query) { mutableStateOf(true) }
     val restoreId = remember { returnId }
@@ -139,7 +155,7 @@ private fun LiveChannelGrid(model: LibraryModel, title: String, result: List<Ite
     val target = paged?.anchor ?: rows.indexOfFirst { it.id == restoreId }.coerceAtLeast(0)
     val targetReady = if (paged != null) paged.anchor != null && paged[target] != null else rows.isNotEmpty()
     LaunchedEffect(paged, target, targetReady, count, query, loading) {
-        if (!positioned && !loading && count == 0) searchFocus.requestFocus()
+        if (!positioned && !loading && count == 0 && !searching) searchFocus.requestFocus()
         if (!positioned && targetReady && target < count) {
             grid.scrollToItem(target)
             positioned = true
@@ -153,43 +169,76 @@ private fun LiveChannelGrid(model: LibraryModel, title: String, result: List<Ite
     LaunchedEffect(targetReady) {
         if (targetReady) { withFrameNanos { }; withFrameNanos { }; Perf.since("category", "category_grid_first_draw") }
     }
-    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(title, Modifier.weight(1f), fontSize = 28.sp)
-            Box(Modifier.width(240.dp).focusRequester(searchFocus)) { Field("Kanal ara", query, search) }
+    Box(Modifier.fillMaxSize().background(LumenColors.bg)) {
+        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
+                if (searching) {
+                    LiveSearchField(query, search, Modifier.weight(1f).focusRequester(fieldFocus))
+                } else {
+                    Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+                        Text(title, Modifier.weight(1f, fill = false), style = LumenType.headline,
+                            color = LumenColors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("$count kanal", style = LumenType.meta)
+                    }
+                }
+                LumenButton({ searching = !searching }, Modifier.focusRequester(searchFocus),
+                    style = LumenButtonStyle.Secondary) {
+                    LumenIcon(LumenIcon.Search, contentDescription = "Kanal ara")
+                }
+                LumenButton({ filtering = !filtering }, Modifier.focusRequester(filterFocus),
+                    style = LumenButtonStyle.Secondary, enabled = filters.isNotEmpty()) {
+                    LumenIcon(LumenIcon.Filter, contentDescription = "Filtrele")
+                }
+            }
+            androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+                androidx.compose.foundation.lazy.grid.GridCells.Fixed(LIVE_GRID_COLUMNS), state = grid,
+                modifier = Modifier.weight(1f).testTag("live-channels").focusRestorer().focusGroup(),
+                contentPadding = PaddingValues(vertical = Spacing.unit),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (loading) loadingCards(60.dp, LIVE_GRID_COLUMNS * 6)
+                if (!loading && count == 0) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                    Text("Eşleşen içerik yok.", color = LumenColors.textSecondary)
+                }
+                items(count, key = { it }) { index ->
+                    val item = if (paged != null) paged[index] else rows[index]
+                    if (item == null) {
+                        LoadingCard(Modifier.fillMaxWidth().height(60.dp))
+                        return@items
+                    }
+                    if (index == target && positioned && requestPending && !searching) LaunchedEffect(Unit) {
+                        withFrameNanos { }
+                        focus.requestFocus()
+                        requestPending = false
+                        restored()
+                    }
+                    ChannelCard(model, item, now, { Perf.mark("channel"); play(item, paged?.loaded() ?: rows) }, {
+                        paged?.focused(index); focused(it)
+                    },
+                        Modifier.fillMaxWidth()
+                            .then(if (index == target) Modifier.focusRequester(focus) else Modifier),
+                        number = numbers[item.id], operations = { open(item) }, compact = true)
+                }
+                if (paged == null && count >= limit) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                    FocusCard(more, Modifier.fillMaxWidth()) {
+                        Text("Devamını göster", Modifier.padding(12.dp))
+                    }
+                }
+            }
         }
-        androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
-            androidx.compose.foundation.lazy.grid.GridCells.Fixed(4), state = grid,
-            modifier = Modifier.weight(1f).testTag("live-channels").focusRestorer().focusGroup(),
-            contentPadding = PaddingValues(10.dp),
-            horizontalArrangement = Arrangement.spacedBy(18.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp)) {
-            if (loading) loadingCards(140.dp)
-            if (!loading && count == 0) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(4) }) {
-                Text("Eşleşen içerik yok.", color = Ink.muted)
-            }
-            items(count, key = { it }) { index ->
-                val item = if (paged != null) paged[index] else rows[index]
-                if (item == null) {
-                    LoadingCard(Modifier.fillMaxWidth().height(140.dp))
-                    return@items
-                }
-                if (index == target && positioned && requestPending) LaunchedEffect(Unit) {
-                    withFrameNanos { }
-                    focus.requestFocus()
-                    requestPending = false
-                    restored()
-                }
-                ChannelCard(model, item, now, { Perf.mark("channel"); play(item, paged?.loaded() ?: rows) }, {
-                    paged?.focused(index); focused(it)
-                },
-                    Modifier.fillMaxWidth()
-                        .then(if (index == target) Modifier.focusRequester(focus) else Modifier),
-                    number = numbers[item.id], operations = { open(item) })
-            }
-            if (paged == null && count >= limit) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(4) }) {
-                FocusCard(more, Modifier.fillMaxWidth()) {
-                    Text("Devamını göster", Modifier.padding(12.dp))
+        if (filtering) {
+            val first = remember { FocusRequester() }
+            LaunchedEffect(Unit) { withFrameNanos { }; first.requestFocus() }
+            Panel(Modifier.align(Alignment.TopEnd).padding(top = 56.dp).width(320.dp)) {
+                LazyColumn(Modifier.padding(Spacing.unit)) {
+                    itemsIndexed(filters, key = { _, entry -> entry.id }) { index, entry ->
+                        ListRow(onClick = { filtering = false; filter(entry) },
+                            modifier = if (index == 0) Modifier.focusRequester(first) else Modifier) {
+                            Text(entry.name, style = LumenType.cardTitle)
+                        }
+                    }
                 }
             }
         }
@@ -206,28 +255,55 @@ internal fun LiveChannelRow(
     // LazyColumn bounds subscriptions to composed rows (including its small prefetch window).
     val slots = liveProgrammes(model, item, now, 86_400_000L)
     val current = slots.firstOrNull { now >= it.start && now < it.end }
-    val next = slots.firstOrNull { it.start >= (current?.end ?: now) }
     val logo by produceState<String?>(null, item.id, item.logo) { value = model.repo.poster(item) }
-    FocusCard(play, modifier.fillMaxWidth().height(compactHeight ?: 128.dp)
-        .testTag("live-channel-${item.id}").semantics { contentDescription = item.title; this.selected = selected }
-        .onFocusChanged { if (it.isFocused) focus() }, onLongClick = operations) {
-        Column(Modifier.fillMaxSize().padding(
-            horizontal = if (compactHeight != null) 4.dp else 12.dp,
-            vertical = if (compactHeight != null) 3.dp else 12.dp),
-            verticalArrangement = Arrangement.spacedBy(if (compactHeight != null) 1.dp else 6.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(if (selected) "▶ $number" else number.toString(), color = Ink.muted, fontSize = 12.sp, lineHeight = 14.sp)
-                Box(Modifier.size(if (compactHeight != null) 20.dp else 28.dp), contentAlignment = Alignment.Center) {
-                    Text(item.title.take(1), color = Ink.accent, fontSize = 15.sp, lineHeight = 18.sp)
-                    if (logo != null) Artwork(model, item, logo, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+    val interactions = remember { MutableInteractionSource() }
+    val isFocused by interactions.collectIsFocusedAsState()
+    ListRow(play, modifier.fillMaxWidth().height(compactHeight ?: 64.dp)
+        .testTag("live-channel-${item.id}").semantics { contentDescription = item.title }
+        .onPreviewKeyEvent {
+            val key = it.nativeKeyEvent
+            val ok = key.keyCode in listOf(android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+                android.view.KeyEvent.KEYCODE_ENTER, android.view.KeyEvent.KEYCODE_NUMPAD_ENTER)
+            when {
+                key.keyCode == android.view.KeyEvent.KEYCODE_MENU -> {
+                    if (key.action == android.view.KeyEvent.ACTION_UP) operations()
+                    true
                 }
-                Text(item.title, fontSize = 15.sp, lineHeight = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                ok && key.action == android.view.KeyEvent.ACTION_UP && key.eventTime - key.downTime >= 500 -> {
+                    operations(); true
+                }
+                else -> false
             }
-            Text(current?.let { "${it.title} · ${(it.end - now + 59_999) / 60_000} dk" }
-                ?: "Program bilgisi yok", fontSize = 12.sp, lineHeight = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            ProgressLine(current?.let { (now - it.start).toFloat() / (it.end - it.start).coerceAtLeast(1) } ?: 0f)
-            if (compactHeight == null) Text("Sonra: ${next?.title ?: "—"}", color = Ink.muted, fontSize = 12.sp,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
+        .onFocusChanged { if (it.isFocused) focus() }, selected = selected, interactionSource = interactions) {
+        Text(number.toString(), Modifier.width(32.dp), style = LumenType.meta)
+        ChannelLogo(model, item, logo, Modifier.size(40.dp, 22.5.dp))
+        Column(Modifier.weight(1f)) {
+            Text(item.title, style = LumenType.cardTitle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.height(Spacing.iconText))
+            Text(current?.title.orEmpty(), style = LumenType.meta, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (isFocused && current != null) ProgressLine(
+                (now - current.start).toFloat() / (current.end - current.start).coerceAtLeast(1),
+                Modifier.height(2.dp))
+        }
+    }
+}
+
+// The shared Field belongs to setup and uses an external label; live search is a single TV control.
+@Composable
+private fun LiveSearchField(query: String, search: (String) -> Unit, modifier: Modifier = Modifier) {
+    Row(modifier.height(48.dp).background(LumenColors.surface3, RoundedCornerShape(Radii.button))
+        .padding(horizontal = Spacing.cardGap), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+        LumenIcon(LumenIcon.Search, contentDescription = null, tint = LumenColors.textSecondary)
+        BasicTextField(query, search, Modifier.weight(1f).semantics { contentDescription = "Kanal arama alanı" },
+            singleLine = true, textStyle = LumenType.body.copy(color = LumenColors.textPrimary),
+            cursorBrush = androidx.compose.ui.graphics.SolidColor(LumenColors.textPrimary),
+            decorationBox = { field ->
+                Box {
+                    if (query.isEmpty()) Text("Kanal ara", style = LumenType.body, color = LumenColors.textSecondary)
+                    field()
+                }
+            })
     }
 }

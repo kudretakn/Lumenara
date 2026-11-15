@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.test.*
@@ -15,6 +16,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.UiDevice
 import dev.lumenara.data.*
 import dev.lumenara.design.LumenaraTheme
+import dev.lumenara.design.LumenColors
 import java.io.File
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -119,17 +121,33 @@ class FullscreenTest {
                 await(hasTestTag("live-channel-${channels[0].id}") and isFocused())
                 val guideBounds = screen.onNodeWithTag("mini-guide").fetchSemanticsNode().boundsInRoot
                 val hostBounds = screen.onNodeWithTag("fullscreen-test-host").fetchSemanticsNode().boundsInRoot
-                assertTrue("Mini guide must use about 42% of the screen", guideBounds.width <= hostBounds.width * .43f)
+                val density = context.resources.displayMetrics.density
+                assertEquals("Guide uses the approved 400 dp panel", 400f * density, guideBounds.width, 1f)
+                assertEquals("Guide covers the full screen height", hostBounds.height, guideBounds.height, 1f)
                 screen.onAllNodes(hasText("Sonra:", substring = true) and
+                    hasAnyAncestor(hasTestTag("mini-guide"))).assertCountEquals(0)
+                screen.onAllNodes(hasText("Program bilgisi yok") and
                     hasAnyAncestor(hasTestTag("mini-guide"))).assertCountEquals(0)
                 if (count >= 8) {
                     val viewport = screen.onNodeWithTag("mini-guide-channels").fetchSemanticsNode().boundsInRoot
-                    channels.take(8).forEach { channel ->
+                    val completeRows = (viewport.height / (64f * density)).toInt().coerceAtMost(channels.size)
+                    assertTrue("At least six complete rows fit at 540 dp", completeRows >= 6)
+                    channels.take(completeRows).forEach { channel ->
                         val row = screen.onNodeWithTag("live-channel-${channel.id}")
                         row.assertIsDisplayed()
                         val bounds = row.fetchSemanticsNode().boundsInRoot
-                        assertTrue("Eight complete channel rows must fit", bounds.top >= viewport.top && bounds.bottom <= viewport.bottom)
+                        assertEquals("Guide row stays 64 dp", 64f * density, bounds.height, 1f)
+                        assertTrue("Complete rows stay within the viewport",
+                            bounds.top >= viewport.top && bounds.bottom <= viewport.bottom)
                     }
+                }
+                // The outer right edge has no controls. Every sampled pixel must be the
+                // opaque surface colour, regardless of the video/library underneath it.
+                val panelPixels = screen.onNodeWithTag("mini-guide").captureToImage().toPixelMap()
+                val rightEdge = panelPixels.width - 1
+                for (y in 2 until panelPixels.height - 2 step 13) {
+                    assertEquals("No backdrop leaks through the guide at y=$y",
+                        LumenColors.surface1, panelPixels[rightEdge, y])
                 }
                 // SQL pages and LazyColumn both stay bounded with 10,000 channels.
                 if (count > 100) assertTrue(screen.onAllNodes(hasTestTag("live-channel-$lastChannelId"))

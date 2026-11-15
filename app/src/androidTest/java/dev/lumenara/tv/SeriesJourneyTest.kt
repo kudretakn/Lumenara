@@ -1,6 +1,8 @@
 package dev.lumenara.tv
 
 import androidx.compose.ui.input.key.Key
+import android.graphics.BitmapFactory
+import android.graphics.Color
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
@@ -93,9 +95,17 @@ class SeriesJourneyTest {
         val requestedEpisode = AtomicReference("")
         fun capture(name: String) {
             screen.waitForIdle()
+            screen.onNodeWithText("K", substring = false).assertDoesNotExist()
             val file = File(context.getExternalFilesDir(null), "screens/$name.png")
             checkNotNull(file.parentFile).mkdirs()
             assertTrue(device.takeScreenshot(file))
+            // This provider deliberately has no artwork. The right safe margin must remain
+            // plain neutral bg, never a bundled landscape presented as the show's backdrop.
+            BitmapFactory.decodeFile(file.absolutePath).let { bitmap ->
+                try {
+                    assertEquals(Color.rgb(11, 11, 13), bitmap.getPixel(bitmap.width - 8, bitmap.height / 2))
+                } finally { bitmap.recycle() }
+            }
         }
         MockWebServer().use { server ->
             server.start()
@@ -132,16 +142,22 @@ class SeriesJourneyTest {
                 val card = hasContentDescription(series.title) and hasAnyAncestor(hasTestTag("poster-grid"))
                 select(card)
                 waitFor(hasTestTag("season-1"))
-                screen.onNodeWithTag("details-content").performScrollToNode(hasTestTag("season-shelf"))
                 capture("series")
                 select(hasTestTag("season-1"))
                 waitFor(hasTestTag("season-page"))
+                val density = screen.onNodeWithTag("episode-list").fetchSemanticsNode().boundsInRoot.left / 48f
+                val seasonBounds = screen.onNodeWithTag("season-1").fetchSemanticsNode().boundsInRoot
+                assertEquals("Sezon çipi yüksekliği", 40f, seasonBounds.height / density, 1f)
                 val episodes = runBlocking { repo.library.episodeSnapshot(series.id).seriesOrder() }
                 assertEquals(listOf(1, 2, 2), episodes.map { it.seriesEpisode().season })
                 val first = episodes.first()
                 val second = episodes[1]
                 val row = hasTestTag("episode-${first.id}")
                 waitFor(row and isFocused())
+                // Measure the 16:9 artwork slot, not the focused Surface clipped by its parent.
+                val bounds = screen.onNodeWithTag("episode-artwork-${first.id}").fetchSemanticsNode().boundsInRoot
+                assertEquals("Bölüm kartı genişliği", 140f, bounds.width / density, 1f)
+                assertEquals("Bölüm görseli 16:9 kalmalı", 16f / 9f, bounds.width / bounds.height, .02f)
                 capture("season")
                 screen.ok()
                 screen.waitUntil(60_000) {
@@ -152,7 +168,7 @@ class SeriesJourneyTest {
                 screen.back()
                 waitFor(row and isFocused() and SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "İzlendi"))
                 screen.onNode(row).assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "İzlendi"))
-                screen.onNodeWithText("B1 · Başlangıç ✓").assertExists()
+                screen.onNodeWithText("1. Başlangıç").assertExists()
                 // Both manual operations preserve the row's remote focus.
                 screen.longPressOkNative()
                 select(hasText("İzlenmedi olarak işaretle"))
@@ -163,14 +179,21 @@ class SeriesJourneyTest {
                 waitFor(row and isFocused())
                 screen.back()
                 waitFor(hasTestTag("season-1") and isFocused())
-                waitFor(hasText("Sezon 1 ✓"))
-                screen.onNodeWithText("Sezon 1 ✓").assertExists()
+                waitFor(hasTestTag("season-1") and SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "İzlendi"))
+                // Back returns to the active season even if another control took focus.
+                select(hasTestTag("season-2"))
+                waitFor(hasTestTag("episode-${second.id}") and isFocused())
+                screen.onNodeWithTag("series-play").performSemanticsAction(SemanticsActions.RequestFocus)
+                waitFor(hasTestTag("series-play") and isFocused())
+                screen.back()
+                waitFor(hasTestTag("series-page"))
+                waitFor(hasTestTag("season-2") and isFocused())
                 // A partial episode in the next season must win over the completed season.
                 runBlocking {
                     repo.updateMark(second.id) { it.copy(position = 300, duration = 10_000, updated = System.currentTimeMillis()) }
                 }
                 screen.onNodeWithTag("details-content").performScrollToIndex(0)
-                select(hasText("Devam et: S2 B1"))
+                select(hasText("Devam et · S2 B1"))
                 screen.waitUntil(30_000) { requestedEpisode.get() == "201.mp4" }
                 waitFor(hasContentDescription("Tam ekran oynatıcı"))
                 // Back may first dismiss the timeline; stop as soon as the player has closed.
@@ -185,7 +208,7 @@ class SeriesJourneyTest {
                 val homeSeries = hasContentDescription(series.title) and hasAnyAncestor(hasTestTag("shelf-Kaldığın yerden devam et"))
                 waitFor(homeSeries)
                 screen.onNode(homeSeries).assertExists()
-                val resumeLabel = hasText("S2 B1") or hasText("S2 B2")
+                val resumeLabel = hasText("S2 · B1", substring = true) or hasText("S2 · B2", substring = true)
                 waitFor(resumeLabel and hasAnyAncestor(hasTestTag("shelf-Kaldığın yerden devam et")))
             } finally {
                 runBlocking {

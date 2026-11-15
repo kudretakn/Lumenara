@@ -11,7 +11,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
 import dev.lumenara.catalog.*
 import dev.lumenara.data.Item
-import dev.lumenara.design.GlassPanel
+import dev.lumenara.design.Panel
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
@@ -50,7 +50,7 @@ internal fun rememberLiveRetry(id: String, preview: Boolean = false): LiveRetry 
 
 @Composable
 internal fun BoxScope.Reconnecting(retry: LiveRetry) {
-    if (retry.reconnecting) GlassPanel(Modifier.align(Alignment.TopStart).padding(48.dp, 27.dp)
+    if (retry.reconnecting) Panel(Modifier.align(Alignment.TopStart).padding(48.dp, 27.dp)
         .testTag("live-reconnecting")) {
         Text("Yeniden bağlanıyor… (${retry.count}/5)", Modifier.padding(12.dp))
     }
@@ -143,6 +143,6 @@ internal fun rememberLiveNumberControl(model: LibraryModel, source: String,
 @Composable
 internal fun BoxScope.NumberEntry(state: LiveNumberControl) {
     val text = state.input.digits.ifEmpty { if (state.input.missingUntil > 0) "Kanal yok" else "" }
-    if (text.isNotEmpty()) GlassPanel(Modifier.align(Alignment.TopEnd).padding(48.dp, 27.dp)
+    if (text.isNotEmpty()) Panel(Modifier.align(Alignment.TopEnd).padding(48.dp, 27.dp)
         .testTag("live-number-entry")) { Text(text, Modifier.padding(16.dp)) }
 }

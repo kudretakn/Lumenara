@@ -241,7 +241,7 @@ class Repository private constructor(private val context: Context) {
         val base = production(item)
         if (base.kind !in listOf("MOVIE", "SERIES")) return@withContext listOf(base)
         if (base.versionKey.isNotEmpty()) return@withContext library.versionRows(base.versionKey)
-        // Legacy rows from the 7→8 migration have no grouping key. Avoid scanning the full
+        // Legacy rows from the 7 to 8 migration have no grouping key. Avoid scanning the full
         // source on first detail/playback; the next import assigns keys in one bounded projection.
         listOf(base)
     }

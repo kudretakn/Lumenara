@@ -9,6 +9,10 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.*
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -22,53 +26,190 @@ import androidx.compose.ui.unit.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.*
 import dev.lumenara.data.*
-import dev.lumenara.design.Ink
-import dev.lumenara.design.GlassPanel
+import dev.lumenara.design.*
+import dev.lumenara.catalog.displayTitle
+import androidx.compose.ui.draw.alpha
 import kotlinx.coroutines.flow.*
 
 @Composable
 internal fun Poster(model: LibraryModel, item: Item, modifier: Modifier,
     allowHttp: Boolean? = null, width: Int = 0, height: Int = 0) {
-    val image by produceState<String?>(null, item.logo) { value = model.repo.poster(item) }
-    Box(modifier.background(Ink.surface), contentAlignment = Alignment.Center) {
-        Text(item.title.take(1), color = Ink.accent, fontSize = 30.sp)
-        if (image != null)
-            Artwork(model, item, image, Modifier.fillMaxSize(), contentScale = ContentScale.Crop,
-                allowHttp = allowHttp, width = width, height = height)
+    val image by produceState<String?>(null, item.id, item.logo) { value = model.repo.poster(item) }
+    Artwork(model, item.copy(title = item.title.displayTitle()), image, modifier, contentScale = ContentScale.Crop,
+        allowHttp = allowHttp, width = width, height = height)
+}
+
+/** Hub shelves keep their text stationary while the 16:9 image receives focus. */
+@Composable
+private fun HubShelfTile(
+    item: Item,
+    click: () -> Unit,
+    focus: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable BoxScope.() -> Unit,
+) {
+    var restoreFocus by rememberSaveable(item.id) { mutableStateOf(false) }
+    val requester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        if (restoreFocus) {
+            withFrameNanos { }
+            requester.requestFocus()
+            restoreFocus = false
+        }
+    }
+    FocusCard(
+        onClick = { restoreFocus = true; click() },
+        modifier = modifier.fillMaxWidth().aspectRatio(16f / 9f)
+            .focusRequester(requester)
+            .semantics { contentDescription = item.title }
+            .onFocusChanged { if (it.isFocused) focus() },
+        content = content,
+    )
+}
+
+@Composable
+private fun HubChannelShelf(
+    model: LibraryModel,
+    rows: List<Item>,
+    play: (Item, List<Item>) -> Unit,
+    focus: () -> Unit,
+) {
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) { wallClockTicks(30_000).collect { now = it } }
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
+        Text("SON KANAL", style = LumenType.caption, color = LumenColors.textSecondary)
+        LazyRow(
+            Modifier.testTag("channel-shelf-Son kanal").focusRestorer().focusGroup(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            // Leave room for the unchanged focus scale and ring at the row edges.
+            contentPadding = PaddingValues(Spacing.unit),
+        ) {
+            items(rows, key = { it.id }) { item ->
+                val slots = liveProgrammes(model, item, now)
+                val current = slots.firstOrNull { now >= it.start && now < it.end }
+                val logo by produceState<String?>(null, item.id, item.logo) {
+                    value = model.repo.poster(item)
+                }
+                Column(Modifier.width(110.dp), verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+                    HubShelfTile(item, { play(item, rows) }, focus,
+                        Modifier.testTag("live-channel-${item.id}")) {
+                        HubArtwork(model, item, logo, channel = true)
+                    }
+                    Text(item.title, style = LumenType.label, color = LumenColors.textPrimary,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(current?.title.orEmpty(), style = LumenType.meta,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (current != null) ProgressLine(
+                        (now - current.start).toFloat() / (current.end - current.start).coerceAtLeast(1),
+                    )
+                }
+            }
+        }
     }
 }
 
 @Composable
-private fun Shelf(
-    model: LibraryModel,
-    title: String,
-    rows: List<Item>,
-    shelf: String,
-    open: (Item) -> Unit,
-    focus: (Item) -> Unit,
-) {
-    if (rows.isEmpty()) return
-    Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-        Text(
-            title,
-            fontSize = 19.sp,
-            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-        )
+private fun HubResumeShelf(model: LibraryModel, rows: List<Item>, open: (Item) -> Unit, focus: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
+        Text("KALDIĞIN YERDEN DEVAM ET", style = LumenType.caption, color = LumenColors.textSecondary)
         LazyRow(
-            modifier = Modifier.testTag("shelf-$title").focusRestorer().focusGroup(),
-            horizontalArrangement = Arrangement.spacedBy(15.dp),
-            contentPadding = PaddingValues(5.dp),
+            Modifier.testTag("shelf-Kaldığın yerden devam et").focusRestorer().focusGroup(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = PaddingValues(Spacing.unit),
         ) {
-            items(rows, key = { it.id }) { entry ->
-                MovieCard(
-                    model,
-                    entry,
-                    entry.kind != "LIVE" && shelf != "resume",
-                    open,
-                    focus,
-                    progress = shelf == "resume",
-                )
+            items(rows, key = { it.id }) { item ->
+                val episodes by remember(item.id) {
+                    if (item.kind == "SERIES") model.repo.episodes(item.id) else flowOf(emptyList<Item>())
+                }.collectAsStateWithLifecycle(emptyList())
+                val marks by remember(item.id) {
+                    if (item.kind == "SERIES") model.repo.library.episodeMarks(item.id) else flowOf(emptyList<Mark>())
+                }.collectAsStateWithLifecycle(emptyList())
+                val continuing = episodes.continueItem(marks)
+                val observedMark by remember(item.id) {
+                    model.repo.library.observeMark(item.id)
+                }.collectAsStateWithLifecycle(null)
+                val mark = if (item.kind == "SERIES") marks.firstOrNull { it.id == continuing?.id } else observedMark
+                val backdrop by produceState<String?>(null, item.id, item.backdrop) {
+                    value = model.repo.backdrop(item)
+                }
+                val episode = continuing?.seriesEpisode()
+                val remaining = mark?.takeIf { it.duration > 0 }?.let {
+                    "${((it.duration - it.position).coerceAtLeast(0) + 59_999) / 60_000} dk kaldı"
+                }
+                val caption = listOfNotNull(episode?.let { "S${it.season} · B${it.episode}" }, remaining)
+                    .joinToString(" · ").ifBlank { "İzlemeye devam et" }
+                Column(Modifier.width(110.dp), verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+                    HubShelfTile(item, { open(item) }, focus) {
+                        HubArtwork(model, item, backdrop)
+                        if ((mark?.duration ?: 0) > 0) ProgressLine(
+                            (mark?.position ?: 0).toFloat() / checkNotNull(mark).duration,
+                            Modifier.align(Alignment.BottomStart),
+                        )
+                    }
+                    Text(item.title, style = LumenType.label, color = LumenColors.textPrimary,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(caption, style = LumenType.meta, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
+        }
+    }
+}
+
+/** Local 16:9 fallback; the shared poster fallback and shared channel cards belong to D1/D3. */
+@Composable
+private fun HubArtwork(model: LibraryModel, item: Item, address: String?, channel: Boolean = false) {
+    if (channel) {
+        ChannelLogo(model, item, address, Modifier.fillMaxSize())
+        return
+    }
+    Box(Modifier.fillMaxSize().background(LumenColors.surface2), contentAlignment = Alignment.BottomStart) {
+        if (address == null) {
+            Text(item.title, Modifier.padding(Spacing.cardGap), style = LumenType.label,
+                color = LumenColors.textPrimary, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            LumenIcon(if (item.kind == "SERIES") LumenIcon.Series else LumenIcon.Film,
+                contentDescription = null, modifier = Modifier.align(Alignment.TopEnd).padding(Spacing.cardGap),
+                tint = LumenColors.textPrimary.copy(alpha = .4f))
+        } else Artwork(model, item, address, Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop, role = "backdrop")
+    }
+}
+
+@Composable
+private fun HubNavigationCard(
+    model: LibraryModel, name: String, caption: String, icon: LumenIcon,
+    modifier: Modifier, compact: Boolean, loading: Boolean, update: Boolean,
+    artworkItem: Item?, click: () -> Unit,
+) {
+    val backdrop by produceState<String?>(null, artworkItem?.id, artworkItem?.backdrop) {
+        // Only a real wide image is eligible; never substitute a channel logo or poster.
+        value = artworkItem?.let { model.repo.backdrop(it) }
+    }
+    FocusCard(click, modifier, focusedScale = Motion.hubFocusScale) {
+        if (!compact && backdrop != null) {
+            Box(Modifier.fillMaxSize().clip(RoundedCornerShape(Radii.card))) {
+                Artwork(model, artworkItem, backdrop, Modifier.align(Alignment.CenterEnd).fillMaxHeight().fillMaxWidth(.6f),
+                    contentScale = ContentScale.Crop, role = "backdrop")
+                Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(
+                    LumenColors.surface2, LumenColors.surface2.copy(alpha = .65f),
+                ))))
+            }
+        }
+        if (compact) Row(Modifier.fillMaxSize().padding(horizontal = Spacing.cardGap),
+            horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            LumenIcon(icon, null)
+            Text(name, style = LumenType.cardTitle, color = LumenColors.textPrimary)
+            if (update) {
+                Spacer(Modifier.weight(1f))
+                Box(Modifier.size(6.dp).background(LumenColors.accent, RoundedCornerShape(3.dp)))
+            }
+        } else Column(Modifier.fillMaxSize().padding(Spacing.unit)) {
+            LumenIcon(icon, null, size = 24.dp)
+            Spacer(Modifier.weight(1f))
+            Text(name, style = LumenType.cardTitle, color = LumenColors.textPrimary)
+            Spacer(Modifier.height(Spacing.iconText))
+            if (loading) Box(Modifier.width(72.dp).height(18.dp)
+                .background(LumenColors.surface3, RoundedCornerShape(4.dp)).testTag("list-loading"))
+            else Text(caption, style = LumenType.meta)
         }
     }
 }
@@ -80,6 +221,7 @@ internal fun Home(
     open: (Item) -> Unit,
     play: (Item, List<Item>) -> Unit,
     lastCard: String = "Canlı TV",
+    sourceSelector: @Composable () -> Unit = {},
     navigate: (String) -> Unit,
 ) {
     val recentResult by remember(source) { model.repo.recentLive(source) }.collectAsLoadingState()
@@ -122,11 +264,19 @@ internal fun Home(
         }
     }
     LazyColumn(Modifier.fillMaxSize().testTag("hub").focusRestorer().focusGroup(), state = list,
-        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp)) {
-        item { LumenaraLogo(showName = true) }
+        contentPadding = PaddingValues(bottom = Spacing.shelfGap),
+        verticalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
+        item {
+            Row(Modifier.fillMaxWidth().height(45.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                LumenaraLogo(showName = true)
+                Spacer(Modifier.weight(1f))
+                Box(Modifier.widthIn(max = 480.dp)) { sourceSelector() }
+            }
+        }
         items(2) { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(22.dp)) {
+            Row(Modifier.padding(bottom = if (row == 1) Spacing.cardGap else 0.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 repeat(3) { column ->
                     val index = row * 3 + column
                     val name = cards[index]
@@ -135,33 +285,50 @@ internal fun Home(
                             .format(counts[index] ?: 0)
                         "$number " + listOf("kanal", "film", "dizi")[index]
                     } else ""
-                    NavigationCard(name, caption,
-                        Modifier.weight(1f).height(if (row == 0) 200.dp else 110.dp)
-                            .testTag("hub-$name").semantics {
-                                contentDescription = name
-                                if (name == "Ayarlar" && update != null) stateDescription = "Güncelleme hazır"
-                            }.then(if (name == target) Modifier.focusRequester(entry) else Modifier)
-                            .onFocusChanged { if (it.isFocused) focused = name },
-                        update = name == "Ayarlar" && update != null,
-                        icon = listOf(2, 3, 4, 5, 0, 6)[index],
-                        loadingCaption = index < 3 && counts[index] == null,
-                    ) { navigate(name) }
+                    // Measure the grid slot independently of the card's focus transform.
+                    Box(Modifier.weight(1f).height(if (row == 0) 100.dp else 40.dp)
+                        .testTag("hub-slot-$name")) {
+                        HubNavigationCard(model, name, caption,
+                            listOf(LumenIcon.Tv, LumenIcon.Film, LumenIcon.Series, LumenIcon.Bookmark, LumenIcon.Search, LumenIcon.Settings)[index],
+                            Modifier.fillMaxSize()
+                                .testTag("hub-$name").semantics {
+                                    contentDescription = name
+                                    if (name == "Ayarlar" && update != null) stateDescription = "Güncelleme hazır"
+                                }.then(if (name == target) Modifier.focusRequester(entry) else Modifier)
+                                .onFocusChanged { if (it.isFocused) focused = name },
+                            update = name == "Ayarlar" && update != null,
+                            compact = row == 1,
+                            loading = index < 3 && counts[index] == null,
+                            artworkItem = when (index) {
+                                0 -> recent.firstOrNull()
+                                1 -> resume.firstOrNull { it.kind == "MOVIE" }
+                                2 -> resume.firstOrNull { it.kind == "SERIES" }
+                                else -> null
+                            },
+                        ) { navigate(name) }
+                    }
                 }
             }
         }
         if (recentResult == null || resumeResult == null) item {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(15.dp)) {
-                items(8) { LoadingCard(Modifier.width(210.dp).height(140.dp)) }
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                items(4) {
+                    Box(Modifier.width(110.dp).aspectRatio(16f / 9f)
+                        .background(LumenColors.surface2, RoundedCornerShape(Radii.card)).testTag("list-loading"))
+                }
             }
         }
         if (recent.isNotEmpty()) item(key = "recent-live") {
-            ChannelShelf(model, "Son kanal", recent, play, { focused = "recent" })
+            HubChannelShelf(model, recent, play, { focused = "recent" })
         }
         if (resume.isNotEmpty()) item(key = "resume") {
-            Shelf(model, "Kaldığın yerden devam et", resume, "resume", open, { focused = "resume" })
+            Box(Modifier.padding(top = if (recent.isNotEmpty()) Spacing.cardGap else 0.dp)) {
+                HubResumeShelf(model, resume, open, { focused = "resume" })
+            }
         }
         if (counts.all { it == 0 }) item {
-            Text("İçerik eklemek için Ayarlar → IPTV Kaynakları.", color = Ink.muted)
+            Text("İçerik eklemek için Ayarlar bölümünden IPTV Kaynakları’nı açın.",
+                style = LumenType.body, color = LumenColors.textSecondary)
         }
     }
 }
@@ -227,11 +394,14 @@ internal fun Browse(
     }
 }
 
+private const val POSTER_GRID_COLUMNS = 8
+private const val POSTER_PAGE_SIZE = POSTER_GRID_COLUMNS * 10
+
 @Composable
 private fun PosterGridContent(model: LibraryModel, section: String, source: String, kind: String,
     category: String, shelf: String, categoryTitle: String, open: (Item) -> Unit,
     play: (Item, List<Item>) -> Unit) {
-    var limit by rememberSaveable { mutableIntStateOf(80) }
+    var limit by rememberSaveable { mutableIntStateOf(POSTER_PAGE_SIZE) }
     var advanced by rememberSaveable { mutableStateOf(false) }
     var year by rememberSaveable { mutableStateOf("") }
     var genre by rememberSaveable { mutableStateOf("") }
@@ -264,8 +434,8 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
     val httpSources = remember(sources) { sources.orEmpty().filter { it.allowHttp }.map { it.id }.toSet() }
     val density = LocalDensity.current
     var gridWidth by remember { mutableIntStateOf(0) }
-    val posterWidth = with(density) { if (gridWidth == 0) 0 else ((gridWidth - 16.dp.roundToPx() - 5 * 16.dp.roundToPx()) / 6).coerceAtLeast(1) }
-    val posterHeight = with(density) { 150.dp.roundToPx() }
+    val posterWidth = with(density) { if (gridWidth == 0) 0 else ((gridWidth - (POSTER_GRID_COLUMNS - 1) * Spacing.cardGap.roundToPx()) / POSTER_GRID_COLUMNS).coerceAtLeast(1) }
+    val posterHeight = (posterWidth * 1.5f).toInt()
     val grid = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
     var lastPoster by rememberSaveable(source, category, shelf) { mutableStateOf<String?>(null) }
     val posterFocus = remember { FocusRequester() }
@@ -279,21 +449,7 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
             positioned = true
         }
     }
-    val visibleIds by remember(grid, rows) {
-        derivedStateOf {
-            grid.layoutInfo.visibleItemsInfo.mapNotNull { rows.getOrNull(it.index)?.id }.distinct()
-        }
-    }
-    val marks by remember(visibleIds) {
-        if (visibleIds.isEmpty()) flowOf(emptyMap<String, Mark>())
-        else model.repo.library.visibleMarks(visibleIds).map { values ->
-            // This grid shows no progress lines; five-second position writes must not
-            // recompose its cards. Resume shelves retain their full progress marks.
-            values.associate { it.id to it.copy(position = 0, duration = 0, updated = 0) }
-        }
-            .distinctUntilChanged()
-    }.collectAsStateWithLifecycle(emptyMap())
-    PrefetchArtwork(model, grid, rows)
+    PrefetchArtwork(model, grid, rows, columns = POSTER_GRID_COLUMNS, channelSpan = 2)
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { wallClockTicks(30_000).collect { now = it } }
     BackHandler(advanced) { closeFilters() }
@@ -307,33 +463,36 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().focusProperties {
             if (advanced) canFocus = false
-        }.focusGroup(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        }.focusGroup(), verticalArrangement = Arrangement.spacedBy(Spacing.titleGap)) {
             Row(verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(categoryTitle, Modifier.weight(1f), fontSize = 28.sp)
+                Text(section, style = LumenType.headline, color = LumenColors.textPrimary)
+                Text("${rows.size}${if (rows.size >= limit) "+" else ""} " + if (kind == "SERIES") "dizi" else "film",
+                    Modifier.weight(1f), style = LumenType.meta)
                 if (kind == "MOVIE" || kind == "SERIES") {
                     val count = listOf(year, genre, language).count { it.isNotEmpty() } +
                         if (rating > 0) 1 else 0
-                    Button(onClick = { advanced = true },
+                    LumenButton(onClick = { advanced = true }, style = LumenButtonStyle.Secondary,
                         modifier = Modifier.testTag("filter-button")
                             .focusRequester(filterButton)) {
+                        LumenIcon(LumenIcon.Filter, null)
                         Text(if (count == 0) "Filtrele" else "Filtrele ($count)")
                     }
                 }
             }
             androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
-                columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(6),
+                columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(POSTER_GRID_COLUMNS),
                 state = grid,
                 modifier = Modifier.weight(1f).onSizeChanged { gridWidth = it.width }.testTag("poster-grid").focusRestorer().focusGroup(),
                 // TV safe area plus the title/year below the focusable poster.
-                contentPadding = PaddingValues(start = 8.dp, top = 8.dp, end = 8.dp, bottom = 64.dp),
+                contentPadding = PaddingValues(top = 8.dp, bottom = 64.dp),
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
                 verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
-                if (loading) loadingCards(240.dp)
-                if (!loading && rows.isEmpty()) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(6) }) {
+                if (loading) loadingCards(224.dp)
+                if (!loading && rows.isEmpty()) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
                     Column {
-                        Text("Eşleşen içerik yok.", color = Ink.muted)
+                        Text("Eşleşen içerik yok.", color = LumenColors.textSecondary)
                         if (kind.isEmpty()) {
                             val back = androidx.activity.compose.LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
                             Button(onClick = { back?.onBackPressed() }, modifier = Modifier.focusRequester(emptyFocus)) { Text("Geri") }
@@ -355,22 +514,22 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
                     if (entry.kind == "LIVE")
                         ChannelCard(model, entry, now, { play(entry, rows.filter { it.kind == "LIVE" }) }, { lastPoster = it.id },
                             modifier = cardModifier, operations = { open(entry) })
-                    else MovieCard(model, entry, true, open, { lastPoster = it.id }, modifier = cardModifier,
-                        mark = marks[entry.id], artworkHttp = entry.source in httpSources,
+                    else GridPoster(model, entry, open, { lastPoster = it.id }, modifier = cardModifier,
+                        artworkHttp = entry.source in httpSources,
                         artworkWidth = posterWidth, artworkHeight = posterHeight)
                 }
-                if (rows.size >= limit) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(6) }) {
-                    Button(onClick = { limit += 80 }) { Text("Devamını göster") }
+                if (rows.size >= limit) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                    Button(onClick = { limit += POSTER_PAGE_SIZE }) { Text("Devamını göster") }
                 }
             }
         }
         if (advanced) {
             LaunchedEffect(advanced) { panelFocus.requestFocus() }
             Box(Modifier.fillMaxSize().focusGroup()) {
-                Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black.copy(alpha = .48f)))
+                Box(Modifier.fillMaxSize().background(LumenColors.dim))
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterEnd) {
-                    GlassPanel(
-                        Modifier.width(360.dp).fillMaxHeight().testTag("filter-panel")) {
+                    Panel(
+                        Modifier.width(400.dp).fillMaxHeight().testTag("filter-panel")) {
                         LazyColumn(Modifier.fillMaxSize().testTag("filter-fields")
                             .focusRequester(panelFocus).focusGroup()
                             .padding(horizontal = 28.dp, vertical = 27.dp),
@@ -385,6 +544,27 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
                     }
                 }
             }
+        }
+    }
+}
+
+/** Grid captions reserve their space so a focus change never moves the next row. */
+@Composable
+private fun GridPoster(model: LibraryModel, item: Item, open: (Item) -> Unit,
+    focus: (Item) -> Unit, modifier: Modifier, artworkHttp: Boolean,
+    artworkWidth: Int, artworkHeight: Int) {
+    var focused by remember { mutableStateOf(false) }
+    Column(modifier) {
+        FocusCard(onClick = { open(item) }, modifier = Modifier.fillMaxWidth()
+            .semantics { contentDescription = item.title }
+            .onFocusChanged { focused = it.isFocused; if (it.isFocused) focus(item) }) {
+            Poster(model, item, Modifier.fillMaxWidth().aspectRatio(2f / 3f),
+                allowHttp = artworkHttp, width = artworkWidth, height = artworkHeight)
+        }
+        Column(Modifier.padding(top = Spacing.unit).alpha(if (focused) 1f else 0f)) {
+            Text(item.title.displayTitle(), style = LumenType.cardTitle, color = LumenColors.textPrimary,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(item.year, style = LumenType.meta, maxLines = 1)
         }
     }
 }

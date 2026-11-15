@@ -25,6 +25,8 @@ class LivePagesTest {
     @Test fun distantReturnLoadsOnlyNearbyPagesAndRestoresFocus() {
         val repo = Repository.get(InstrumentationRegistry.getInstrumentation().targetContext)
         val source = "live-pages-${System.nanoTime()}"
+        val anchorPage = 240 / LIVE_PAGE_SIZE
+        val endPage = 320 / LIVE_PAGE_SIZE
         val rows = (0 until 321).map { index ->
             val title = "Channel %03d".format(java.util.Locale.ROOT, index)
             Item("$source-$index", source, title, "Haber", "LIVE", "", "", title.lowercase(), 1, "")
@@ -45,12 +47,13 @@ class LivePagesTest {
             screen.waitUntil(10_000) { pages?.get(240)?.id == rows[240].id }
             screen.runOnIdle {
                 assertEquals(240, pages?.anchor)
-                assertTrue(checkNotNull(pages).pages.keys.all { it in 2..4 })
+                assertTrue(checkNotNull(pages).pages.keys.all { it in (anchorPage - 1)..(anchorPage + 1) })
                 assertTrue(checkNotNull(pages).pages.values.sumOf { it.size } <= 3 * LIVE_PAGE_SIZE)
                 checkNotNull(pages).focused(320)
             }
             screen.waitUntil(10_000) {
-                pages?.get(320)?.id == rows[320].id && pages?.pages?.keys?.all { it in 3..4 } == true
+                pages?.get(320)?.id == rows[320].id &&
+                    pages?.pages?.keys?.all { it in (endPage - 1)..endPage } == true
             }
             // A prefix rename invalidates saved keysets. Absolute list indices must be
             // recomputed even when the current window began with a cached cursor.
@@ -62,7 +65,8 @@ class LivePagesTest {
                 checkNotNull(pages).focused(240)
             }
             screen.waitUntil(10_000) {
-                pages?.get(160)?.id == rows[160].id && pages?.pages?.keys?.all { it in 2..4 } == true
+                pages?.get(160)?.id == rows[160].id &&
+                    pages?.pages?.keys?.all { it in (anchorPage - 1)..(anchorPage + 1) } == true
             }
             screen.runOnIdle {
                 checkNotNull(pages).focused(0)

@@ -10,4 +10,5 @@ dependencies {
     implementation(platform("androidx.compose:compose-bom:2026.05.00"))
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.tv:tv-material:1.1.0")
+    testImplementation("junit:junit:4.13.2")
 }

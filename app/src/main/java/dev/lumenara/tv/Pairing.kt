@@ -15,7 +15,11 @@ import androidx.tv.material3.*
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import dev.lumenara.data.SourceSpec
-import dev.lumenara.design.Ink
+import dev.lumenara.design.LumenType
+import dev.lumenara.design.LumenColors
+import dev.lumenara.design.Spacing
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.style.TextAlign
 import java.io.*
 import java.net.*
 import java.security.MessageDigest
@@ -263,7 +267,7 @@ internal fun PairPanel(model: LibraryModel, finish: () -> Unit) {
     }
     DisposableEffect(lifecycle) { onDispose { session?.close() } }
     val active = session
-    if (active == null) Text(status, color = Ink.accent)
+    if (active == null) Text(status, color = LumenColors.accent)
     else PairSessionInfo(active)
 }
 
@@ -283,13 +287,14 @@ internal fun PairSessionInfo(active: PairSession) {
                 }
                 .asImageBitmap()
         }
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Image(qr, "Yerel kurulum QR kodu", Modifier.size(108.dp))
-        Column {
-            Text(active.url)
-            Text("Kod · ${active.code}   (3 dakika)", fontSize = 20.sp)
-            Text("Telefonda yerel sertifikanın SHA-256 izini doğrulayın.", fontSize = 12.sp)
-            Text(active.fingerprint, fontSize = 11.sp, color = Ink.muted)
-        }
+    Column(horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+        Image(qr, "Yerel kurulum QR kodu", Modifier.size(200.dp))
+        Text(active.url, style = LumenType.meta, textAlign = TextAlign.Center)
+        Text("Kod · ${active.code} (3 dakika)", style = LumenType.cardTitle)
+        Text("Telefonda yerel sertifikanın SHA-256 izini doğrulayın.",
+            style = LumenType.caption, color = LumenColors.textSecondary, textAlign = TextAlign.Center)
+        Text(active.fingerprint, style = LumenType.caption, color = LumenColors.textSecondary,
+            textAlign = TextAlign.Center)
     }
 }

@@ -4,6 +4,7 @@ import android.graphics.BitmapFactory
 import android.graphics.drawable.BitmapDrawable
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.platform.app.InstrumentationRegistry
@@ -51,8 +52,9 @@ class CinemaJourneyTest {
                 "Mavi Sessizlik",
                 "Son Sefer",
                 "Kadife Gece",
+                "Sessiz Liman",
             )
-        val art = listOf("coast", "tile0", "tile1", "tile2", "tile3", "tile4", "tile5")
+        val art = titles.indices.map { "tile${it % 7}" }
         val previous = Coil.imageLoader(context)
         val loader =
             ImageLoader.Builder(context)
@@ -176,7 +178,7 @@ class CinemaJourneyTest {
                         .put("stream_icon", "https://cinema.invalid/${art[i]}.jpg")
                         .put(
                             "backdrop_path",
-                            if (i == 0) JSONArray().put("https://cinema.invalid/${art[i]}.jpg")
+                            if (i == 0) JSONArray().put("https://cinema.invalid/backdrop.jpg")
                             else JSONArray(),
                         )
                         .put("year", "2025")
@@ -208,14 +210,14 @@ class CinemaJourneyTest {
                                 "get_live_categories" ->
                                     """[{"category_id":2,"category_name":"Haber"}]"""
                                 "get_live_streams" ->
-                                    """[{"stream_id":101,"name":"Test Haber","category_id":"2","stream_icon":"https://cinema.invalid/tile0.jpg"}]"""
+                                    """[{"stream_id":101,"name":"Test Haber","category_id":"2","stream_icon":"https://cinema.invalid/channel.jpg"}]"""
                                 else -> "[]"
                             }
                         )
                     }
                 }
             try {
-                node("✓ M3U").assertExists()
+                node("Liste adresi gir").assertExists()
                 capture("cinema-setup")
                 runBlocking {
                     repo.add(
@@ -228,7 +230,7 @@ class CinemaJourneyTest {
                             it.title == "Açık Deniz"
                         }
                     assertFalse(movie.backdrop.contains("cinema.invalid"))
-                    assertEquals("https://cinema.invalid/coast.jpg", repo.backdrop(movie))
+                    assertEquals("https://cinema.invalid/backdrop.jpg", repo.backdrop(movie))
                     val channel = repo.library.browse(source.id, "LIVE", "", "", "", 1).first().single()
                     val now = System.currentTimeMillis()
                     repo.guide.put(Feed("home-test-guide", source.id, ""))
@@ -264,18 +266,28 @@ class CinemaJourneyTest {
                 screen.openCategory("Sinema")
                 val movieCard = describedIn("Kadife Gece", "poster-grid")
                 screen.onNodeWithTag("poster-grid").performScrollToNode(movieCard)
+                focus(screen.onNode(movieCard))
+                val posterBounds = screen.onNode(movieCard).fetchSemanticsNode().boundsInRoot
+                assertEquals("Afiş oranı 2:3 kalmalı", 2f / 3f, posterBounds.width / posterBounds.height, .02f)
+                val gridCards = screen.onAllNodes(hasContentDescription("Açık Deniz") or
+                    hasContentDescription("Kızıl Ufuk") or hasContentDescription("Kumların Ötesi") or
+                    hasContentDescription("Gece Hattı") or hasContentDescription("Mavi Sessizlik") or
+                    hasContentDescription("Son Sefer") or hasContentDescription("Kadife Gece") or
+                    hasContentDescription("Sessiz Liman"))
+                    .fetchSemanticsNodes().filter { it.boundsInRoot.width > 0 }
+                assertEquals("Sekiz afiş ilk satıra sığmalı", 8, gridCards.size)
+                assertTrue(gridCards.maxOf { it.boundsInRoot.top } - gridCards.minOf { it.boundsInRoot.top } < 20f)
                 assertTrue("Afiş adı ekranın içinde kalmalı",
                     screen.onNode(hasText("Kadife Gece") and hasAnyAncestor(hasTestTag("poster-grid")))
                         .fetchSemanticsNode().boundsInRoot.bottom <= screen.onRoot().fetchSemanticsNode().boundsInRoot.bottom)
-                focus(screen.onNode(movieCard))
                 capture("cinema-focus")
                 screen.ok()
-                node("+ Listem").assertExists()
+                node("Listem").assertExists()
                 node("Oynat").assertIsFocused()
                 capture("cinema-details")
                 capture("screens/details")
-                select("+ Listem")
-                node("✓ Listem").assertExists()
+                select("Listem")
+                waitFor(hasText("Listem") and SemanticsMatcher.expectValue(SemanticsProperties.Selected, true))
                 screen.back()
                 section("Filmler")
                 screen.openCategory("Sinema")
@@ -339,6 +351,11 @@ class CinemaJourneyTest {
                 searchShelf("search-shelf-Filmler")
                 waitFor(hasContentDescription("Açık Deniz") and
                     hasAnyAncestor(hasTestTag("search-shelf-Filmler")))
+                val searchArtwork = screen.onNode(hasContentDescription("Açık Deniz") and
+                    hasAnyAncestor(hasTestTag("search-shelf-Filmler"))).fetchSemanticsNode().boundsInRoot
+                val searchDensity = screen.onNodeWithTag("section-Ara").fetchSemanticsNode().boundsInRoot.left / 48f
+                assertEquals("Arama kartı genişliği", 110f, searchArtwork.width / searchDensity, 1f)
+                assertEquals("Arama afişi 2:3 kalmalı", 2f / 3f, searchArtwork.width / searchArtwork.height, .02f)
                 waitAbsent(hasTestTag("channel-shelf-Kanallar"))
                 screen.onNodeWithTag("channel-shelf-Kanallar").assertDoesNotExist()
                 capture("screens/search")
@@ -353,8 +370,10 @@ class CinemaJourneyTest {
                 waitFor(hasText("IPTV Kaynakları") and isFocused())
                 node("IPTV Kaynakları").assertIsFocused()
                 screen.ok()
-                node("✓ M3U").assertExists()
+                node("Liste adresi gir").assertExists()
                 screen.back()
+                screen.openSettingsGroup("Oynatıcı")
+                screen.onNodeWithTag("settings-list").performScrollToNode(hasText("Varsayılan motor · Media3"))
                 node("Varsayılan motor · Media3").assertExists()
             } finally {
                 runBlocking {

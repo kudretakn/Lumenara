@@ -1,22 +1,24 @@
 package dev.lumenara.tv
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.saveable.rememberSaveableStateHolder
-import androidx.compose.ui.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.*
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.*
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.*
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.*
+import dev.lumenara.catalog.displayTitle
 import dev.lumenara.catalog.episodeName
 import dev.lumenara.catalog.watched
 import dev.lumenara.data.*
@@ -24,219 +26,205 @@ import dev.lumenara.design.*
 
 @Composable
 internal fun SeriesDetails(model: LibraryModel, series: Item, play: (Item, List<Item>) -> Unit, back: () -> Unit) {
-    val raw by remember(series.id) { model.repo.episodes(series.id) }
-        .collectAsLoadingState()
+    val raw by remember(series.id) { model.repo.episodes(series.id) }.collectAsLoadingState()
     val marks by remember(series.id) { model.repo.library.episodeMarks(series.id) }
         .collectAsStateWithLifecycle(emptyList())
+    val mark by remember(series.id) { model.repo.library.observeMark(series.id) }
+        .collectAsStateWithLifecycle(null)
     val episodes = remember(raw) { raw.orEmpty().seriesOrder() }
     val byId = remember(marks) { marks.associateBy { it.id } }
+    val seasons = remember(episodes) { episodes.groupBy { it.seriesEpisode().season }.toSortedMap() }
+    // A tab still enters its season and Back still returns to that tab before leaving details.
     var season by rememberSaveable(series.id) { mutableStateOf<Int?>(null) }
+    var previewSeason by rememberSaveable(series.id) { mutableIntStateOf(1) }
     var seriesFocus by rememberSaveable(series.id) { mutableStateOf("series-play") }
     var loaded by rememberSaveable(series.id) { mutableStateOf(false) }
+    var menu by remember { mutableStateOf<Item?>(null) }
+    var restoreEpisode by remember { mutableStateOf("") }
     val notice by model.notice.collectAsStateWithLifecycle()
     val busy by model.busy.collectAsStateWithLifecycle()
     LaunchedEffect(series.id) {
-        if (!loaded) model.job("Bölüm listesi güncellendi.") {
-            model.repo.expand(series)
-            loaded = true
-        }
+        if (!loaded) model.job("Bölüm listesi güncellendi.") { model.repo.expand(series); loaded = true }
     }
     val loading = raw == null || (episodes.isEmpty() && busy)
-    val pages = rememberSaveableStateHolder()
-    val currentSeason = season
-    if (currentSeason != null) {
-        BackHandler { season = null }
-        pages.SaveableStateProvider("season-$currentSeason") {
-            SeasonPage(model, series, currentSeason, episodes, loading, byId, play, { season = null })
+    val info = cinemaInfo(model, series)
+    val next = episodes.continueItem(marks)
+    val name = next?.let { episodeName(it.title, it.category) }
+    val hasHistory = marks.any { it.position > 0 }
+    val selectedSeason = season ?: previewSeason.takeIf { it in seasons } ?: seasons.keys.firstOrNull() ?: 1
+    val primary = remember { FocusRequester() }
+    val content = rememberLazyListState()
+    LaunchedEffect(series.id) {
+        if (season == null && seriesFocus == "series-play") {
+            withFrameNanos { }; primary.requestFocus()
         }
-        return
     }
-    pages.SaveableStateProvider("series") {
-        val info = cinemaInfo(model, series)
-        val next = episodes.continueItem(marks)
-        val name = next?.let { episodeName(it.title, it.category) }
-        val hasHistory = marks.any { it.position > 0 }
-        val mark by remember(series.id) { model.repo.library.observeMark(series.id) }
-            .collectAsStateWithLifecycle(null)
-        val context = LocalContext.current
-        val focus = remember { FocusRequester() }
-        val seasons = episodes.groupBy { it.seriesEpisode().season }.toSortedMap()
-        val state = rememberLazyListState()
-        var positioned by remember { mutableStateOf(false) }
-        LaunchedEffect(Unit) {
-            if (!positioned) {
-                positioned = true
-                withFrameNanos { }
-                if (!seriesFocus.startsWith("season-")) focus.requestFocus()
+    BackHandler(season != null && menu == null) {
+        // Playback/menu focus changes can overwrite seriesFocus while a season is open.
+        // Back belongs to the active season, regardless of the last focused control.
+        seriesFocus = "season-$season"
+        season = null
+    }
+    fun closeMenu() { restoreEpisode = menu?.id.orEmpty(); menu = null }
+    BackHandler(menu != null) { closeMenu() }
+    Box(Modifier.fillMaxSize().testTag(if (season == null) "series-page" else "season-page")) {
+        CinemaBackdrop(model, series, info)
+        LazyColumn(Modifier.fillMaxSize().testTag("details-content")
+            .focusProperties { if (menu != null) canFocus = false }.focusGroup(), state = content,
+            contentPadding = PaddingValues(horizontal = Spacing.screenHorizontal, vertical = Spacing.screenVertical),
+            verticalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
+            item { DetailHeading(series, info) }
+            if (info.summary.isNotBlank()) item {
+                Text(info.summary, Modifier.widthIn(max = 560.dp), style = LumenType.body,
+                    color = LumenColors.textPrimary, maxLines = 3, overflow = TextOverflow.Ellipsis)
             }
-        }
-        Box(Modifier.fillMaxSize().testTag("series-page")) {
-            CinemaBackdrop(model, series, info)
-            LazyColumn(Modifier.fillMaxSize().testTag("details-content").focusGroup(), state = state,
-                contentPadding = PaddingValues(horizontal = 48.dp, vertical = 27.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                item {
-                    Column(Modifier.widthIn(max = 620.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text(series.title, fontSize = 44.sp, lineHeight = 48.sp, fontWeight = FontWeight.Bold)
-                        MovieMeta(series, info)
-                        if (info.summary.isNotBlank()) Text(info.summary, Modifier.widthIn(max = 510.dp),
-                            fontSize = 14.sp, lineHeight = 21.sp, maxLines = 4, overflow = TextOverflow.Ellipsis)
-                    }
-                }
-                item {
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(5.dp)) {
-                        item {
-                            Button(onClick = {
-                                if (next != null) play(next, episodes)
-                                else model.job("Bölüm listesi güncellendi.") { model.repo.expand(series); loaded = true }
-                            },
-                                modifier = Modifier.testTag("series-play").focusRequester(focus)
-                                    .onFocusChanged { if (it.isFocused) seriesFocus = "series-play" }) {
-                                Text(if (name == null) { if (loading) "Oynat" else "Bölümleri yükle" } else if (hasHistory)
-                                    "Devam et: S${name.season} B${name.episode}" else "Oynat (S${name.season} B${name.episode})")
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.unit), verticalAlignment = Alignment.CenterVertically) {
+                    LumenButton(onClick = {
+                        if (next != null) play(next, episodes)
+                        else model.job("Bölüm listesi güncellendi.") { model.repo.expand(series); loaded = true }
+                    }, modifier = Modifier.testTag("series-play").focusRequester(primary)
+                        .onFocusChanged { if (it.isFocused) seriesFocus = "series-play" }) {
+                        LumenIcon(LumenIcon.Play, null)
+                        Column {
+                            Text(if (name == null) { if (loading) "Oynat" else "Bölümleri yükle" }
+                                else if (hasHistory) "Devam et · S${name.season} B${name.episode}"
+                                else "Oynat · ${name.episode}. Bölüm")
+                            byId[next?.id]?.takeIf { it.duration > 0 && it.position > 0 }?.let {
+                                ProgressLine(it.position.toFloat() / it.duration, Modifier.width(160.dp))
                             }
                         }
-                        item { Button(onClick = { model.mark(series, false) }) { Text(if (mark?.listed == true) "✓ Listem" else "+ Listem") } }
-                        item { Button(onClick = { model.mark(series, true) }) { Text(if (mark?.favorite == true) "Favoriden çıkar" else "Favoriye ekle") } }
-                        if (info.trailer.isNotBlank()) item {
-                            Button(onClick = {
-                                runCatching { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,
-                                    android.net.Uri.parse("https://www.youtube.com/watch?v=${info.trailer}"))) }
-                                    .onFailure { model.notice.value = "Fragman için uygun uygulama bulunamadı." }
-                            }) { Text("Fragman") }
-                        }
                     }
+                    DetailSecondaryActions(model, series, mark, info)
                 }
-                item { VersionChoice(model, series) }
-                item { Text("Sezonlar", fontSize = 24.sp, fontWeight = FontWeight.SemiBold) }
-                item {
-                    LazyRow(Modifier.testTag("season-shelf").focusGroup(),
-                        contentPadding = PaddingValues(12.dp), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                        if (loading) items(8) { LoadingCard(Modifier.width(210.dp).height(180.dp)) }
-                        items(seasons.keys.toList(), key = { it }) { number ->
-                            val rows = seasons.getValue(number)
-                            val count = rows.count { ep -> byId[ep.id]?.let { watched(it.position, it.duration) } == true }
-                            val target = remember { FocusRequester() }
-                            if (seriesFocus == "season-$number") LaunchedEffect(Unit) { target.requestFocus() }
-                            FocusCard(onClick = { season = number }, modifier = Modifier.width(210.dp)
-                                .testTag("season-$number").focusRequester(target)
+            }
+            item {
+                LazyRow(Modifier.testTag("season-shelf").focusGroup(),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
+                    if (loading) items(3) { LoadingCard(Modifier.width(112.dp).height(40.dp)) }
+                    items(seasons.keys.toList(), key = { it }) { number ->
+                        val target = remember { FocusRequester() }
+                        val rows = seasons.getValue(number)
+                        val complete = rows.all { ep -> byId[ep.id]?.let { watched(it.position, it.duration) } == true }
+                        if (season == null && seriesFocus == "season-$number") LaunchedEffect(Unit) {
+                            withFrameNanos { }; target.requestFocus()
+                        }
+                        SeasonTab(number, selectedSeason == number, complete,
+                            Modifier.testTag("season-$number").focusRequester(target)
                                 .onFocusChanged { if (it.isFocused) seriesFocus = "season-$number" }) {
-                                Column {
-                                    Poster(model, rows.first().takeIf { it.logo.isNotBlank() } ?: series, Modifier.fillMaxWidth().height(96.dp))
-                                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        Text("Sezon $number${if (count == rows.size) " ✓" else ""}", fontSize = 20.sp)
-                                        Text("${rows.size} bölüm · $count/${rows.size} izlendi", color = Ink.muted, fontSize = 12.sp)
-                                        ProgressLine(count.toFloat() / rows.size)
-                                    }
-                                }
-                            }
+                            if (season == number) restoreEpisode = rows.firstOrNull()?.id.orEmpty()
+                            previewSeason = number
+                            season = number
                         }
                     }
                 }
-                if (!loading && episodes.isEmpty()) item {
-                    Text(if (loaded) "Sağlayıcı bölüm bildirmedi." else notice,
-                        color = Ink.muted)
-                    if (!busy) Button(onClick = { model.job("Bölüm listesi güncellendi.") { model.repo.expand(series); loaded = true } }) { Text("Yeniden dene") }
+            }
+            item {
+                key(selectedSeason) {
+                    EpisodeShelf(model, seasons[selectedSeason].orEmpty(), episodes, byId, loading,
+                        enter = season != null || seriesFocus.startsWith("episode-"), restore = restoreEpisode,
+                        restored = { restoreEpisode = "" }, play = play, actions = { menu = it },
+                        focused = { if (season == null) seriesFocus = "episode-${it.id}" })
                 }
-                if (info.people.isNotEmpty()) item {
-                    Text("Oyuncular", fontSize = 20.sp)
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                        items(info.people) { person ->
-                            FocusCard(onClick = {}, modifier = Modifier.width(110.dp)) {
-                                Column(Modifier.padding(10.dp)) {
-                                    if (person.portrait.isNotBlank()) Artwork(model, series, person.portrait, Modifier.size(88.dp), role = "person")
-                                    Text(person.name, fontSize = 12.sp, maxLines = 2)
-                                    Text(person.role, color = Ink.muted, fontSize = 11.sp, maxLines = 1)
-                                }
-                            }
-                        }
+            }
+            if (!loading && episodes.isEmpty()) item {
+                Text(if (loaded) "Sağlayıcı bölüm bildirmedi." else notice, style = LumenType.meta)
+                if (!busy) LumenButton(onClick = {
+                    model.job("Bölüm listesi güncellendi.") { model.repo.expand(series); loaded = true }
+                }) { Text("Yeniden dene") }
+            }
+            item { DetailCast(info) }
+        }
+        menu?.let { ep ->
+            val focus = remember { FocusRequester() }
+            LaunchedEffect(ep.id) { focus.requestFocus() }
+            Panel(Modifier.align(Alignment.Center).width(400.dp).testTag("episode-actions")) {
+                Column(Modifier.padding(Spacing.titleGap), verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+                    Text(episodeName(ep.title).title.displayTitle(), style = LumenType.cardTitle, maxLines = 2)
+                    ListRow(onClick = { model.watched(ep, true); closeMenu() }, modifier = Modifier.focusRequester(focus)) {
+                        Text("İzlendi olarak işaretle", style = LumenType.label)
                     }
-                } else if (info.cast.isNotBlank()) item { Text("Oyuncular", fontSize = 20.sp); Text(info.cast, color = Ink.muted) }
-                item { Button(onClick = back) { Text("Geri") } }
+                    ListRow(onClick = { model.watched(ep, false); closeMenu() }) {
+                        Text("İzlenmedi olarak işaretle", style = LumenType.label)
+                    }
+                    ListRow(onClick = { closeMenu() }) { Text("Kapat", style = LumenType.label) }
+                }
             }
         }
     }
 }
 
+/** D0 has no text tab; keep this detail-only tab flat with a gold selection line. */
 @Composable
-private fun SeasonPage(model: LibraryModel, series: Item, season: Int, all: List<Item>, loading: Boolean, marks: Map<String, Mark>,
-                       play: (Item, List<Item>) -> Unit, back: () -> Unit) {
-    val episodes = all.filter { it.seriesEpisode().season == season }
-    var menu by remember { mutableStateOf<Item?>(null) }
+private fun SeasonTab(number: Int, selected: Boolean, complete: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    val interactions = remember { MutableInteractionSource() }
+    Column(Modifier.width(IntrinsicSize.Max)) {
+        val shape = androidx.compose.foundation.shape.RoundedCornerShape(Radii.button)
+        Surface(onClick = onClick, modifier = modifier.height(40.dp).semantics {
+            this.selected = selected
+            stateDescription = if (complete) "İzlendi" else "İzlenmedi"
+        }, interactionSource = interactions,
+            shape = ClickableSurfaceDefaults.shape(shape),
+            scale = ClickableSurfaceDefaults.scale(focusedScale = 1f, pressedScale = 1f),
+            colors = ClickableSurfaceDefaults.colors(containerColor = Color.Transparent,
+                contentColor = LumenColors.textSecondary, focusedContainerColor = LumenColors.focus,
+                focusedContentColor = LumenColors.onFocus, pressedContainerColor = LumenColors.surface3,
+                pressedContentColor = LumenColors.textPrimary)) {
+            Row(Modifier.padding(horizontal = Spacing.cardGap), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.iconText)) {
+                Text("Sezon $number", style = LumenType.label)
+                if (complete) LumenIcon(LumenIcon.Check, "İzlendi")
+            }
+        }
+        Box(Modifier.fillMaxWidth().height(3.dp).background(if (selected) LumenColors.accent else Color.Transparent))
+    }
+}
+
+@Composable
+private fun EpisodeShelf(model: LibraryModel, episodes: List<Item>, all: List<Item>, marks: Map<String, Mark>,
+    loading: Boolean, enter: Boolean, restore: String, restored: () -> Unit,
+    play: (Item, List<Item>) -> Unit, actions: (Item) -> Unit, focused: (Item) -> Unit) {
     val list = rememberLazyListState()
     var lastFocus by rememberSaveable { mutableStateOf("") }
-    var positioned by remember { mutableStateOf(false) }
-    var restore by remember { mutableStateOf("") }
-    LaunchedEffect(episodes.isNotEmpty()) {
-        if (!positioned && episodes.isNotEmpty()) {
-            val target = episodes.indexOfFirst { it.id == lastFocus }.coerceAtLeast(0)
-            restore = episodes[target].id
-            list.scrollToItem(target)
-            positioned = true
+    var entered by remember { mutableStateOf(false) }
+    var target by remember { mutableStateOf("") }
+    LaunchedEffect(episodes, enter, restore) {
+        if (episodes.isNotEmpty() && (enter && !entered || restore.isNotEmpty())) {
+            val index = episodes.indexOfFirst { it.id == restore.ifBlank { lastFocus } }.coerceAtLeast(0)
+            list.scrollToItem(index)
+            target = episodes[index].id
         }
+        entered = enter && episodes.isNotEmpty()
     }
-    fun closeMenu() { restore = menu?.id.orEmpty(); menu = null }
-    BackHandler(menu != null) { closeMenu() }
-    Box(Modifier.fillMaxSize().testTag("season-page")) {
-        CinemaBackdrop(model, series, MovieInfo.from(series), dim = true)
-        Column(Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 27.dp)
-            .focusProperties { if (menu != null) canFocus = false }.focusGroup(),
-            verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically) {
-                Column {
-                    Text(series.title, fontSize = 28.sp, fontWeight = FontWeight.Bold)
-                    Text(if (loading) "Sezon $season" else "Sezon $season · ${episodes.size} bölüm", color = Ink.muted, fontSize = 15.sp)
-                }
-                Button(onClick = back) { Text("Sezonlara dön") }
-            }
-            LazyColumn(Modifier.weight(1f).testTag("episode-list").focusGroup(), state = list,
-                contentPadding = PaddingValues(horizontal = 36.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                if (loading) items(8) { LoadingCard(Modifier.fillMaxWidth().height(90.dp)) }
-                if (!loading && episodes.isEmpty()) item { Text("İçerik yok.", color = Ink.muted) }
-                items(episodes, key = { it.id }) { ep ->
-                    val mark = marks[ep.id]
-                    val duration = mark?.duration ?: 0
-                    val position = mark?.position ?: 0
-                    val name = episodeName(ep.title, ep.category)
-                    val done = watched(position, duration)
-                    val focus = remember { FocusRequester() }
-                    if (positioned && restore == ep.id && menu == null) LaunchedEffect(restore, positioned, menu) {
-                        withFrameNanos { }
-                        focus.requestFocus()
-                        restore = ""
-                    }
-                    FocusCard(onClick = { play(ep, all) }, onLongClick = { menu = ep },
-                        modifier = Modifier.fillMaxWidth().testTag("episode-${ep.id}").focusRequester(focus)
-                            .onFocusChanged { if (it.isFocused) lastFocus = ep.id }
-                            .semantics { stateDescription = if (done) "İzlendi" else if (position > 0) "Yarım kaldı" else "İzlenmedi" }) {
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Poster(model, ep, Modifier.width(140.dp).height(90.dp))
-                            Column(Modifier.weight(1f).padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                                Text("B${name.episode} · ${name.title}${if (done) " ✓" else ""}", fontSize = 18.sp, maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis)
-                                Text(if (duration > 1) "${duration / 60_000} dk" else "Süre bilgisi yok", color = Ink.muted, fontSize = 12.sp)
-                                ProgressLine(if (duration > 0) position.toFloat() / duration else 0f)
-                                if (ep.summary.isNotBlank()) Text(ep.summary, fontSize = 12.sp, color = Ink.muted, maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        menu?.let { ep ->
+    LazyRow(Modifier.testTag("episode-list").focusRestorer().focusGroup(), state = list,
+        contentPadding = PaddingValues(8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (loading) items(4) { LoadingCard(Modifier.width(140.dp).height(120.dp)) }
+        items(episodes, key = { it.id }) { ep ->
+            val mark = marks[ep.id]
+            val duration = mark?.duration ?: 0
+            val position = mark?.position ?: 0
+            val name = episodeName(ep.title, ep.category)
+            val done = watched(position, duration)
             val focus = remember { FocusRequester() }
-            LaunchedEffect(ep.id) { focus.requestFocus() }
-            GlassPanel(Modifier.align(Alignment.Center).width(400.dp).testTag("episode-actions")) {
-                Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    Text(episodeName(ep.title).title, fontSize = 20.sp, maxLines = 2)
-                    Button(onClick = { model.watched(ep, true); closeMenu() }, modifier = Modifier.focusRequester(focus)) {
-                        Text("İzlendi olarak işaretle")
+            if (target == ep.id) LaunchedEffect(target) {
+                withFrameNanos { }; focus.requestFocus(); target = ""; restored()
+            }
+            Column(Modifier.width(140.dp)) {
+                Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).testTag("episode-artwork-${ep.id}")) {
+                    FocusCard(onClick = { play(ep, all) }, onLongClick = { actions(ep) },
+                        modifier = Modifier.fillMaxSize().testTag("episode-${ep.id}").focusRequester(focus)
+                            .onFocusChanged { if (it.isFocused) { lastFocus = ep.id; focused(ep) } }
+                            .semantics { stateDescription = if (done) "İzlendi" else if (position > 0) "Yarım kaldı" else "İzlenmedi" }) {
+                        Poster(model, ep, Modifier.fillMaxSize())
+                        if (duration > 0 && position > 0) ProgressLine(position.toFloat() / duration, Modifier.align(Alignment.BottomStart))
                     }
-                    Button(onClick = { model.watched(ep, false); closeMenu() }) { Text("İzlenmedi olarak işaretle") }
-                    Button(onClick = { closeMenu() }) { Text("Geri") }
                 }
+                Row(Modifier.padding(top = Spacing.unit), verticalAlignment = Alignment.CenterVertically) {
+                    Text("${name.episode}. ${name.title.displayTitle()}", Modifier.weight(1f), style = LumenType.label,
+                        color = LumenColors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (done) LumenIcon(LumenIcon.Check, "İzlendi", size = IconSizes.meta)
+                }
+                if (duration > 1) Text("${duration / 60_000} dk", style = LumenType.meta)
             }
         }
     }

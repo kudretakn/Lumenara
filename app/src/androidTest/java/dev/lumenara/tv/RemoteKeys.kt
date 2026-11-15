@@ -72,3 +72,15 @@ fun ComposeContentTestRule.openCategory(name: String) {
     ok()
     waitUntil(30_000) { onAllNodesWithTag("category-grid").fetchSemanticsNodes().isEmpty() }
 }
+
+/** Select the left-hand Settings group with remote OK before searching its right-hand panel. */
+fun ComposeContentTestRule.openSettingsGroup(name: String) {
+    val group = hasTestTag("settings-group-$name")
+    waitUntil(30_000) { onAllNodes(group).fetchSemanticsNodes().isNotEmpty() }
+    onNode(group).assertIsDisplayed().performSemanticsAction(SemanticsActions.RequestFocus)
+    waitUntil(30_000) { onAllNodes(group and isFocused()).fetchSemanticsNodes().isNotEmpty() }
+    ok()
+    waitUntil(30_000) { onAllNodes(group and isSelected()).fetchSemanticsNodes().isNotEmpty() }
+    onNodeWithTag("settings-list").assertIsDisplayed()
+    waitForIdle()
+}

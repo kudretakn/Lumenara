@@ -11,8 +11,8 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.unit.*
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.tv.material3.*
+import dev.lumenara.design.LumenColors
 import dev.lumenara.data.Item
-import dev.lumenara.design.Ink
 
 @Composable
 internal fun MultiView(
@@ -31,7 +31,7 @@ internal fun MultiView(
     }
     LaunchedEffect(Unit) { first.requestFocus() }
     BackHandler(onBack = back)
-    Column(Modifier.fillMaxSize().background(Ink.background)) {
+    Column(Modifier.fillMaxSize().background(LumenColors.bg)) {
         channels.chunked(2).forEachIndexed { row, pair ->
             Row(Modifier.weight(1f)) {
                 pair.forEachIndexed { col, channel ->

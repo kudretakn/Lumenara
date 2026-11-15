@@ -1,16 +1,43 @@
 # Durum
 
-Son güncelleme: 15 Kasım 2026 · sunucu oturumu
+Son güncelleme: 16 Kasım 2026 · yerel (Windows) oturum
 
-> **Sunucudaki Claude için devir notu.** Bu dosya `feat/k-card-navigation` dalında (PR #18). `main`'deki STATUS eski.
->
-> Başlangıç:
+> **Yerel Claude için devir notu.** Başlangıç:
 > ```
 > git fetch --all --prune
-> git switch feat/k-card-navigation
+> git switch design/0.5
 > git pull
 > ```
-> Sonra aşağıdaki "Açık" ve "Sıradaki" bölümlerine göre devam et.
+> Sonra bu dosyayı ve `CLAUDE.md`'yi oku. Çalışma düzeni: sen ekip liderisin; işleri Codex alt ajanlarına (zorluğa göre luna/sol/astra) ve Claude alt ajanlarına (haiku/sonnet/opus) dağıt, kendin kod yazma (yalnız birleştirme çakışması ve tek satırlık mekanik düzeltme).
+
+## Şu an açık
+- **PR #22 — Tasarım 0.5.0** (dal `design/0.5`). İçerik:
+  - D0–D8 (D8 temizlik: `Glass.kt`, `Ink` alias'ı, `NavIcon` ve Unicode glifler kaldırıldı; `SourceGlyphTest`).
+  - İlk CI turunda düşen 9 cihaz testinin düzeltmesi. Ayarlar testleri iki sütunlu Ayarlar'a uyarlandı (`openSettingsGroup`). Hub hizası, bölüm görseli 16:9 yuva, `ArtworkFallbackDeviceTest` ana iş parçacığı ağ çağrısı, altyazı paneli odağı düzeltildi.
+  - Kullanıcı isteğiyle sık ızgaralar: kategori ve kanal 6 sütun/60 dp kompakt, afiş 8 sütun (`DenseGridTest`).
+  - Küçültülmüş kartlar: Hub 100/40 dp, raf 110 dp, arama 110×165 dp, bölüm 140 dp, sezon çipi 40 dp.
+  - Kullanıcı genel ölçek ayarı İSTEMEDİ ("yalnız kartları küçült").
+  - Yerelde test, lint ve iki APK geçti (yalnız bilinen 2 Windows `SubtitleApiTest` hatası).
+  - CI'da yeşil olunca merge → `v0.5.0`. TV'ye ADB ile kur. Ekran görüntüleri artifact'ta `files/screens/`.
+- Yerel worktree'ler: `C:\Users\Kudret\Documents\projeler\lumenara-wt\{d8,dense,fix-settings,fix-layout,compact,scale}`. scale atıldı. Dallar birleşti; merge sonrası silinebilir.
+- Kullanıcının TV'sinde 0.4.3 kurulu (ADB ile, 15 Kasım 23:46).
+- Onaylı maketler: `docs/DESIGN-0.5.md` §6 istemleri; PNG'ler sunucudaydı, gerekirse SVG istemleriyle yeniden üretilir.
+
+## Yayınlanan sürümler (Lumenara-releases)
+- v0.4.0 kartlı Hub, +18 filtresi, sessiz yayında VLC'ye geçiş (kullanıcının canlı kanallarında ses yoktu).
+- v0.4.1 performans paketi, yüklenme iskeletleri, Android 9 güncelleme imza düzeltmesi, açıklayıcı hata mesajları.
+- v0.4.2 derin performans + bellek (Opus taramaları; uyarlanabilir Media3 tamponu 32–96 MB, tek LibVLC, onTrimMemory). Şema 9.
+- v0.4.3 Watch Next, sesli arama, kare hızı eşleme, uyku zamanlayıcısı, şifreli yedek/geri yükleme (her şey ya da hiç; şema 10).
+- **Kullanıcının TV'sinde 0.4.0 kurulu** (ADB ile). 0.4.0'ın güncelleyicisi Android 9'da imza kontrolüne takılıyor; ilk güncelleme bir kez ADB ile gerekebilir (`gh release download vX -R kudretakn/Lumenara-releases -p "*.apk"`, `adb connect 192.168.1.14:5555`, `adb install -r`). 0.4.1+ güncelleyicisi düzeltildi.
+
+## Kullanıcı bilgileri ve kararları (bu oturum)
+- Mi Box 4 (Android 9, 2 GB), Xtream 39.682 içerik, Mi Box'ta 100–150 Mbps; 4K ve yüksek bit hızlı (remux) dosyalar oynatacak.
+- TV saati yanlıştı → GitHub TLS hatası; otomatik saat açıldı.
+- "Uygulama çok hızlı olmalı", RAM kullanımı yüksekti → 0.4.2. Kullanıcıdan ölçüm (`adb shell dumpsys meminfo dev.lumenara.tv`, `adb logcat -s LumenaraPerf`) henüz alınmadı; TV'ye kurduğunda iste.
+- U3 (ebeveyn kilidi, kanal sıralama) ertelendi; şema değişikliği artık 10→11 olur.
+- Depo 15 Kasım'da **herkese açık** yapıldı (Actions dakikaları bitmişti; kullanıcı kararı). Geçmiş gizli bilgi açısından tarandı, temiz.
+- Codex sandbox'ı worktree'lerin ortak `.git`'ine yazamaz: birleştirme işlerinde ajan `/tmp` altına klon açıp bundle üretir, lider bundle'ı içe alır. Codex'e "testler JUnit 4 `@Test` sınıfı olmalı, `const val` sınıf içinde olmaz" kuralını her istemde ver (aksi halde Gradle "no tests discovered" verir).
+- Sunucu diski dar (~6 GB boş); her derlemeden sonra build klasörleri silindi.
 
 ## Biten
 - 0.3.x: arayüz, Lumenara adı, güncelleme, U1, S, A, U2 (#1–#17). Yayınlar v0.3.0–v0.3.2.
