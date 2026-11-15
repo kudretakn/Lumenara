@@ -93,4 +93,48 @@ class DenseGridTest {
             runBlocking { repo.remove(source) }
         }
     }
+
+    @Test fun searchFitsSevenPortraitCardsInsideSafeArea() {
+        val repo = Repository.get(InstrumentationRegistry.getInstrumentation().targetContext)
+        val source = "dense-search-${System.nanoTime()}"
+        val rows = List(10) { index ->
+            val title = "Film %03d".format(java.util.Locale.ROOT, index)
+            Item("$source-$index", source, title, "Test", "MOVIE", "", "", title.lowercase(), 1, "")
+        }
+        try {
+            runBlocking {
+                repo.library.save(Source(source, source, "", false, System.currentTimeMillis(), rows.size))
+                repo.library.save(rows)
+            }
+            screen.runOnUiThread {
+                val model = ViewModelProvider(screen.activity)[LibraryModel::class.java]
+                screen.activity.setContent {
+                    LumenaraTheme {
+                        Box(Modifier.requiredSize(960.dp, 540.dp)
+                            .padding(Spacing.screenHorizontal, Spacing.screenVertical)) {
+                            SearchScreen(model, source, {}, { _, _ -> })
+                        }
+                    }
+                }
+            }
+            screen.onNodeWithTag("search-input").performTextReplacement("Film")
+            screen.waitUntil(10_000) {
+                screen.onAllNodesWithTag("search-artwork-${rows[6].id}").fetchSemanticsNodes().isNotEmpty()
+            }
+            val viewport = screen.onNodeWithTag("search-shelf-Filmler").fetchSemanticsNode().boundsInRoot
+            val density = screen.activity.resources.displayMetrics.density
+            rows.take(7).forEach { item ->
+                val card = screen.onNodeWithTag("search-artwork-${item.id}").assertIsDisplayed()
+                    .fetchSemanticsNode().boundsInRoot
+                assertEquals("Arama kartı genişliği", 110f, card.width / density, 1f)
+                assertEquals("Arama kartı yüksekliği", 165f, card.height / density, 1f)
+                assertTrue("Yedi kart ilk satırda tamamen görünmeli",
+                    card.left >= viewport.left && card.right <= viewport.right &&
+                        card.top >= viewport.top && card.bottom <= viewport.bottom)
+            }
+        } finally {
+            screen.runOnUiThread { screen.activity.setContent {} }
+            runBlocking { repo.remove(source) }
+        }
+    }
 }

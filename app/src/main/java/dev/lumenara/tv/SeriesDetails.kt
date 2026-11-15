@@ -96,7 +96,7 @@ internal fun SeriesDetails(model: LibraryModel, series: Item, play: (Item, List<
             item {
                 LazyRow(Modifier.testTag("season-shelf").focusGroup(),
                     horizontalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
-                    if (loading) items(3) { LoadingCard(Modifier.width(112.dp).height(48.dp)) }
+                    if (loading) items(3) { LoadingCard(Modifier.width(112.dp).height(40.dp)) }
                     items(seasons.keys.toList(), key = { it }) { number ->
                         val target = remember { FocusRequester() }
                         val rows = seasons.getValue(number)
@@ -155,7 +155,7 @@ private fun SeasonTab(number: Int, selected: Boolean, complete: Boolean, modifie
     val interactions = remember { MutableInteractionSource() }
     Column(Modifier.width(IntrinsicSize.Max)) {
         val shape = androidx.compose.foundation.shape.RoundedCornerShape(Radii.button)
-        Surface(onClick = onClick, modifier = modifier.height(48.dp).semantics {
+        Surface(onClick = onClick, modifier = modifier.height(40.dp).semantics {
             this.selected = selected
             stateDescription = if (complete) "İzlendi" else "İzlenmedi"
         }, interactionSource = interactions,
@@ -192,8 +192,8 @@ private fun EpisodeShelf(model: LibraryModel, episodes: List<Item>, all: List<It
         entered = enter && episodes.isNotEmpty()
     }
     LazyRow(Modifier.testTag("episode-list").focusRestorer().focusGroup(), state = list,
-        contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
-        if (loading) items(4) { LoadingCard(Modifier.width(240.dp).height(200.dp)) }
+        contentPadding = PaddingValues(8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (loading) items(4) { LoadingCard(Modifier.width(140.dp).height(120.dp)) }
         items(episodes, key = { it.id }) { ep ->
             val mark = marks[ep.id]
             val duration = mark?.duration ?: 0
@@ -204,7 +204,7 @@ private fun EpisodeShelf(model: LibraryModel, episodes: List<Item>, all: List<It
             if (target == ep.id) LaunchedEffect(target) {
                 withFrameNanos { }; focus.requestFocus(); target = ""; restored()
             }
-            Column(Modifier.width(240.dp)) {
+            Column(Modifier.width(140.dp)) {
                 Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).testTag("episode-artwork-${ep.id}")) {
                     FocusCard(onClick = { play(ep, all) }, onLongClick = { actions(ep) },
                         modifier = Modifier.fillMaxSize().testTag("episode-${ep.id}").focusRequester(focus)
@@ -215,7 +215,7 @@ private fun EpisodeShelf(model: LibraryModel, episodes: List<Item>, all: List<It
                     }
                 }
                 Row(Modifier.padding(top = Spacing.unit), verticalAlignment = Alignment.CenterVertically) {
-                    Text("${name.episode}. ${name.title.displayTitle()}", Modifier.weight(1f), style = LumenType.cardTitle,
+                    Text("${name.episode}. ${name.title.displayTitle()}", Modifier.weight(1f), style = LumenType.label,
                         color = LumenColors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     if (done) LumenIcon(LumenIcon.Check, "İzlendi", size = IconSizes.meta)
                 }

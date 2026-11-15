@@ -2,6 +2,8 @@
 
 ## 0.5.1 · 16 Kasım 2026
 
+- Hub, raf, arama ve bölüm kartları küçültüldü; ekrana daha çok içerik sığıyor.
+
 - Daha sık ızgaralar: kategoriler ve kanallar 6 sütun, afişler 8 sütun.
 
 ## 0.5.0 · 15 Kasım 2026
