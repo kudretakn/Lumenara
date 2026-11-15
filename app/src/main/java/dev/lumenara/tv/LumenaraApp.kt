@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import coil.ImageLoader
 import coil.ImageLoaderFactory
+import coil.imageLoader
 import coil.decode.SvgDecoder
 import dagger.Module
 import dagger.Provides
@@ -21,6 +22,15 @@ class LumenaraApp : Application(), ImageLoaderFactory {
         Perf.mark("startup")
         super.onCreate()
         androidx.media3.common.util.Log.setLogLevel(androidx.media3.common.util.Log.LOG_LEVEL_OFF)
+    }
+
+    @androidx.annotation.OptIn(coil.annotation.ExperimentalCoilApi::class)
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= TRIM_MEMORY_UI_HIDDEN) {
+            Repository.get(this).trim()
+            imageLoader.memoryCache?.clear()
+        }
     }
 
     override fun newImageLoader(): ImageLoader {

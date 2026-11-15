@@ -85,11 +85,11 @@ class Repository private constructor(private val context: Context) {
     private val liveScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val liveOrders = mutableMapOf<String, StateFlow<List<LiveChannelId>>>()
     // Room invalidation refreshes imports/deletions; hidden changes restart the filtered query.
-    // Keep the flow alive between screens, so each source is queried just once per invalidation.
+    // Stop querying after screens have unsubscribed, while retaining a short navigation cache.
     fun liveChannelOrder(source: String): StateFlow<List<LiveChannelId>> = synchronized(liveOrders) {
         liveOrders.getOrPut(source) {
             hidden.flatMapLatest { library.liveChannelOrder(source, it) }
-                .distinctUntilChanged().stateIn(liveScope, SharingStarted.Lazily, emptyList())
+                .distinctUntilChanged().stateIn(liveScope, SharingStarted.WhileSubscribed(30_000), emptyList())
         }
     }
     suspend fun liveChannel(number: Int, source: String): Item? {
@@ -129,6 +129,11 @@ class Repository private constructor(private val context: Context) {
         else library.item(item.id) ?: item
 
     private val versionIndex = java.util.concurrent.ConcurrentHashMap<String, Map<String, List<Item>>>()
+
+    fun trim() {
+        synchronized(liveOrders) { liveOrders.clear() }
+        versionIndex.clear()
+    }
 
     suspend fun versions(item: Item): List<Item> {
         val all = allVersions(item)
