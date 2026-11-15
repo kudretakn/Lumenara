@@ -46,9 +46,11 @@ class CatalogQueryTest {
                 assertEquals("sub", dao.browse("a", "MOVIE", "", "", shelf, 120, hidden = safe).first().single().id)
             }
             assertEquals(1, dao.shelfCount("a", "MOVIE", "favorite", safe).first())
-            assertEquals("original", dao.continueWatching("a", safe).first().single().id)
+            assertEquals("sub", dao.continueWatching("a", safe).first().single().id)
             dao.collection(Member("sub", "Coast"))
             assertEquals("sub", dao.members("a", "Coast", safe).first().single().id)
+            dao.collection(Member("episode", "Episodes"))
+            assertEquals("episode", dao.members("a", "Episodes", safe).first().single().id)
             assertEquals(2, dao.homeFeatures("a", safe).first().size)
             assertTrue(dao.homeFeatures("a", safe).first().none { it.category == "Adult" })
             assertEquals(listOf("original", "other"), dao.suggestions("a", safe).first().map { it.id }.sorted())
@@ -68,9 +70,92 @@ class CatalogQueryTest {
             dao.assignVersions(rows.versionAssignments())
             dao.save(Mark("ep", position = 10, duration = 100, updated = 1))
             assertEquals("sub", dao.continueWatching("a").first().single().id)
-            // Once the dubbed series is expanded it is the preferred card, using sibling history.
+            // Expansion alone must not replace the version with resumable history.
             dao.save(listOf(item("dubEp", "Dizi S01E01", kind = "EPISODE").copy(parent = "dub")))
+            assertEquals("sub", dao.continueWatching("a").first().single().id)
+            dao.save(Mark("dubEp", position = 10, duration = 100, updated = 2))
             assertEquals("dub", dao.continueWatching("a").first().single().id)
+        } finally { db.close() }
+    }
+
+    @Test fun refreshReassignsTheWinnerAfterPruningAndKeepsExistingMarks() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val db = Room.inMemoryDatabaseBuilder(context, LibraryDb::class.java).build()
+        try {
+            val dao = db.library()
+            dao.save(Source("a", "Test", "sealed", false, 0, 0))
+            val old = listOf(item("dub", "Film Dublaj"), item("sub", "Film Altyazılı"))
+            dao.save(old)
+            dao.assignVersions(old.versionAssignments())
+            dao.save(Mark("sub", favorite = true, position = 10, duration = 100, updated = 1))
+            val refreshed = listOf(item("sub", "Film Altyazılı"), item("original", "Film"))
+                .map { it.copy(generation = 2, search = it.search + " [tmdb:42]") }
+            dao.writeBatch(refreshed)
+            dao.prune("a", 2)
+            dao.orphans("a")
+            dao.assignVersions(dao.versionCandidates("a", "MOVIE").versionAssignments())
+            assertNull(dao.item("dub"))
+            assertEquals("original", dao.browse("a", "MOVIE", "", "", "", 120).first().single().id)
+            assertEquals("sub", dao.browse("a", "MOVIE", "", "", "favorite", 120).first().single().id)
+            assertEquals("a|MOVIE|tmdb:42", dao.item("sub")!!.versionKey)
+            assertEquals(10L, dao.mark("sub")!!.position)
+        } finally { db.close() }
+    }
+
+    @Test fun zeroRatingThresholdStillFallsBackToAnEligibleVersion() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val db = Room.inMemoryDatabaseBuilder(context, LibraryDb::class.java).build()
+        try {
+            val dao = db.library()
+            dao.save(Source("a", "Test", "sealed", false, 0, 0))
+            val rows = listOf(item("dub", "Film Dublaj").copy(rating = "-1"),
+                item("sub", "Film Altyazılı"))
+            dao.save(rows)
+            dao.assignVersions(rows.versionAssignments())
+            assertEquals("sub", dao.browse("a", "MOVIE", "", "", "", 120).first().single().id)
+            assertEquals("dub", dao.browse("a", "MOVIE", "", "", "", 120, minRating = -1.0).first().single().id)
+        } finally { db.close() }
+    }
+
+    @Test fun completedOrUnplayedMovieVersionsDoNotReplaceResumableHistory() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val db = Room.inMemoryDatabaseBuilder(context, LibraryDb::class.java).build()
+        try {
+            val dao = db.library()
+            dao.save(Source("a", "Test", "sealed", false, 0, 0))
+            val rows = listOf(item("dub", "Film Dublaj"), item("sub", "Film Altyazılı"))
+            dao.save(rows)
+            dao.assignVersions(rows.versionAssignments())
+            dao.save(Mark("sub", position = 10, duration = 100, updated = 2))
+            assertEquals("sub", dao.continueWatching("a").first().single().id)
+            dao.save(Mark("dub", position = 100, duration = 100, updated = 3))
+            assertEquals("sub", dao.continueWatching("a").first().single().id)
+            dao.save(Mark("dub", position = 20, duration = 100, updated = 4))
+            assertEquals("dub", dao.continueWatching("a").first().single().id)
+            assertTrue(dao.continueWatching("a", listOf("Film")).first().isEmpty())
+        } finally { db.close() }
+    }
+
+    @Test fun mixedSearchKeepsSortingLimitsAndLiveDedupSeparateFromProductions() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val db = Room.inMemoryDatabaseBuilder(context, LibraryDb::class.java).build()
+        try {
+            val dao = db.library()
+            for (source in listOf("a", "b")) dao.save(Source(source, source, "sealed", false, 0, 0))
+            val rows = listOf(item("dub", "Film Dublaj"), item("sub", "Film Altyazılı"),
+                item("a:channel", "Kanal", kind = "LIVE").copy(tvgId = "channel"),
+                item("b:channel", "Kanal", kind = "LIVE", source = "b").copy(tvgId = "channel"),
+                item("series", "Dizi", kind = "SERIES"))
+            dao.save(rows)
+            dao.assignVersions(rows.versionAssignments())
+            assertEquals(listOf("series", "dub", "a:channel"),
+                dao.browse("", "", "", "", "", 120).first().map { it.id })
+            assertEquals(listOf("series", "a:channel"),
+                dao.browse("", "", "", "", "recent", 2).first().map { it.id })
+            assertEquals("sub", dao.browse("", "", "", "altyazılı", "", 1).first().single().id)
+            assertEquals(3, dao.browse("", "", "", "", "popular", 120).first().size)
+            dao.save(Mark("sub", position = 10, duration = 100, updated = 5))
+            assertEquals("sub", dao.browse("", "", "", "", "resume", 1).first().single().id)
         } finally { db.close() }
     }
 

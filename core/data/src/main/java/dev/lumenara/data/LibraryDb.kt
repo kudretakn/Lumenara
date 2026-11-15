@@ -166,7 +166,7 @@ interface LibraryDao {
     fun collections(source: String, hidden: List<String> = emptyList()): Flow<List<String>>
 
     fun membersRows(source: String, name: String, hidden: List<String> = emptyList()): Flow<List<Item>> =
-        catalogRows(shelfRowsQuery(CatalogFilter(source = source, hidden = hidden), 60, "i.year,i.title") {
+        catalogRows(shelfRowsQuery(CatalogFilter(source = source, hidden = hidden), 60, "i.year,i.title", includeEpisodes = true) {
             CatalogPredicate("EXISTS(SELECT 1 FROM collections WHERE id=$it.id AND name=?)", listOf(name))
         })
 
@@ -195,7 +195,7 @@ interface LibraryDao {
 
     @Upsert fun writeBatch(items: List<Item>)
 
-    @Update(entity = Item::class)
+    @androidx.room.Update(entity = Item::class)
     suspend fun assignVersions(rows: List<VersionAssignment>)
 
     @Query("SELECT EXISTS(SELECT 1 FROM items WHERE id=:id)")
@@ -218,27 +218,27 @@ interface LibraryDao {
     @Query("SELECT marks.* FROM marks JOIN items USING(id) WHERE items.parent=:id")
     fun episodeMarks(id: String): Flow<List<Mark>>
 
-    // History aggregation is over marked rows, not the catalog. The parent index resolves episodes;
-    // versionKey maps activity on a non-representative series to its visible production card.
+    // Aggregate only marked rows, then choose a representative among eligible history cards.
+    // Do not expand history to every version: an unplayed/completed sibling must not replace
+    // the version the user can actually resume. parent resolves the remaining-episode probe.
     @Query("""WITH history AS (
         SELECT CASE WHEN ep.kind='EPISODE' THEN ep.parent ELSE ep.id END AS cardId, MAX(m.updated) AS activity
         FROM marks m CROSS JOIN items ep ON ep.id=m.id WHERE ep.category NOT IN (:hidden) AND m.position>0 AND
             (ep.kind='EPISODE' OR ep.kind='MOVIE' AND (m.duration<=0 OR m.position<m.duration*0.95))
         GROUP BY cardId
-        ), activity AS (
-        SELECT CASE WHEN card.versionKey='' THEN card.id ELSE card.versionKey END AS cardKey, MAX(history.activity) AS activity
-        FROM history JOIN items card ON card.id=history.cardId GROUP BY cardKey
-        ), cards AS (
-        SELECT i.*,activity.activity FROM activity JOIN items i ON i.versionKey=activity.cardKey WHERE i.versionKey!=''
-        UNION ALL
-        SELECT i.*,activity.activity FROM activity JOIN items i ON i.id=activity.cardKey WHERE i.versionKey=''
         ), candidates AS (
-        SELECT i.* FROM cards i WHERE i.category NOT IN (:hidden) AND (:source='' OR i.source=:source) AND i.kind IN ('MOVIE','SERIES')
+        SELECT i.*,history.activity FROM history JOIN items i ON i.id=history.cardId
+        WHERE i.category NOT IN (:hidden) AND (:source='' OR i.source=:source) AND i.kind IN ('MOVIE','SERIES')
         AND (i.kind!='SERIES' OR EXISTS(SELECT 1 FROM items ep LEFT JOIN marks m ON m.id=ep.id
             WHERE ep.category NOT IN (:hidden) AND ep.parent=i.id AND (m.id IS NULL OR m.duration<=0 OR m.position<m.duration*0.90)))
-        ) SELECT i.* FROM candidates i WHERE i.isRepresentative=1 OR (i.versionKey!='' AND NOT EXISTS(
+        ), activity AS (
+        SELECT CASE WHEN versionKey='' THEN id ELSE versionKey END AS cardKey, MAX(activity) AS lastActivity
+        FROM candidates GROUP BY cardKey
+        ) SELECT items.* FROM candidates i JOIN items ON items.id=i.id JOIN activity a
+        ON a.cardKey=CASE WHEN i.versionKey='' THEN i.id ELSE i.versionKey END
+        WHERE i.isRepresentative=1 OR (i.versionKey!='' AND NOT EXISTS(
             SELECT 1 FROM candidates v WHERE v.versionKey=i.versionKey AND v.versionRank<i.versionRank))
-        ORDER BY i.activity DESC,i.id LIMIT 24""")
+        ORDER BY a.lastActivity DESC,i.id LIMIT 24""")
     fun continueWatchingRows(source: String, hidden: List<String> = emptyList()): Flow<List<Item>>
 
     fun continueWatching(source: String, hidden: List<String> = emptyList()): Flow<List<Item>> =

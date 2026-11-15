@@ -37,8 +37,10 @@ internal data class CatalogFilter(
         return CatalogPredicate(parts.joinToString(" AND "), args)
     }
 
+    // Even the default >=0 rating predicate can reject a provider's negative-rated winner.
+    // It must permit an eligible sibling, just like a nonzero rating threshold.
     val filtersVersions: Boolean get() = category.isNotEmpty() || query.isNotEmpty() || year.isNotEmpty() ||
-        genre.isNotEmpty() || language.isNotEmpty() || (minRating != null && minRating != 0.0) || hidden.isNotEmpty() ||
+        genre.isNotEmpty() || language.isNotEmpty() || minRating != null || hidden.isNotEmpty() ||
         shelf in listOf("favorite", "list", "resume", "popular")
 }
 
@@ -126,11 +128,11 @@ internal fun shelfCountQuery(filter: CatalogFilter): SimpleSQLiteQuery {
 
 /** Bounded legacy shelves share the same filter-before-representative policy as the grid. */
 internal fun shelfRowsQuery(
-    filter: CatalogFilter, limit: Int, order: String,
+    filter: CatalogFilter, limit: Int, order: String, includeEpisodes: Boolean = false,
     extra: (String) -> CatalogPredicate,
 ): SimpleSQLiteQuery {
     fun eligible(alias: String): CatalogPredicate {
-        val base = filter.predicate(alias)
+        val base = filter.predicate(alias, includeEpisodes)
         val more = extra(alias)
         return CatalogPredicate("${base.sql} AND (${more.sql})", base.args + more.args)
     }
