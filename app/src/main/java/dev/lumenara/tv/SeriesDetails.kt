@@ -59,7 +59,12 @@ internal fun SeriesDetails(model: LibraryModel, series: Item, play: (Item, List<
             withFrameNanos { }; primary.requestFocus()
         }
     }
-    BackHandler(season != null && menu == null) { season = null }
+    BackHandler(season != null && menu == null) {
+        // Playback/menu focus changes can overwrite seriesFocus while a season is open.
+        // Back belongs to the active season, regardless of the last focused control.
+        seriesFocus = "season-$season"
+        season = null
+    }
     fun closeMenu() { restoreEpisode = menu?.id.orEmpty(); menu = null }
     BackHandler(menu != null) { closeMenu() }
     Box(Modifier.fillMaxSize().testTag(if (season == null) "series-page" else "season-page")) {

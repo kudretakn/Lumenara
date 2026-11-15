@@ -180,6 +180,14 @@ class SeriesJourneyTest {
                 screen.back()
                 waitFor(hasTestTag("season-1") and isFocused())
                 waitFor(hasTestTag("season-1") and SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "İzlendi"))
+                // Back returns to the active season even if another control took focus.
+                select(hasTestTag("season-2"))
+                waitFor(hasTestTag("episode-${second.id}") and isFocused())
+                screen.onNodeWithTag("series-play").performSemanticsAction(SemanticsActions.RequestFocus)
+                waitFor(hasTestTag("series-play") and isFocused())
+                screen.back()
+                waitFor(hasTestTag("series-page"))
+                waitFor(hasTestTag("season-2") and isFocused())
                 // A partial episode in the next season must win over the completed season.
                 runBlocking {
                     repo.updateMark(second.id) { it.copy(position = 300, duration = 10_000, updated = System.currentTimeMillis()) }
