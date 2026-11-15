@@ -10,6 +10,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.*
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -25,12 +27,14 @@ import dev.lumenara.design.GlassPanel
 import kotlinx.coroutines.flow.*
 
 @Composable
-internal fun Poster(model: LibraryModel, item: Item, modifier: Modifier) {
+internal fun Poster(model: LibraryModel, item: Item, modifier: Modifier,
+    allowHttp: Boolean? = null, width: Int = 0, height: Int = 0) {
     val image by produceState<String?>(null, item.logo) { value = model.repo.poster(item) }
     Box(modifier.background(Ink.surface), contentAlignment = Alignment.Center) {
         Text(item.title.take(1), color = Ink.accent, fontSize = 30.sp)
         if (image != null)
-            Artwork(model, item, image, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            Artwork(model, item, image, Modifier.fillMaxSize(), contentScale = ContentScale.Crop,
+                allowHttp = allowHttp, width = width, height = height)
     }
 }
 
@@ -241,6 +245,12 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
             Perf.since("category", "category_grid_first_draw")
         }
     }
+    val sources by model.sources.collectAsStateWithLifecycle()
+    val httpSources = remember(sources) { sources.orEmpty().filter { it.allowHttp }.map { it.id }.toSet() }
+    val density = LocalDensity.current
+    var gridWidth by remember { mutableIntStateOf(0) }
+    val posterWidth = with(density) { if (gridWidth == 0) 0 else ((gridWidth - 16.dp.roundToPx() - 5 * 16.dp.roundToPx()) / 6).coerceAtLeast(1) }
+    val posterHeight = with(density) { 150.dp.roundToPx() }
     val grid = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
     var lastPoster by rememberSaveable(source, category, shelf) { mutableStateOf<String?>(null) }
     val posterFocus = remember { FocusRequester() }
@@ -254,6 +264,20 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
             positioned = true
         }
     }
+    val visibleIds by remember(grid, rows) {
+        derivedStateOf {
+            grid.layoutInfo.visibleItemsInfo.mapNotNull { rows.getOrNull(it.index)?.id }.distinct()
+        }
+    }
+    val marks by remember(visibleIds) {
+        if (visibleIds.isEmpty()) flowOf(emptyMap<String, Mark>())
+        else model.repo.library.visibleMarks(visibleIds).map { values ->
+            // This grid shows no progress lines; five-second position writes must not
+            // recompose its cards. Resume shelves retain their full progress marks.
+            values.associate { it.id to it.copy(position = 0, duration = 0, updated = 0) }
+        }
+            .distinctUntilChanged()
+    }.collectAsStateWithLifecycle(emptyMap())
     PrefetchArtwork(model, grid, rows)
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { wallClockTicks(30_000).collect { now = it } }
@@ -285,7 +309,7 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
             androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
                 columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(6),
                 state = grid,
-                modifier = Modifier.weight(1f).testTag("poster-grid").focusRestorer().focusGroup(),
+                modifier = Modifier.weight(1f).onSizeChanged { gridWidth = it.width }.testTag("poster-grid").focusRestorer().focusGroup(),
                 // TV safe area plus the title/year below the focusable poster.
                 contentPadding = PaddingValues(start = 8.dp, top = 8.dp, end = 8.dp, bottom = 64.dp),
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -315,7 +339,9 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
                     if (entry.kind == "LIVE")
                         ChannelCard(model, entry, now, { play(entry, rows.filter { it.kind == "LIVE" }) }, { lastPoster = it.id },
                             modifier = cardModifier, operations = { open(entry) })
-                    else MovieCard(model, entry, true, open, { lastPoster = it.id }, modifier = cardModifier)
+                    else MovieCard(model, entry, true, open, { lastPoster = it.id }, modifier = cardModifier,
+                        mark = marks[entry.id], artworkHttp = entry.source in httpSources,
+                        artworkWidth = posterWidth, artworkHeight = posterHeight)
                 }
                 if (rows.size >= limit) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(6) }) {
                     Button(onClick = { limit += 80 }) { Text("Devamını göster") }

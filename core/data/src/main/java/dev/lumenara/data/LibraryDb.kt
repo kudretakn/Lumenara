@@ -112,8 +112,14 @@ data class LiveChannelId(val id: String, val source: String)
 
 @Dao
 interface LibraryDao {
-    @RawQuery(observedEntities = [Item::class, Mark::class, Member::class])
+    @RawQuery(observedEntities = [Item::class])
     fun catalogRows(query: SupportSQLiteQuery): Flow<List<Item>>
+
+    @RawQuery(observedEntities = [Item::class, Mark::class])
+    fun markedCatalogRows(query: SupportSQLiteQuery): Flow<List<Item>>
+
+    @RawQuery(observedEntities = [Item::class, Member::class])
+    fun memberCatalogRows(query: SupportSQLiteQuery): Flow<List<Item>>
 
     @RawQuery(observedEntities = [Item::class, Mark::class])
     fun catalogCount(query: SupportSQLiteQuery): Flow<Int>
@@ -196,7 +202,7 @@ interface LibraryDao {
     fun collections(source: String, hidden: List<String> = emptyList()): Flow<List<String>>
 
     fun membersRows(source: String, name: String, hidden: List<String> = emptyList()): Flow<List<Item>> =
-        catalogRows(shelfRowsQuery(CatalogFilter(source = source, hidden = hidden), 60, "i.year,i.title", includeEpisodes = true) {
+        memberCatalogRows(shelfRowsQuery(CatalogFilter(source = source, hidden = hidden), 60, "i.year,i.title", includeEpisodes = true) {
             CatalogPredicate("EXISTS(SELECT 1 FROM collections WHERE id=$it.id AND name=?)", listOf(name))
         })
 
@@ -204,7 +210,7 @@ interface LibraryDao {
         membersRows(source, name, hidden).map { rows -> rows.map(Item::displayVersion) }
 
     fun suggestionsRows(source: String, hidden: List<String> = emptyList()): Flow<List<Item>> =
-        catalogRows(shelfRowsQuery(CatalogFilter(source = source, hidden = hidden), 24, "CAST(i.rating AS REAL) DESC,i.title") {
+        markedCatalogRows(shelfRowsQuery(CatalogFilter(source = source, hidden = hidden), 24, "CAST(i.rating AS REAL) DESC,i.title") {
             CatalogPredicate("""$it.kind IN ('MOVIE','SERIES')
                 AND $it.category IN (SELECT j.category FROM items j JOIN marks m ON m.id=j.id WHERE m.favorite=1 OR m.position>0)
                 AND $it.id NOT IN (SELECT id FROM marks WHERE position>0 OR favorite=1)""")
@@ -234,6 +240,10 @@ interface LibraryDao {
     @Upsert suspend fun save(mark: Mark)
 
     @Query("SELECT * FROM marks WHERE id=:id") suspend fun mark(id: String): Mark?
+
+    // One indexed primary-key probe per visible card, with one Room observer for the grid.
+    @Query("SELECT * FROM marks WHERE id IN (:ids)")
+    fun visibleMarks(ids: List<String>): Flow<List<Mark>>
 
     @Query("SELECT * FROM marks WHERE id=:id") fun observeMark(id: String): Flow<Mark?>
 
@@ -304,8 +314,12 @@ interface LibraryDao {
         language: String = "",
         minRating: Double = 0.0,
         hidden: List<String> = emptyList(),
-    ): Flow<List<Item>> = catalogRows(browseQuery(
-        CatalogFilter(source, kind, category, query, shelf, year, genre, language, minRating, hidden), queryLimit))
+    ): Flow<List<Item>> {
+        val sql = browseQuery(CatalogFilter(source, kind, category, query, shelf, year, genre,
+            language, minRating, hidden), queryLimit)
+        return if (shelf in listOf("favorite", "list", "resume")) markedCatalogRows(sql)
+            else catalogRows(sql)
+    }
 
     fun browse(source: String, kind: String, category: String, query: String, shelf: String, limit: Int,
                year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0, hidden: List<String> = emptyList()): Flow<List<Item>> =
