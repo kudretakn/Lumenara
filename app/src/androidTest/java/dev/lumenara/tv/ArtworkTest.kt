@@ -142,6 +142,9 @@ class ArtworkFallbackDeviceTest {
                     else MockResponse().setResponseCode(404)
             }
             server.start()
+            // MockWebServer.url can perform reverse DNS; resolve before entering Main/Compose.
+            val missingUrl = server.url("/missing").toString()
+            val imageUrl = server.url("/image.png").toString()
             fun item(title: String, kind: String) = Item(
                 id = title, source = "", title = title, category = "", kind = kind,
                 tvgId = "", encryptedUrl = "", search = "", generation = 0, logo = "",
@@ -153,11 +156,11 @@ class ArtworkFallbackDeviceTest {
                         Row(Modifier.padding(48.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                             Artwork(model, item("Kıyı Yolculuğu", "SERIES"), null,
                                 Modifier.size(112.dp, 168.dp), allowHttp = true)
-                            Artwork(model, item("Eksik Film", "MOVIE"), server.url("/missing").toString(),
+                            Artwork(model, item("Eksik Film", "MOVIE"), missingUrl,
                                 Modifier.size(112.dp, 168.dp), allowHttp = true)
                             Artwork(model, item("Nova Sports HD", "LIVE"), null,
                                 Modifier.size(204.dp, 115.dp), allowHttp = true)
-                            Artwork(model, item("Görselli Film", "MOVIE"), server.url("/image.png").toString(),
+                            Artwork(model, item("Görselli Film", "MOVIE"), imageUrl,
                                 Modifier.size(112.dp, 168.dp).testTag("loaded-artwork"), allowHttp = true)
                         }
                     }

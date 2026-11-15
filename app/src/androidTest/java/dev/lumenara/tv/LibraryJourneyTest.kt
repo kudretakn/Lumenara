@@ -120,15 +120,23 @@ class LibraryJourneyTest {
                     screen.onAllNodes(hasTestTag("hub-Canlı TV") and isFocused()).fetchSemanticsNodes().isNotEmpty()
                 }
                 capture("hub")
-                val density = context.resources.displayMetrics.density
+                // The section uses the design's 48 dp safe inset, including the app's UI scale.
+                val sectionLeft = screen.onNodeWithTag("section-Ana Sayfa").fetchSemanticsNode().boundsInRoot.left
+                val density = sectionLeft / 48f
+                val columnWidth = screen.onNodeWithTag("hub-slot-Listem").fetchSemanticsNode().boundsInRoot.width
                 listOf("Canlı TV" to "Listem", "Filmler" to "Ara", "Diziler" to "Ayarlar").forEach { (top, bottom) ->
-                    val upper = screen.onNodeWithTag("hub-$top").fetchSemanticsNode().boundsInRoot
-                    val lower = screen.onNodeWithTag("hub-$bottom").fetchSemanticsNode().boundsInRoot
+                    // Focus scales the drawing; clipped semantics bounds are not grid geometry.
+                    val upper = screen.onNodeWithTag("hub-slot-$top").fetchSemanticsNode().boundsInRoot
+                    val lower = screen.onNodeWithTag("hub-slot-$bottom").fetchSemanticsNode().boundsInRoot
                     assertEquals("Hub kolonları aynı merkezde kalmalı", upper.center.x, lower.center.x, density)
+                    assertEquals("Kolonların sol kenarları hizalı kalmalı", upper.left, lower.left, density)
+                    assertEquals("Üst kolonlar eşit genişlikte kalmalı", columnWidth, upper.width, density)
+                    assertEquals("Alt kolonlar eşit genişlikte kalmalı", columnWidth, lower.width, density)
+                    assertEquals("Birincil kart yüksekliği", 168f, upper.height / density, 1f)
                     assertEquals("İkincil kart yüksekliği", 64f, lower.height / density, 1f)
                 }
-                assertEquals("Ortak sol kolon", 48f,
-                    screen.onNodeWithTag("hub-Listem").fetchSemanticsNode().boundsInRoot.left / density, 1f)
+                assertEquals("Ortak sol kolon", sectionLeft,
+                    screen.onNodeWithTag("hub-slot-Listem").fetchSemanticsNode().boundsInRoot.left, density)
                 screen.onNodeWithTag("hub").performScrollToNode(hasTestTag("channel-shelf-Son kanal"))
                 val recentCard = hasTestTag("live-channel-${channel.id}") and
                     hasAnyAncestor(hasTestTag("channel-shelf-Son kanal"))

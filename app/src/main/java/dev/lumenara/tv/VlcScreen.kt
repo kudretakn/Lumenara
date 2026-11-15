@@ -525,7 +525,8 @@ internal fun VlcScreen(
             }
             LazyColumn(
                 state = optionsState,
-                modifier = Modifier.align(Alignment.CenterEnd).width(400.dp).fillMaxHeight().background(LumenColors.surface1).testTag("player-options").padding(horizontal = Spacing.titleGap, vertical = Spacing.screenVertical),
+                modifier = Modifier.align(Alignment.CenterEnd).width(400.dp).fillMaxHeight().background(LumenColors.surface1).testTag("player-options").padding(horizontal = Spacing.titleGap, vertical = Spacing.screenVertical)
+                    .focusProperties { onExit = { cancelFocusChange() } }.focusGroup(),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 item {

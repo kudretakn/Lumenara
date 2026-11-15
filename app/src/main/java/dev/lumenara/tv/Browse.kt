@@ -285,24 +285,28 @@ internal fun Home(
                             .format(counts[index] ?: 0)
                         "$number " + listOf("kanal", "film", "dizi")[index]
                     } else ""
-                    HubNavigationCard(model, name, caption,
-                        listOf(LumenIcon.Tv, LumenIcon.Film, LumenIcon.Series, LumenIcon.Bookmark, LumenIcon.Search, LumenIcon.Settings)[index],
-                        Modifier.weight(1f).height(if (row == 0) 168.dp else 64.dp)
-                            .testTag("hub-$name").semantics {
-                                contentDescription = name
-                                if (name == "Ayarlar" && update != null) stateDescription = "Güncelleme hazır"
-                            }.then(if (name == target) Modifier.focusRequester(entry) else Modifier)
-                            .onFocusChanged { if (it.isFocused) focused = name },
-                        update = name == "Ayarlar" && update != null,
-                        compact = row == 1,
-                        loading = index < 3 && counts[index] == null,
-                        artworkItem = when (index) {
-                            0 -> recent.firstOrNull()
-                            1 -> resume.firstOrNull { it.kind == "MOVIE" }
-                            2 -> resume.firstOrNull { it.kind == "SERIES" }
-                            else -> null
-                        },
-                    ) { navigate(name) }
+                    // Measure the grid slot independently of the card's focus transform.
+                    Box(Modifier.weight(1f).height(if (row == 0) 168.dp else 64.dp)
+                        .testTag("hub-slot-$name")) {
+                        HubNavigationCard(model, name, caption,
+                            listOf(LumenIcon.Tv, LumenIcon.Film, LumenIcon.Series, LumenIcon.Bookmark, LumenIcon.Search, LumenIcon.Settings)[index],
+                            Modifier.fillMaxSize()
+                                .testTag("hub-$name").semantics {
+                                    contentDescription = name
+                                    if (name == "Ayarlar" && update != null) stateDescription = "Güncelleme hazır"
+                                }.then(if (name == target) Modifier.focusRequester(entry) else Modifier)
+                                .onFocusChanged { if (it.isFocused) focused = name },
+                            update = name == "Ayarlar" && update != null,
+                            compact = row == 1,
+                            loading = index < 3 && counts[index] == null,
+                            artworkItem = when (index) {
+                                0 -> recent.firstOrNull()
+                                1 -> resume.firstOrNull { it.kind == "MOVIE" }
+                                2 -> resume.firstOrNull { it.kind == "SERIES" }
+                                else -> null
+                            },
+                        ) { navigate(name) }
+                    }
                 }
             }
         }
