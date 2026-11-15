@@ -18,6 +18,7 @@ import javax.inject.Singleton
 class LumenaraApp : Application(), ImageLoaderFactory {
     @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     override fun onCreate() {
+        Perf.mark("startup")
         super.onCreate()
         androidx.media3.common.util.Log.setLogLevel(androidx.media3.common.util.Log.LOG_LEVEL_OFF)
     }

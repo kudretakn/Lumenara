@@ -74,9 +74,8 @@ internal fun LiveScreen(
             category = "all"
             categoryTitle = "Tüm kanallar"
             query = ""
-            val index = model.repo.browse(source, "LIVE", "", "", "", Int.MAX_VALUE)
-                .first().indexOfFirst { it.id == target }
-            if (index >= 0) limit = maxOf(limit, index + 1)
+            val index = model.repo.liveIndex(source, target)
+            if (index != null) limit = maxOf(limit, index + 1)
             else onChannelFocusRestored()
         }
     }
@@ -93,6 +92,12 @@ internal fun LiveScreen(
                 CategoryGrid("Canlı TV", entries) { category = it.id; categoryTitle = it.name }
             }
         } else {
+            val provider = category?.removePrefix("provider:")
+                .takeIf { category?.startsWith("provider:") == true }.orEmpty()
+            val restoreId = remember(source, category, query) { returnToChannel ?: focusedId }
+            val paged = if (category !in listOf("airing", "recent"))
+                rememberLivePages(model, source, provider, searchable(query),
+                    if (category == "favorite") "favorite" else "", restoreId) else null
             val rows by remember(source, category, query, limit, if (category == "airing") now else 0L) {
                 if (category == "airing") model.repo.nowAiring(source, now, searchable(query)).flatMapLatest { hits ->
                     val ids = hits.take(limit).map { it.itemId }
@@ -102,16 +107,14 @@ internal fun LiveScreen(
                     }
                 } else if (category == "recent") model.repo.recentLive(source).map { rows ->
                     rows.filter { it.search.contains(searchable(query)) }.take(limit)
-                } else model.repo.browse(source, "LIVE",
-                    category?.removePrefix("provider:").takeIf { category?.startsWith("provider:") == true }.orEmpty(),
-                    searchable(query), if (category == "favorite") "favorite" else "", limit)
+                } else flowOf(emptyList())
             }.collectAsStateWithLifecycle(emptyList())
             pages.SaveableStateProvider("channels-$category") {
                 LiveChannelGrid(model, categoryTitle, rows, channelNumbers, now, query, { query = it },
                     limit, { limit += 80 }, returnToChannel ?: focusedId, { item ->
                         focusedId = item.id
                         numberSource = item.source
-                    }, onChannelFocusRestored, open, play)
+                    }, onChannelFocusRestored, open, play, paged)
             }
         }
         NumberEntry(numbers)
@@ -122,20 +125,29 @@ internal fun LiveScreen(
 private fun LiveChannelGrid(model: LibraryModel, title: String, rows: List<Item>,
     numbers: Map<String, Int>, now: Long, query: String, search: (String) -> Unit,
     limit: Int, more: () -> Unit, returnId: String?, focused: (Item) -> Unit,
-    restored: () -> Unit, open: (Item) -> Unit, play: (Item, List<Item>) -> Unit) {
+    restored: () -> Unit, open: (Item) -> Unit, play: (Item, List<Item>) -> Unit, paged: LivePages? = null) {
     val grid = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
     val focus = remember { FocusRequester() }
     val searchFocus = remember { FocusRequester() }
     var positioned by remember { mutableStateOf(false) }
     var requestPending by remember { mutableStateOf(true) }
     val restoreId = remember { returnId }
-    val target = rows.indexOfFirst { it.id == restoreId }.coerceAtLeast(0)
-    LaunchedEffect(rows, query) {
-        if (!positioned && rows.isEmpty()) searchFocus.requestFocus()
-        if (!positioned && rows.isNotEmpty()) {
+    val count = paged?.count?.coerceAtMost(limit) ?: rows.size
+    val target = paged?.anchor ?: rows.indexOfFirst { it.id == restoreId }.coerceAtLeast(0)
+    val targetReady = if (paged != null) paged.anchor != null && paged[target] != null else rows.isNotEmpty()
+    LaunchedEffect(paged) { positioned = false }
+    LaunchedEffect(targetReady, count, query) {
+        if (!positioned && count == 0) searchFocus.requestFocus()
+        if (!positioned && targetReady && target < count) {
             grid.scrollToItem(target)
             positioned = true
         }
+    }
+    LaunchedEffect(paged, positioned) {
+        if (paged != null && positioned) snapshotFlow { grid.firstVisibleItemIndex }.collect { paged.focused(it) }
+    }
+    LaunchedEffect(targetReady) {
+        if (targetReady) { withFrameNanos { }; withFrameNanos { }; Perf.since("category", "category_grid_first_draw") }
     }
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -148,23 +160,29 @@ private fun LiveChannelGrid(model: LibraryModel, title: String, rows: List<Item>
             contentPadding = PaddingValues(10.dp),
             horizontalArrangement = Arrangement.spacedBy(18.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp)) {
-            if (rows.isEmpty()) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(4) }) {
+            if (count == 0) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(4) }) {
                 Text("Eşleşen içerik yok.", color = Ink.muted)
             }
-            items(rows.size, key = { rows[it].id }) { index ->
-                val item = rows[index]
+            items(count, key = { it }) { index ->
+                val item = if (paged != null) paged[index] else rows[index]
+                if (item == null) {
+                    Box(Modifier.fillMaxWidth().height(140.dp))
+                    return@items
+                }
                 if (index == target && positioned && requestPending) LaunchedEffect(Unit) {
                     withFrameNanos { }
                     focus.requestFocus()
                     requestPending = false
                     restored()
                 }
-                ChannelCard(model, item, now, { play(item, rows) }, focused,
+                ChannelCard(model, item, now, { Perf.mark("channel"); play(item, paged?.loaded() ?: rows) }, {
+                    paged?.focused(index); focused(it)
+                },
                     Modifier.fillMaxWidth()
                         .then(if (index == target) Modifier.focusRequester(focus) else Modifier),
                     number = numbers[item.id], operations = { open(item) })
             }
-            if (rows.size >= limit) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(4) }) {
+            if (count >= limit) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(4) }) {
                 FocusCard(more, Modifier.fillMaxWidth()) {
                     Text("Devamını göster", Modifier.padding(12.dp))
                 }

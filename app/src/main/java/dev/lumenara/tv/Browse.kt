@@ -83,8 +83,14 @@ internal fun Home(
     val resume by remember(source) { model.repo.continueWatching(source) }.collectAsStateWithLifecycle(emptyList())
     val counts = listOf("LIVE", "MOVIE", "SERIES").map { kind ->
         val groups by remember(source, kind) { model.repo.categoryCounts(kind, source) }
-            .collectAsStateWithLifecycle(emptyList())
-        groups.sumOf { it.count }
+            .collectAsStateWithLifecycle(null)
+        groups?.sumOf { it.count }
+    }
+    LaunchedEffect(counts.all { it != null }) {
+        if (counts.all { it != null }) {
+            withFrameNanos { }; withFrameNanos { }
+            Perf.since("startup", "startup_hub_first_draw")
+        }
     }
     val update by model.update.collectAsStateWithLifecycle()
     var focused by rememberSaveable { mutableStateOf(lastCard) }
@@ -120,7 +126,7 @@ internal fun Home(
                     val name = cards[index]
                     val caption = if (index < 3) {
                         val number = java.text.NumberFormat.getIntegerInstance(java.util.Locale.forLanguageTag("tr"))
-                            .format(counts[index])
+                            .format(counts[index] ?: 0)
                         "$number " + listOf("kanal", "film", "dizi")[index]
                     } else ""
                     NavigationCard(name, caption,
@@ -230,6 +236,12 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
     val rows by remember(source, kind, shelf, category, limit, year, genre, language, rating) {
         model.repo.browse(source, kind, category, "", shelf, limit, year, genre, language, rating.toDouble())
     }.collectAsStateWithLifecycle(emptyList())
+    LaunchedEffect(rows.isNotEmpty()) {
+        if (rows.isNotEmpty()) {
+            withFrameNanos { }; withFrameNanos { }
+            Perf.since("category", "category_grid_first_draw")
+        }
+    }
     val grid = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
     var lastPoster by rememberSaveable(source, category, shelf) { mutableStateOf<String?>(null) }
     val posterFocus = remember { FocusRequester() }

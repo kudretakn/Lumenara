@@ -92,7 +92,9 @@ class HubAndAdultFilterTest {
                     assertTrue(repo.nowAiring(source, now).first().isEmpty())
                     assertTrue(repo.searchPrograms(source, "gizli", now - 60_000, now).first().isEmpty())
                     assertEquals(listOf(news.id, channels.single { it.category == "Spor" }.id),
-                        repo.liveChannelOrder(source).first().map { it.id })
+                        kotlinx.coroutines.withTimeout(10_000) {
+                            repo.liveChannelOrder(source).first { it.size == 2 }
+                        }.map { it.id })
                 }
                 screen.returnToHub()
                 waitFor(hasTestTag("hub-Canlı TV") and isFocused())

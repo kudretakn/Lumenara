@@ -6,11 +6,11 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
-import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.DataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import dev.lumenara.data.Transport
 
 @OptIn(UnstableApi::class)
 fun createPlayer(
@@ -21,25 +21,35 @@ fun createPlayer(
     subtitleUri: android.net.Uri? = null,
     automaticRetries: Boolean = true,
     subtitleDelayUs: java.util.concurrent.atomic.AtomicLong = java.util.concurrent.atomic.AtomicLong(),
+    live: Boolean = false,
+    httpAllowed: () -> Boolean = { allowHttp },
+    permittedSubtitle: () -> android.net.Uri? = { subtitleUri },
 ): ExoPlayer {
     val control = DefaultLoadControl.Builder()
-    when (profile) {
+    if (live) {
+        val buffers = liveBuffers(profile)
+        control.setBufferDurationsMs(buffers.minMs, buffers.maxMs, buffers.playMs, buffers.rebufferMs)
+    } else when (profile) {
         "Hızlı" -> control.setBufferDurationsMs(8000, 20000, 750, 1500)
         "Kararlı" -> control.setBufferDurationsMs(30000, 60000, 3000, 5000)
     }
     val requests =
         androidx.media3.datasource.ResolvingDataSource.Factory(
-            DefaultDataSource.Factory(
-                context,
-                OkHttpDataSource.Factory(Transport.client(allowHttp)),
-            )
+            DataSource.Factory {
+                DefaultDataSource.Factory(context, DefaultHttpDataSource.Factory()
+                    .setConnectTimeoutMs(8_000)
+                    .setReadTimeoutMs(15_000)
+                    .setAllowCrossProtocolRedirects(httpAllowed()))
+                    .createDataSource()
+            }
         ) { spec ->
             if (
                 spec.uri.scheme !in listOf("http", "https") &&
-                    !(spec.uri.scheme in listOf("content", "file") && spec.uri == subtitleUri)
+                    !(spec.uri.scheme in listOf("content", "file") && spec.uri == permittedSubtitle())
             ) {
                 throw java.io.IOException("Yayın konumu desteklenmiyor.")
             }
+            if (spec.uri.scheme == "http" && !httpAllowed()) throw java.io.IOException("HTTP kapalı.")
             spec
         }
     val defaultRenderers = androidx.media3.exoplayer.DefaultRenderersFactory(context)

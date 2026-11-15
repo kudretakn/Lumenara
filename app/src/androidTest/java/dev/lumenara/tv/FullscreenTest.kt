@@ -82,15 +82,19 @@ class FullscreenTest {
             }
             server.start()
             try {
-                val channels = runBlocking {
+                val (channels, lastChannelId) = runBlocking {
                     prefs.setShowAdult(false)
                     prefs.set("engine", engine)
                     prefs.set("fallback", "Kapalı")
                     repo.add(name, SourceSpec(server.url("/list").toString(), true))
                     val source = repo.library.snapshot().single { it.name == name }
-                    repo.browse(source.id, "LIVE", "", "", "", Int.MAX_VALUE).first()
+                    assertEquals(count, repo.liveCount(source.id).first())
+                    val order = kotlinx.coroutines.withTimeout(10_000) {
+                        repo.liveChannelOrder(source.id).first { it.size == count }
+                    }
+                    repo.livePage(source.id, "", "", "", 80, 0).first() to order.last().id
                 }
-                assertEquals(count, channels.size)
+                assertEquals(minOf(80, count), channels.size)
                 screen.runOnUiThread {
                     val model = ViewModelProvider(screen.activity)[LibraryModel::class.java]
                     screen.activity.setContent {
@@ -127,8 +131,8 @@ class FullscreenTest {
                         assertTrue("Eight complete channel rows must fit", bounds.top >= viewport.top && bounds.bottom <= viewport.bottom)
                     }
                 }
-                // LazyColumn composes only visible rows, even with the full 10,000-channel catalog.
-                if (count > 100) assertTrue(screen.onAllNodes(hasTestTag("live-channel-${channels.last().id}"))
+                // SQL pages and LazyColumn both stay bounded with 10,000 channels.
+                if (count > 100) assertTrue(screen.onAllNodes(hasTestTag("live-channel-$lastChannelId"))
                     .fetchSemanticsNodes().isEmpty())
                 shot(if (engine == "Media3") "mini-guide" else "mini-guide-vlc")
                 screen.dpad(Key.DirectionDown)

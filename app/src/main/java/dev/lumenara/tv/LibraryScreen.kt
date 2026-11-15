@@ -44,6 +44,7 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
     val open: (Item) -> Unit = { detail = it }
     val playbackScope = rememberCoroutineScope()
     val play: (Item, List<Item>) -> Unit = { item, group ->
+        Perf.mark("channel")
         playbackScope.launch {
             try {
                 val chosen = model.repo.selectedVersion(item)
@@ -57,8 +58,9 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
     }
     val item = playing
     if (item != null) {
-        key(item.id, item.encryptedUrl) {
-            Playback(model, item, siblings, { playing = it }, {
+        key(if (item.kind == "LIVE") "live-player" else item.id,
+            if (item.kind == "LIVE") null else item.encryptedUrl) {
+            Playback(model, item, siblings, { Perf.mark("channel"); playing = it }, {
                 if (section == "Canlı TV") returnToChannel = item.id
                 playing = null
             }, { siblings = it })
