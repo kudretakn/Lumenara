@@ -222,8 +222,20 @@ class LibraryJourneyTest {
                 // Long OK keeps the existing favorite/EPG operations reachable.
                 screen.onNodeWithTag("live-channel-${channel.id}").assertIsFocused()
                 screen.longPressOkNative()
-                button("Favoriye ekle").assertExists()
+                // DESIGN-0.5 detail actions use an icon-only favorite button.
+                val inDetails = hasAnyAncestor(hasTestTag("details-content"))
+                val favorite = hasContentDescription("Favoriye ekle") and hasClickAction() and inDetails
+                screen.waitUntil(30_000) {
+                    screen.onAllNodes(favorite).fetchSemanticsNodes().isNotEmpty()
+                }
+                screen.onNode(hasText(channel.title) and inDetails).assertIsDisplayed()
+                screen.onNode(favorite).assertIsDisplayed().assertIsEnabled()
+                screen.onNode(hasText("EPG kanalı · sport") and inDetails).assertIsDisplayed()
                 screen.back()
+                screen.waitUntil(30_000) {
+                    screen.onAllNodes(hasTestTag("live-channel-${channel.id}") and isFocused())
+                        .fetchSemanticsNodes().isNotEmpty()
+                }
                 screen.back()
                 screen.openCategory("Yayın akışı")
                 button("Kanallar").assertExists()
