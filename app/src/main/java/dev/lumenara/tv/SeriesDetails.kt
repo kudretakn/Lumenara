@@ -142,7 +142,7 @@ internal fun SeriesDetails(model: LibraryModel, series: Item, play: (Item, List<
                         items(info.people) { person ->
                             FocusCard(onClick = {}, modifier = Modifier.width(110.dp)) {
                                 Column(Modifier.padding(10.dp)) {
-                                    if (person.portrait.isNotBlank()) coil.compose.AsyncImage(person.portrait, null, Modifier.size(88.dp))
+                                    if (person.portrait.isNotBlank()) Artwork(model, series, person.portrait, Modifier.size(88.dp), role = "person")
                                     Text(person.name, fontSize = 12.sp, maxLines = 2)
                                     Text(person.role, color = Ink.muted, fontSize = 11.sp, maxLines = 1)
                                 }
