@@ -21,6 +21,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -164,8 +166,8 @@ internal fun SearchScreen(
                 Text("Kanal, film veya dizi ara", style = LumenType.meta)
             }
             if (loading) item {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(15.dp)) {
-                    items(8) { LoadingCard(Modifier.width(150.dp).height(240.dp)) }
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    items(8) { LoadingCard(Modifier.width(110.dp).aspectRatio(2f / 3f)) }
                 }
             }
             if (!loading && programs.isEmpty() && shelves.all { it.second.isEmpty() }) item { Text("Eşleşen içerik yok.", color = LumenColors.textSecondary, style = LumenType.body) }
@@ -175,37 +177,43 @@ internal fun SearchScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
                     Text("SONUÇLAR", style = LumenType.caption, color = LumenColors.textSecondary)
                     LazyRow(Modifier.testTag("search-shelf-${populated.first().first}").focusRestorer().focusGroup(),
-                        contentPadding = PaddingValues(start = 4.dp, end = 16.dp, top = 4.dp, bottom = 12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         items(combined, key = { (kind, item) -> "$kind:${item.id}" }) { (kind, item) ->
                             if (kind == "Kanallar") {
                                 Box(Modifier.testTag("channel-shelf-Kanallar")) {
-                                    ChannelCard(model, item, now, { play(item, shelves.first { it.first == kind }.second) }, { lastShelf = kind })
+                                    SearchResultCard(model, item, { lastShelf = kind }) {
+                                        play(item, shelves.first { it.first == kind }.second)
+                                    }
                                 }
                             } else {
-                                Box(Modifier.testTag("search-shelf-$kind")) {
-                                    MovieCard(model, item, true, open, { lastShelf = kind })
+                                Box(if (kind == populated.first().first) Modifier else Modifier.testTag("search-shelf-$kind")) {
+                                    SearchResultCard(model, item, { lastShelf = kind }) { open(item) }
                                 }
                             }
                         }
                     }
                 }
             } else items(populated, key = { it.first }) { (title, rows) ->
-                if (title == "Kanallar") ChannelShelf(model, title, rows, play, { lastShelf = title })
-                else Column(verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
-                    Text(title, style = LumenType.title)
-                    LazyRow(Modifier.testTag("search-shelf-$title").focusRestorer().focusGroup(),
-                        contentPadding = PaddingValues(start = 4.dp, end = 16.dp, top = 4.dp, bottom = 12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
-                        items(rows, key = { it.id }) { MovieCard(model, it, true, open, { lastShelf = title }) }
+                Column(verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+                    Text(title, style = LumenType.cardTitle)
+                    LazyRow(Modifier.testTag(if (title == "Kanallar") "channel-shelf-$title" else "search-shelf-$title")
+                        .focusRestorer().focusGroup(),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        items(rows, key = { it.id }) { item ->
+                            SearchResultCard(model, item, { lastShelf = title }) {
+                                if (title == "Kanallar") play(item, rows) else open(item)
+                            }
+                        }
                     }
                 }
             }
             if (programs.isNotEmpty()) item {
                 Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                    Text("Programlar", style = LumenType.title)
+                    Text("Programlar", style = LumenType.cardTitle)
                     LazyRow(Modifier.testTag("search-shelf-Programlar").focusRestorer().focusGroup(),
-                        contentPadding = PaddingValues(8.dp), horizontalArrangement = Arrangement.spacedBy(15.dp)) {
+                        contentPadding = PaddingValues(8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         items(programs, key = { (hit, _) -> "${hit.itemId}:${hit.slot.feed}:${hit.slot.channel}:${hit.slot.start}" }) { (hit, channel) ->
                             ProgramCard(hit, channel, now, { lastShelf = "Programlar" }) {
                                 val slot = hit.slot
@@ -267,6 +275,32 @@ private fun SearchField(
 }
 
 @Composable
+private fun SearchResultCard(model: LibraryModel, item: Item, focus: () -> Unit, click: () -> Unit) {
+    var restoreFocus by rememberSaveable(item.id) { mutableStateOf(false) }
+    val requester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        if (restoreFocus) { withFrameNanos { }; requester.requestFocus(); restoreFocus = false }
+    }
+    Column(Modifier.width(110.dp)) {
+        // The resting slot is measured separately from the 1.06 focus transform.
+        Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f).testTag("search-artwork-${item.id}")) {
+            FocusCard({ restoreFocus = true; click() }, Modifier.fillMaxSize().focusRequester(requester)
+                .semantics { contentDescription = item.title }
+                .onFocusChanged { if (it.isFocused) focus() }) {
+                if (item.kind == "LIVE") {
+                    val logo by produceState<String?>(null, item.id, item.logo) { value = model.repo.poster(item) }
+                    ChannelLogo(model, item, logo, Modifier.fillMaxSize())
+                } else Poster(model, item, Modifier.fillMaxSize())
+            }
+        }
+        Text(item.title, Modifier.padding(top = 8.dp), style = LumenType.label,
+            maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(item.year.ifBlank { item.category }, style = LumenType.meta,
+            maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
 private fun ProgramCard(hit: ProgramHit, channel: Item, now: Long, focus: () -> Unit, click: () -> Unit) {
     var restoreFocus by rememberSaveable(channel.id, hit.slot.start) { mutableStateOf(false) }
     val requester = remember { FocusRequester() }
@@ -284,13 +318,14 @@ private fun ProgramCard(hit: ProgramHit, channel: Item, now: Long, focus: () -> 
         else -> day.format(DateTimeFormatter.ofPattern("dd.MM"))
     }
     val time = DateTimeFormatter.ofPattern("HH:mm").withZone(zone)
-    FocusCard({ restoreFocus = true; click() }, Modifier.width(260.dp).focusRequester(requester)
+    FocusCard({ restoreFocus = true; click() }, Modifier.width(110.dp).aspectRatio(2f / 3f).focusRequester(requester)
         .onFocusChanged { if (it.isFocused) focus() }.testTag("search-program-${channel.id}-${slot.start}")) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(slot.title, fontSize = 18.sp, maxLines = 2)
-            Text(channel.title, color = Ink.muted, fontSize = 15.sp)
-            Text("$label · ${time.format(Instant.ofEpochMilli(slot.start))}–${time.format(Instant.ofEpochMilli(slot.end))}", fontSize = 13.sp)
-            if (now in slot.start until slot.end) Text("Şimdi", color = Ink.accent, fontSize = 13.sp)
+        Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(slot.title, style = LumenType.label, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(channel.title, style = LumenType.meta, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("$label · ${time.format(Instant.ofEpochMilli(slot.start))}–${time.format(Instant.ofEpochMilli(slot.end))}",
+                style = LumenType.meta, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            if (now in slot.start until slot.end) Text("Şimdi", color = Ink.accent, style = LumenType.caption)
         }
     }
 }

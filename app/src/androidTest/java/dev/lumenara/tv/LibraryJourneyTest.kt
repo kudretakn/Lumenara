@@ -132,14 +132,28 @@ class LibraryJourneyTest {
                     assertEquals("Kolonların sol kenarları hizalı kalmalı", upper.left, lower.left, density)
                     assertEquals("Üst kolonlar eşit genişlikte kalmalı", columnWidth, upper.width, density)
                     assertEquals("Alt kolonlar eşit genişlikte kalmalı", columnWidth, lower.width, density)
-                    assertEquals("Birincil kart yüksekliği", 168f, upper.height / density, 1f)
-                    assertEquals("İkincil kart yüksekliği", 64f, lower.height / density, 1f)
+                    assertEquals("Birincil kart yüksekliği", 100f, upper.height / density, 1f)
+                    assertEquals("İkincil kart yüksekliği", 40f, lower.height / density, 1f)
                 }
                 assertEquals("Ortak sol kolon", sectionLeft,
                     screen.onNodeWithTag("hub-slot-Listem").fetchSemanticsNode().boundsInRoot.left, density)
                 screen.onNodeWithTag("hub").performScrollToNode(hasTestTag("channel-shelf-Son kanal"))
                 val recentCard = hasTestTag("live-channel-${channel.id}") and
                     hasAnyAncestor(hasTestTag("channel-shelf-Son kanal"))
+                screen.onNodeWithTag("hub").performScrollToIndex(0)
+                screen.waitUntil(30_000) { screen.onAllNodes(recentCard).fetchSemanticsNodes().isNotEmpty() }
+                val hubViewport = screen.onNodeWithTag("hub").fetchSemanticsNode().boundsInRoot
+                listOf("Canlı TV", "Filmler", "Diziler", "Listem", "Ara", "Ayarlar").forEach { name ->
+                    val bounds = screen.onNodeWithTag("hub-slot-$name").assertIsDisplayed()
+                        .fetchSemanticsNode().boundsInRoot
+                    assertTrue("Altı gezinme kartı ilk ekranda tamamen görünmeli",
+                        bounds.top >= hubViewport.top && bounds.bottom <= hubViewport.bottom)
+                }
+                val shelfCard = screen.onNode(recentCard).assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+                assertEquals("Hub raf kartı genişliği", 130f, shelfCard.width / density, 1f)
+                assertEquals("Hub raf görseli 16:9 kalmalı", 16f / 9f, shelfCard.width / shelfCard.height, .02f)
+                assertTrue("En az bir raf kartı gezinmeyle aynı ilk ekranda tamamen görünmeli",
+                    shelfCard.top >= hubViewport.top && shelfCard.bottom <= hubViewport.bottom)
                 screen.onNode(recentCard).performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus)
                 screen.waitUntil(30_000) { screen.onAllNodes(recentCard and isFocused()).fetchSemanticsNodes().isNotEmpty() }
                 screen.onNodeWithTag("hub").performScrollToNode(hasTestTag("shelf-Kaldığın yerden devam et"))
