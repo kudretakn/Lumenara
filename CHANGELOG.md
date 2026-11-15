@@ -1,5 +1,15 @@
 # Lumenara sürüm kaydı
 
+## 0.4.2 · 15 Kasım 2026
+
+- Hız (40 bin içerikli katalog, Mi Box 4): +18 filtresi ve kategori sayıları bir kez hesaplanıp paylaşılıyor; "Tümü" görünümü ve kategori listeleri yeni indeksle çalışıyor (şema 8→9).
+- Canlı TV: indeksli, imleçli sayfalama; bir kategoriyi açmak en fazla üç sorgu.
+- Yayın rehberi artık 30 saniyede bir yeniden kurulmuyor; boştayken işlemci yükü düşüyor. Kanal kartları görünür sayfa için tek sorgu kullanıyor.
+- Arama yazmayı bitirmeni bekliyor (300 ms); dizi bölümleri 6 saat önbellekte, bölüm sorguları tabloyu taramıyor.
+- Bellek: Media3 tamponu cihazın belleğine ve yayının bit hızına göre ayarlanıyor (Mi Box'ta en çok ~64 MB, 4K için yeterli); çoklu izlemede oynatıcı başına 8 MB.
+- VLC tek örnekle çalışıyor (daha hızlı kanal geçişi, daha az bellek); sistem belleği azalınca önbellekler boşaltılıyor.
+- Görseller: bellekteki görsel için disk erişimi yok; kartlar oynatma ilerlemesiyle gereksiz yere yenilenmiyor.
+
 ## 0.4.1 · 15 Kasım 2026
 
 - Büyük kataloglar (40 bin içerik) için performans: yeni veritabanı indeksleri, önceden hesaplanan sürüm anahtarları (şema 7→8), sayfalı canlı kanal listesi, kart boyutunda ve önbellekli görseller, değişmeyen liste ve EPG'nin yeniden indirilmemesi.

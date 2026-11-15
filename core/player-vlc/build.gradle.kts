@@ -8,4 +8,5 @@ android {
 dependencies {
     api("org.videolan.android:libvlc-all:3.7.7")
     implementation(project(":core:data"))
+    testImplementation("junit:junit:4.13.2")
 }

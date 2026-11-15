@@ -3,9 +3,6 @@ package dev.lumenara.data
 import androidx.room.*
 import dev.lumenara.catalog.*
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.Dispatchers
 
 @Entity(
     tableName = "feeds",
@@ -34,7 +31,7 @@ data class Feed(@PrimaryKey val id: String, val source: String, val encryptedAdd
                 onDelete = ForeignKey.CASCADE,
             )
         ],
-    indices = [Index("feed", "channel", "end")],
+    indices = [Index("feed", "channel", "end"), Index("start")],
 )
 data class Slot(
     val feed: String,
@@ -82,9 +79,12 @@ data class GuideName(val feed: String, val channel: String, val name: String)
 )
 data class Mapping(@PrimaryKey val item: String, val feed: String, val channel: String)
 
+const val GUIDE_PAGE_SQL = """SELECT * FROM programmes INDEXED BY index_programmes_feed_channel_end
+    WHERE feed=:feed AND channel IN (:channels) AND end>:from AND start<:until"""
+
 @Dao
 interface GuideDao {
-    @Query("SELECT id,title,tvgId,search,source FROM items WHERE kind='LIVE' AND category NOT IN (:hidden) AND (:source='' OR source=:source)")
+    @Query("SELECT id,title,tvgId,search,source,category FROM items WHERE kind='LIVE' AND category NOT IN (:hidden) AND (:source='' OR source=:source)")
     fun searchChannels(source: String, hidden: List<String> = emptyList()): Flow<List<GuideChannel>>
 
     @Query("""SELECT p.* FROM programmes p JOIN feeds f ON p.feed=f.id
@@ -109,19 +109,10 @@ interface GuideDao {
         WHERE (:source='' OR f.source=:source)""")
     fun programmeChannels(source: String): Flow<List<ProgrammeChannel>>
 
-    fun resolver(source: String, hidden: List<String> = emptyList()): Flow<GuideResolver> = combine(
-        searchChannels(source, hidden), sourceMappings(source), sourceNames(source), programmeChannels(source),
-    ) { channels, mappings, names, present -> GuideResolver(channels, mappings, names, present.toSet()) }
-
-    fun searchPrograms(source: String, query: String, from: Long, now: Long, hidden: List<String> = emptyList()): Flow<List<ProgramHit>> =
-        combine(resolver(source, hidden), searchSlots(source, searchable(query), from, now)) { resolver, slots ->
-            resolver.searchPrograms(slots, query, from, now)
-        }.flowOn(Dispatchers.Default)
-
-    fun nowAiring(source: String, now: Long, query: String = "", hidden: List<String> = emptyList()): Flow<List<AiringProgram>> =
-        combine(resolver(source, hidden), airingSlots(source, now)) { resolver, slots ->
-            resolver.nowAiring(slots, now, query)
-        }.flowOn(Dispatchers.Default)
+    // Resolve the feed/channel once in GuideStore. One range probe per feed for the
+    // composed page replaces the per-card OR and correlated name/presence subqueries.
+    @Query(GUIDE_PAGE_SQL)
+    fun pageSlots(feed: String, channels: List<String>, from: Long, until: Long): Flow<List<Slot>>
 
     @Upsert suspend fun map(mapping: Mapping)
 

@@ -52,6 +52,11 @@ Devam yöntemi:
 5. Tek PR, CI yeşil, merge, `v0.4.1`. CHANGELOG'a ölçülen kazançları yaz.
 6. Kullanıcıdan TV'de güncelleyip `adb logcat -s LumenaraPerf` çıktısı ya da gözlem iste.
 
+## 0.4.2 (PR #20)
+- Opus performans ve bellek taramalarının bulguları: P1–P6 (hız), M1–M3 (bellek), şema 9. Birleştirme ayrı klonda yapıldı (Codex sandbox, worktree'lerin ortak .git'ine yazamıyor; birleştirme işi için bağımsız klon kullan).
+- Kullanıcı 4K ve yüksek bit hızlı dosya oynatacak; Mi Box'ta 100–150 Mbps alıyor. Tampon uyarlanabilir: cihaz bütçesi = memoryClass'ın %33'ü (32–96 MB), içerikte VOD 20 sn / canlı 10 sn.
+- Sırada: özellik dalları (`feat/f-*`) → 0.4.3, sonra tasarım 0.5.0.
+
 ## 0.4.1 (PR #19)
 - Performans paketi + yüklenme iskeletleri + Android 9 güncelleme imza düzeltmesi + açıklayıcı hata mesajları + VLC kısa okuma (altyazı düşmesi) düzeltmesi. Kullanıcının TV saati yanlıştı (GitHub TLS hatası); 0.4.0 ADB ile kuruldu.
 - Sonraki: 0.4.2 derin performans (ajanlar P1–P6, dallar `perf2/p1..p6`, Opus taraması bulguları; şema 8→9 → U3 artık 9→10).

@@ -47,6 +47,24 @@ class LivePagesTest {
                 assertEquals(240, pages?.anchor)
                 assertTrue(checkNotNull(pages).pages.keys.all { it in 2..4 })
                 assertTrue(checkNotNull(pages).pages.values.sumOf { it.size } <= 3 * LIVE_PAGE_SIZE)
+                checkNotNull(pages).focused(320)
+            }
+            screen.waitUntil(10_000) {
+                pages?.get(320)?.id == rows[320].id && pages?.pages?.keys?.all { it in 3..4 } == true
+            }
+            // A prefix rename invalidates saved keysets. Absolute list indices must be
+            // recomputed even when the current window began with a cached cursor.
+            runBlocking { repo.library.save(listOf(rows[0].copy(title = "Z renamed"))) }
+            screen.waitUntil(10_000) { pages?.get(240)?.id == rows[241].id }
+            runBlocking { repo.library.save(listOf(rows[0])) }
+            screen.waitUntil(10_000) { pages?.get(240)?.id == rows[240].id }
+            screen.runOnIdle {
+                checkNotNull(pages).focused(240)
+            }
+            screen.waitUntil(10_000) {
+                pages?.get(160)?.id == rows[160].id && pages?.pages?.keys?.all { it in 2..4 } == true
+            }
+            screen.runOnIdle {
                 checkNotNull(pages).focused(0)
             }
             screen.waitUntil(10_000) {

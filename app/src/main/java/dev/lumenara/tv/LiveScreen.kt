@@ -41,7 +41,6 @@ internal fun LiveScreen(
 ) {
     var numberSource by remember(source) { mutableStateOf(source) }
     val numbers = rememberLiveNumberControl(model, numberSource, select = play)
-    val channelNumbers = liveChannelNumbers(model, source)
     var category by rememberSaveable(source) { mutableStateOf<String?>(null) }
     var categoryTitle by rememberSaveable(source) { mutableStateOf("") }
     var query by rememberSaveable(source, category) { mutableStateOf("") }
@@ -56,16 +55,15 @@ internal fun LiveScreen(
         .collectAsLoadingState()
     val favorites by remember(source) { model.repo.shelfCount(source, "LIVE", "favorite") }
         .collectAsLoadingState()
-    val airing by remember(source, now) { model.repo.nowAiring(source, now) }
-        .collectAsLoadingState()
+    var airingCount by remember(source) { mutableStateOf<Int?>(null) }
     val total = groups.orEmpty().sumOf { it.count }
-    val entries = if (groups == null || recent == null || favorites == null || airing == null) null else listOf(
+    val entries = if (groups == null || recent == null || favorites == null) null else listOf(
         CategoryEntry("all", "Tüm kanallar", total),
         CategoryEntry("recent", "Son izlenenler", recent.orEmpty().size),
         CategoryEntry("favorite", "Favoriler", favorites ?: 0),
-        CategoryEntry("airing", "Şu an yayında", airing.orEmpty().size),
+        CategoryEntry("airing", "Şu an yayında", airingCount ?: total, countKnown = airingCount != null),
         CategoryEntry("timeline", "Yayın akışı", total),
-    ).filter { it.count > 0 } + providerCategories(groups.orEmpty())
+    ).filter { it.count > 0 || (it.id == "airing" && total > 0) } + providerCategories(groups.orEmpty())
     androidx.activity.compose.BackHandler(category != null) { category = null }
     LaunchedEffect(source, returnToChannel) {
         val target = returnToChannel ?: return@LaunchedEffect
@@ -96,8 +94,9 @@ internal fun LiveScreen(
             val paged = if (category !in listOf("airing", "recent"))
                 rememberLivePages(model, source, provider, searchable(query),
                     if (category == "favorite") "favorite" else "", restoreId) else null
-            val rows by remember(source, category, query, limit, if (category == "airing") now else 0L) {
-                if (category == "airing") model.repo.nowAiring(source, now, searchable(query)).flatMapLatest { hits ->
+            val rows by remember(source, category, query, limit) {
+                if (category == "airing") model.repo.nowAiring(source, snapshotFlow { now }, searchable(query))
+                    .onEach { if (query.isBlank()) airingCount = it.size }.flatMapLatest { hits ->
                     val ids = hits.take(limit).map { it.itemId }
                     model.repo.liveByIds(source, ids).map { items ->
                         val byId = items.associateBy { it.id }
@@ -107,6 +106,7 @@ internal fun LiveScreen(
                     rows.filter { it.search.contains(searchable(query)) }.take(limit)
                 } else flowOf(emptyList())
             }.collectAsLoadingState()
+            val channelNumbers = liveChannelNumbers(model, source, paged?.loaded() ?: rows.orEmpty())
             pages.SaveableStateProvider("channels-$category") {
                 LiveChannelGrid(model, categoryTitle, rows, channelNumbers, now, query, { query = it },
                     limit, { limit += 80 }, returnToChannel ?: focusedId, { item ->

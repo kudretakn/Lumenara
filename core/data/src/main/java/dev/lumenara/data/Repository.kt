@@ -3,6 +3,7 @@ package dev.lumenara.data
 import android.content.Context
 import android.net.Uri
 import androidx.room.Room
+import androidx.room.InvalidationTracker
 import androidx.room.withTransaction
 import androidx.work.*
 import dev.lumenara.catalog.*
@@ -51,21 +52,25 @@ data class SourceSpec(
     }
 }
 
+data class LiveWindow(val rows: List<Item>, val revision: Long, val hidden: List<String>)
+
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class Repository private constructor(private val context: Context) {
     private val db = Room.databaseBuilder(context, LibraryDb::class.java, "lumenara.db")
-        .addMigrations(LibraryDb.MIGRATION_7_8).build()
+        .addMigrations(LibraryDb.MIGRATION_7_8, LibraryDb.MIGRATION_8_9).build()
     val library = db.library()
     val guide = db.guide()
     private val vault = Vault(context)
     private val metadata = Metadata(context, vault)
     private val preferences = Preferences(context)
-    // Resolve names from the complete catalog, before applying any visibility filter.
-    val hidden: Flow<List<String>> = combine(
-        preferences.showAdult, library.categoryCounts("", ""),
-    ) { show, groups ->
-        if (show) emptyList() else groups.map { it.category }.filter(::isAdultCategory)
-    }.distinctUntilChanged().flowOn(Dispatchers.Default)
+    private val catalogScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val catalog = CatalogStreams(library.categoryNames(), library::categoryCounts,
+        library::sourceCategoryCounts, preferences.showAdult, catalogScope)
+    val hidden: Flow<List<String>> = catalog.hidden
+    private val seriesExpansionCache = SeriesExpansionCache(
+        readStamp = { preferences.text("series_expanded_$it").first().toLongOrNull() ?: 0L },
+        writeStamp = { id, stamp -> preferences.set("series_expanded_$id", stamp.toString()) },
+    )
 
     fun browse(source: String, kind: String, category: String, query: String, shelf: String, limit: Int,
                year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0) =
@@ -74,22 +79,20 @@ class Repository private constructor(private val context: Context) {
     fun shelfCount(source: String, kind: String, shelf: String) =
         hidden.flatMapLatest { library.shelfCount(source, kind, shelf, it) }
 
-    fun categoryCounts(kind: String, source: String) =
-        hidden.flatMapLatest { library.categoryCounts(kind, source, it) }
-    fun categories(kind: String, source: String) =
-        hidden.flatMapLatest { library.categories(kind, source, it) }
-    fun liveCategoryCounts(source: String) =
-        hidden.flatMapLatest { library.liveCategoryCounts(source, it) }
+    fun categoryCounts(kind: String, source: String) = catalog.categoryCounts(kind, source)
+    fun categories(kind: String, source: String) = categoryCounts(kind, source).map { groups -> groups.map { it.category } }
+    fun liveCategoryCounts(source: String) = categoryCounts("LIVE", source)
     fun liveByIds(source: String, ids: List<String>) =
         hidden.flatMapLatest { library.liveByIds(source, ids, it) }
     private val liveScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val liveOrders = mutableMapOf<String, StateFlow<List<LiveChannelId>>>()
-    // Room invalidation refreshes imports/deletions; hidden changes restart the filtered query.
-    // Keep the flow alive between screens, so each source is queried just once per invalidation.
+    // Channel badges use demand-driven snapshots. Keep explicit order subscribers warm
+    // briefly across navigation, then release the observed list and Room subscription.
     fun liveChannelOrder(source: String): StateFlow<List<LiveChannelId>> = synchronized(liveOrders) {
         liveOrders.getOrPut(source) {
             hidden.flatMapLatest { library.liveChannelOrder(source, it) }
-                .distinctUntilChanged().stateIn(liveScope, SharingStarted.Lazily, emptyList())
+                .distinctUntilChanged().stateIn(liveScope, SharingStarted.WhileSubscribed(
+                    stopTimeoutMillis = 30_000, replayExpirationMillis = 0), emptyList())
         }
     }
     suspend fun liveChannel(number: Int, source: String): Item? {
@@ -104,6 +107,72 @@ class Repository private constructor(private val context: Context) {
     }
     fun livePage(source: String, category: String, query: String, shelf: String, limit: Int, offset: Int) =
         hidden.flatMapLatest { library.livePage(source, category, query, shelf, limit, offset, it) }
+    fun livePageAfter(source: String, category: String, query: String, shelf: String, limit: Int,
+        after: LiveCursor?, backwards: Boolean = false) =
+        hidden.flatMapLatest { library.livePageAfter(source, category, query, shelf, limit, after, backwards, it) }
+
+    fun liveNeighbors(source: String, category: String, query: String, shelf: String, limit: Int,
+        id: String, backwards: Boolean = false) =
+        hidden.flatMapLatest { library.liveNeighbors(source, category, query, shelf, limit, id, backwards, it) }
+
+    /** Keep absolute lazy-list indices correct if an import/mark/visibility change moves a boundary. */
+    fun liveWindow(source: String, category: String, query: String, shelf: String, limit: Int,
+        offset: Int, after: LiveWindowCursor?): Flow<LiveWindow> = hidden.flatMapLatest { visible ->
+        flow {
+            val cursor = after?.takeIf { it.revision == liveWindowEpoch(shelf) && it.hidden == visible }?.cursor
+            var initial = true
+            val rows = if (cursor == null) library.livePage(source, category, query, shelf, limit, offset, visible)
+                else library.livePageAfter(source, category, query, shelf, limit, cursor, hidden = visible)
+            rows.collect { page ->
+                val current = if (initial || cursor == null) page
+                    else library.livePage(source, category, query, shelf, limit, offset, visible).first()
+                emit(LiveWindow(current, liveWindowEpoch(shelf), visible))
+                initial = false
+            }
+        }
+    }
+
+    private val liveOrderEpoch = java.util.concurrent.atomic.AtomicLong()
+    private val liveFavoriteEpoch = java.util.concurrent.atomic.AtomicLong()
+    private fun liveWindowEpoch(shelf: String): Long =
+        if (shelf == "favorite") liveFavoriteEpoch.get() else liveOrderEpoch.get()
+    private data class NumberSnapshot(val epoch: Long, val hidden: List<String>, val numbers: Map<String, Int>)
+    private val liveNumberSnapshots = java.util.concurrent.ConcurrentHashMap<String, NumberSnapshot>()
+    private val liveNumberMutex = Mutex()
+    private val liveInvalidation = object : InvalidationTracker.Observer("items", "marks") {
+        override fun onInvalidated(tables: Set<String>) {
+            if ("items" in tables) liveOrderEpoch.incrementAndGet()
+            liveFavoriteEpoch.incrementAndGet()
+        }
+    }
+    init { db.invalidationTracker.addObserver(liveInvalidation) }
+
+    /** A demand-driven snapshot, not an always-subscribed sort on every item write.
+     * Badges and number entry share source-local numbering. Only id/title (plus source when
+     * unselected) are read, and the map is reused across page changes until invalidated.
+     */
+    fun liveChannelNumbers(source: String, ids: List<String>): Flow<Map<String, Int>> = flow {
+        if (ids.isEmpty()) { emit(emptyMap()); return@flow }
+        val visible = hidden.first()
+        val numbers = liveNumberMutex.withLock {
+            val epoch = liveOrderEpoch.get()
+            val cached = liveNumberSnapshots[source]
+            if (cached != null && cached.epoch == epoch && cached.hidden == visible) cached.numbers
+            else {
+                val order = library.liveChannelOrder(source, visible).first()
+                val perSource = mutableMapOf<String, Int>()
+                val result = order.associate { row ->
+                    val number = (perSource[row.source] ?: 0) + 1
+                    perSource[row.source] = number
+                    row.id to number
+                }
+                liveNumberSnapshots[source] = NumberSnapshot(epoch, visible, result)
+                result
+            }
+        }
+        emit(ids.mapNotNull { id -> numbers[id]?.let { id to it } }.toMap())
+    }.flowOn(Dispatchers.Default)
+
     fun liveCount(source: String, category: String = "", query: String = "", shelf: String = "") =
         hidden.flatMapLatest { library.liveCount(source, category, query, shelf, it) }
     suspend fun liveIndex(source: String, id: String, category: String = "", query: String = "", shelf: String = "") =
@@ -118,17 +187,25 @@ class Repository private constructor(private val context: Context) {
             ids.mapNotNull { byId[it] }
         }
     }
-    fun nowAiring(source: String, now: Long, query: String = "") =
-        hidden.flatMapLatest { guide.nowAiring(source, now, query, it) }
-    fun searchPrograms(source: String, query: String, from: Long, now: Long) =
-        hidden.flatMapLatest { guide.searchPrograms(source, query, from, now, it) }
+    private val guideStore by lazy { GuideStore(guide, liveScope, hidden) }
+    fun cardProgrammes(source: String, itemId: String): Flow<List<Slot>> = guideStore.cardProgrammes(source, itemId)
+    fun nowAiring(source: String, now: Long, query: String = ""): Flow<List<AiringProgram>> = nowAiring(source, flowOf(now), query)
+    fun nowAiring(source: String, now: Flow<Long>, query: String = ""): Flow<List<AiringProgram>> = guideStore.nowAiring(source, now, query)
+    fun searchPrograms(source: String, query: String, from: Long, now: Long): Flow<List<ProgramHit>> =
+        searchPrograms(source, query, flowOf(from to now))
+    fun searchPrograms(source: String, query: String, times: Flow<Pair<Long, Long>>): Flow<List<ProgramHit>> =
+        guideStore.searchPrograms(source, query, times)
 
     val subtitles = SubtitleService(preferences, SubtitleCache(java.io.File(context.cacheDir, "subtitles")))
 
     suspend fun production(item: Item): Item = if (item.kind == "EPISODE") library.item(item.parent) ?: item
         else library.item(item.id) ?: item
 
-    private val versionIndex = java.util.concurrent.ConcurrentHashMap<String, Map<String, List<Item>>>()
+    fun trim() {
+        synchronized(liveOrders) { liveOrders.clear() }
+        // P5 removed versionIndex; P2's channel-number snapshots are the remaining cache.
+        liveNumberSnapshots.clear()
+    }
 
     suspend fun versions(item: Item): List<Item> {
         val all = allVersions(item)
@@ -139,10 +216,9 @@ class Repository private constructor(private val context: Context) {
         val base = production(item)
         if (base.kind !in listOf("MOVIE", "SERIES")) return@withContext listOf(base)
         if (base.versionKey.isNotEmpty()) return@withContext library.versionRows(base.versionKey)
-        val key = "${base.source}|${base.kind}|${base.generation}"
-        val index = versionIndex[key] ?: library.versionCandidates(base.source, base.kind).versionGroups()
-            .flatMap { group -> group.map { it.id to group } }.toMap().also { versionIndex[key] = it }
-        index[base.id] ?: listOf(base)
+        // Legacy rows from the 7→8 migration have no grouping key. Avoid scanning the full
+        // source on first detail/playback; the next import assigns keys in one bounded projection.
+        listOf(base)
     }
 
     suspend fun preferenceKey(item: Item): String {
@@ -199,10 +275,7 @@ class Repository private constructor(private val context: Context) {
                     if (query.tmdb.isNotBlank() && base.tmdbId() != query.tmdb) {
                         db.withTransaction {
                             library.save(listOf(base.copy(search = base.search.replace(Regex(" \\[tmdb:[0-9]+\\]"), "") + " [tmdb:${query.tmdb}]")))
-                            // A newly learned ID can join translated titles or split conflicting IDs.
-                            library.assignVersions(library.versionCandidates(base.source, base.kind).versionAssignments())
                         }
-                        versionIndex.keys.removeAll { it.startsWith("${base.source}|") }
                     }
                 }
                 catch (e: kotlinx.coroutines.CancellationException) { throw e }
@@ -271,7 +344,6 @@ class Repository private constructor(private val context: Context) {
 
     suspend fun remove(id: String) = lock.withLock {
         library.deleteSource(id)
-        versionIndex.keys.removeAll { it.startsWith("$id|") }
     }
 
     suspend fun addGuide(sourceId: String, url: String) =
@@ -406,7 +478,7 @@ class Repository private constructor(private val context: Context) {
                 else library.prune(source.id, token)
                 library.orphans(source.id)
                 for (kind in listOf("MOVIE", "SERIES")) {
-                    val rows = library.versionCandidates(source.id, kind)
+                    val rows = library.versionCandidates(source.id, kind).map(VersionCandidate::asItem)
                     // Resolve across the complete source, not each 128-row staging batch: matching
                     // translated titles and a missing TMDB ID may occur in distant batches.
                     library.assignVersions(rows.versionAssignments())
@@ -423,7 +495,6 @@ class Repository private constructor(private val context: Context) {
                 job.ensureActive()
                 library.save(source.copy(refreshed = token, count = library.count(source.id)))
             }
-            versionIndex.keys.removeAll { it.startsWith("${source.id}|") }
         } finally {
             staged.close()
         }
@@ -488,32 +559,41 @@ class Repository private constructor(private val context: Context) {
                 val source = library.source(series.source) ?: return@withLock emptyList()
                 val spec = SourceSpec.decode(vault.decrypt(source.endpoint))
                 if (spec.user.isEmpty()) return@withLock library.episodeSnapshot(series.id)
-                val token = System.currentTimeMillis()
-                val listings =
-                    Xtream(spec)
+                seriesExpansionCache.get(series.id, cached = { library.episodeSnapshot(series.id) }) {
+                    val token = System.currentTimeMillis()
+                    val listings = Xtream(spec)
                         .episodes(vault.decrypt(series.encryptedUrl), series.title)
                         .distinctBy { it.url }
-                val entries = listings.map { item(source.id, token, it).copy(parent = series.id) }
-                db.withTransaction {
-                    library.save(entries)
-                    listings.zip(entries).forEach { (listing, episode) ->
-                        val mark = library.mark(episode.id) ?: Mark(episode.id)
-                        if (mark.duration <= 0 && listing.durationMs > 0)
-                            library.save(mark.copy(duration = listing.durationMs))
+                    val entries = listings.map { item(source.id, token, it).copy(parent = series.id) }
+                    db.withTransaction {
+                        library.save(entries)
+                        val siblings = if (entries.isEmpty()) emptyList() else allVersions(series)
+                            .filter { it.id != series.id }.flatMap { library.episodeSnapshot(it.id) }
+                        // Android 9 SQLite allows 999 binds: normally one IN query, bounded for
+                        // very long series. Read current and sibling marks together, never per episode.
+                        val marks = (entries + siblings).map { it.id }.distinct().chunked(900)
+                            .flatMap { library.marksByIds(it) }.associateBy { it.id }
+                        val shared = siblings.groupBy { it.seriesEpisode().let { n -> n.season to n.episode } }
+                            .mapValues { (_, episodes) -> episodes.mapNotNull { marks[it.id] }.maxByOrNull { it.updated } }
+                        listings.zip(entries).forEach { (listing, episode) ->
+                            val existing = marks[episode.id]
+                            var mark = existing ?: Mark(episode.id)
+                            var changed = false
+                            if (mark.duration <= 0 && listing.durationMs > 0)
+                                mark = mark.copy(duration = listing.durationMs).also { changed = true }
+                            if (mark.updated == 0L) {
+                                val number = episode.seriesEpisode()
+                                shared[number.season to number.episode]?.let {
+                                    mark = it.copy(id = episode.id)
+                                    changed = true
+                                }
+                            }
+                            if (changed) library.save(mark)
+                        }
+                        library.pruneEpisodes(series.id, token)
                     }
-                    library.pruneEpisodes(series.id, token)
+                    entries
                 }
-                for (entry in entries) {
-                    if (library.mark(entry.id)?.updated == 0L || library.mark(entry.id) == null) {
-                        val number = entry.seriesEpisode()
-                        val shared = allVersions(series).filter { it.id != series.id }
-                            .flatMap { library.episodeSnapshot(it.id) }.filter {
-                                val n = it.seriesEpisode(); n.season == number.season && n.episode == number.episode
-                            }.mapNotNull { library.mark(it.id) }.maxByOrNull { it.updated }
-                        if (shared != null) library.save(shared.copy(id = entry.id))
-                    }
-                }
-                entries
             }
         }
 

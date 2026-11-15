@@ -109,6 +109,7 @@ internal fun Video(
                         automaticRetries = item.kind != "LIVE",
                         subtitleDelayUs = subtitleDelayUs,
                         live = item.kind == "LIVE",
+                        multi = multi,
                         httpAllowed = { allowedHttp.get() },
                         permittedSubtitle = { allowedSubtitle.get() },
                     )
