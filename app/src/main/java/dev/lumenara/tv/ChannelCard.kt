@@ -8,6 +8,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.contentDescription
@@ -51,13 +54,26 @@ internal fun ChannelCard(
     now: Long,
     play: () -> Unit,
     focus: (Item) -> Unit,
+    modifier: Modifier = Modifier.width(240.dp),
+    number: Int? = null,
+    operations: (() -> Unit)? = null,
 ) {
+    var restoreFocus by rememberSaveable(item.id) { mutableStateOf(false) }
+    val requester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        if (restoreFocus) {
+            withFrameNanos { }
+            requester.requestFocus()
+            restoreFocus = false
+        }
+    }
     val slots = liveProgrammes(model, item, now)
     val current = slots.firstOrNull { now >= it.start && now < it.end }
     val logo by produceState<String?>(null, item.logo) { value = model.repo.poster(item) }
     FocusCard(
-        onClick = play,
-        modifier = Modifier.width(240.dp).height(112.dp)
+        onClick = { restoreFocus = true; play() },
+        onLongClick = operations?.let { action -> { restoreFocus = true; action() } },
+        modifier = modifier.focusRequester(requester).height(128.dp).testTag("live-channel-${item.id}")
             .semantics { contentDescription = item.title }
             .onFocusChanged { if (it.isFocused) focus(item) },
     ) {
@@ -65,9 +81,10 @@ internal fun ChannelCard(
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (logo != null)
                     AsyncImage(logo, null, Modifier.size(36.dp), contentScale = ContentScale.Fit)
-                Text(item.title, Modifier.weight(1f), fontSize = 15.sp, maxLines = 1,
+                Text((number?.let { "$it · " } ?: "") + item.title, Modifier.weight(1f), fontSize = 15.sp, maxLines = 1,
                     overflow = TextOverflow.Ellipsis)
             }
+            if (current == null) Text("Program bilgisi yok", color = Ink.muted, fontSize = 12.sp)
             if (current != null) {
                 Text(current.title, color = Ink.muted, fontSize = 12.sp, maxLines = 1,
                     overflow = TextOverflow.Ellipsis)

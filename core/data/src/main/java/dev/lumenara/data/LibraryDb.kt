@@ -98,55 +98,66 @@ data class LiveChannelId(val id: String, val source: String)
 
 @Dao
 interface LibraryDao {
-    @Query("""SELECT id,source FROM items WHERE kind='LIVE' AND (:source='' OR source=:source)
+    @Query("""SELECT id,source FROM items WHERE kind='LIVE' AND category NOT IN (:hidden) AND (:source='' OR source=:source)
         ORDER BY source,title,id""")
-    fun liveChannelOrder(source: String): Flow<List<LiveChannelId>>
+    fun liveChannelOrder(source: String, hidden: List<String> = emptyList()): Flow<List<LiveChannelId>>
 
     @Query("""SELECT * FROM items WHERE id IN (:ids) AND kind='LIVE'
-        AND (:source='' OR source=:source)""")
-    fun liveByIds(source: String, ids: List<String>): Flow<List<Item>>
+        AND category NOT IN (:hidden) AND (:source='' OR source=:source)""")
+    fun liveByIds(source: String, ids: List<String>, hidden: List<String> = emptyList()): Flow<List<Item>>
 
     @Query("""SELECT * FROM items WHERE (:source='' OR source=:source)
-        AND kind IN ('MOVIE','SERIES') AND (backdrop!='' OR logo!='')
+        AND category NOT IN (:hidden) AND kind IN ('MOVIE','SERIES') AND (backdrop!='' OR logo!='')
         ORDER BY items.rowid DESC LIMIT 60""")
-    fun homeFeaturesRows(source: String): Flow<List<Item>>
+    fun homeFeaturesRows(source: String, hidden: List<String> = emptyList()): Flow<List<Item>>
 
-    fun homeFeatures(source: String): Flow<List<Item>> = homeFeaturesRows(source).map { it.mergeVersions().take(6) }
+    fun homeFeatures(source: String, hidden: List<String> = emptyList()): Flow<List<Item>> = homeFeaturesRows(source, hidden).map { it.mergeVersions().take(6) }
 
-    @Query("""SELECT * FROM items WHERE kind='LIVE' AND (:source='' OR source=:source)
-        AND category=(SELECT category FROM items WHERE kind='LIVE'
+    @Query("""SELECT * FROM items WHERE kind='LIVE' AND category NOT IN (:hidden) AND (:source='' OR source=:source)
+        AND category=(SELECT category FROM items WHERE kind='LIVE' AND category NOT IN (:hidden)
             AND (:source='' OR source=:source) ORDER BY category,title,id LIMIT 1)
         ORDER BY title,id LIMIT 20""")
-    fun firstLiveCategory(source: String): Flow<List<Item>>
+    fun firstLiveCategory(source: String, hidden: List<String> = emptyList()): Flow<List<Item>>
 
     @Query("""SELECT category, COUNT(*) AS count FROM items
-        WHERE kind='LIVE' AND (:source='' OR source=:source) GROUP BY category ORDER BY category""")
-    fun liveCategoryCounts(source: String): Flow<List<LiveCategoryCount>>
+        WHERE kind='LIVE' AND category NOT IN (:hidden) AND (:source='' OR source=:source) GROUP BY category ORDER BY category""")
+    fun liveCategoryCounts(source: String, hidden: List<String> = emptyList()): Flow<List<LiveCategoryCount>>
+
+    @Query("""SELECT category, COUNT(*) AS count FROM items
+        WHERE (:kind='' OR kind=:kind) AND (:source='' OR source=:source)
+        AND category NOT IN (:hidden) GROUP BY category""")
+    fun categoryCounts(kind: String, source: String, hidden: List<String> = emptyList()): Flow<List<LiveCategoryCount>>
+
+    @Query("""SELECT COUNT(*) FROM items LEFT JOIN marks USING(id)
+        WHERE (:source='' OR source=:source) AND (:kind='' OR kind=:kind) AND kind!='EPISODE'
+        AND category NOT IN (:hidden)
+        AND (:shelf!='favorite' OR favorite=1) AND (:shelf!='list' OR listed=1)""")
+    fun shelfCount(source: String, kind: String, shelf: String, hidden: List<String> = emptyList()): Flow<Int>
 
     @Upsert suspend fun collection(member: Member)
 
     @Query(
         """SELECT DISTINCT name FROM collections JOIN items USING(id)
-        WHERE (:source='' OR source=:source) ORDER BY name LIMIT 20"""
+        WHERE category NOT IN (:hidden) AND (:source='' OR source=:source) ORDER BY name LIMIT 20"""
     )
-    fun collections(source: String): Flow<List<String>>
+    fun collections(source: String, hidden: List<String> = emptyList()): Flow<List<String>>
 
     @Query(
-        """SELECT items.* FROM items JOIN collections USING(id) WHERE name=:name AND (:source='' OR source=:source)
+        """SELECT items.* FROM items JOIN collections USING(id) WHERE category NOT IN (:hidden) AND name=:name AND (:source='' OR source=:source)
         ORDER BY year,title LIMIT 240"""
     )
-    fun membersRows(source: String, name: String): Flow<List<Item>>
+    fun membersRows(source: String, name: String, hidden: List<String> = emptyList()): Flow<List<Item>>
 
-    fun members(source: String, name: String): Flow<List<Item>> = membersRows(source, name).map { it.mergeVersions().take(60) }
+    fun members(source: String, name: String, hidden: List<String> = emptyList()): Flow<List<Item>> = membersRows(source, name, hidden).map { it.mergeVersions().take(60) }
 
     @Query(
-        """SELECT i.* FROM items i WHERE (:source='' OR i.source=:source) AND i.kind IN ('MOVIE','SERIES')
+        """SELECT i.* FROM items i WHERE i.category NOT IN (:hidden) AND (:source='' OR i.source=:source) AND i.kind IN ('MOVIE','SERIES')
         AND i.category IN (SELECT j.category FROM items j JOIN marks m ON m.id=j.id WHERE m.favorite=1 OR m.position>0)
         AND i.id NOT IN (SELECT id FROM marks WHERE position>0 OR favorite=1) ORDER BY CAST(i.rating AS REAL) DESC,i.title LIMIT 96"""
     )
-    fun suggestionsRows(source: String): Flow<List<Item>>
+    fun suggestionsRows(source: String, hidden: List<String> = emptyList()): Flow<List<Item>>
 
-    fun suggestions(source: String): Flow<List<Item>> = suggestionsRows(source).map { it.mergeVersions().take(24) }
+    fun suggestions(source: String, hidden: List<String> = emptyList()): Flow<List<Item>> = suggestionsRows(source, hidden).map { it.mergeVersions().take(24) }
 
     @Query("SELECT * FROM sources ORDER BY name, id") fun sources(): Flow<List<Source>>
 
@@ -169,28 +180,30 @@ interface LibraryDao {
 
     @Query("SELECT * FROM marks WHERE id=:id") fun observeMark(id: String): Flow<Mark?>
 
-    @Query("SELECT * FROM items WHERE parent=:id ORDER BY items.rowid")
-    fun episodes(id: String): Flow<List<Item>>
+    @Query("""SELECT * FROM items WHERE parent=:id AND category NOT IN (:hidden)
+        AND parent NOT IN (SELECT id FROM items WHERE category IN (:hidden)) ORDER BY items.rowid""")
+    fun episodes(id: String, hidden: List<String> = emptyList()): Flow<List<Item>>
 
-    @Query("SELECT * FROM items WHERE parent=:id")
-    suspend fun episodeSnapshot(id: String): List<Item>
+    @Query("""SELECT * FROM items WHERE parent=:id AND category NOT IN (:hidden)
+        AND parent NOT IN (SELECT id FROM items WHERE category IN (:hidden))""")
+    suspend fun episodeSnapshot(id: String, hidden: List<String> = emptyList()): List<Item>
 
     @Query("SELECT marks.* FROM marks JOIN items USING(id) WHERE items.parent=:id")
     fun episodeMarks(id: String): Flow<List<Mark>>
 
     @Query("""SELECT i.* FROM items i JOIN (
         SELECT CASE WHEN ep.kind='EPISODE' THEN ep.parent ELSE ep.id END AS cardId, MAX(m.updated) AS activity
-        FROM items ep JOIN marks m ON m.id=ep.id WHERE m.position>0 AND
+        FROM items ep JOIN marks m ON m.id=ep.id WHERE ep.category NOT IN (:hidden) AND m.position>0 AND
             (ep.kind='EPISODE' OR ep.kind='MOVIE' AND (m.duration<=0 OR m.position<m.duration*0.95))
         GROUP BY cardId
         ) history ON history.cardId=i.id
-        WHERE (:source='' OR i.source=:source) AND i.kind IN ('MOVIE','SERIES')
+        WHERE i.category NOT IN (:hidden) AND (:source='' OR i.source=:source) AND i.kind IN ('MOVIE','SERIES')
         AND (i.kind!='SERIES' OR EXISTS(SELECT 1 FROM items ep LEFT JOIN marks m ON m.id=ep.id
-            WHERE ep.parent=i.id AND (m.id IS NULL OR m.duration<=0 OR m.position<m.duration*0.90)))
+            WHERE ep.category NOT IN (:hidden) AND ep.parent=i.id AND (m.id IS NULL OR m.duration<=0 OR m.position<m.duration*0.90)))
         ORDER BY history.activity DESC,i.id LIMIT 96""")
-    fun continueWatchingRows(source: String): Flow<List<Item>>
+    fun continueWatchingRows(source: String, hidden: List<String> = emptyList()): Flow<List<Item>>
 
-    fun continueWatching(source: String): Flow<List<Item>> = continueWatchingRows(source).map { it.mergeVersions().take(24) }
+    fun continueWatching(source: String, hidden: List<String> = emptyList()): Flow<List<Item>> = continueWatchingRows(source, hidden).map { it.mergeVersions().take(24) }
 
     @Query("DELETE FROM items WHERE parent=:id AND generation!=:token")
     suspend fun pruneEpisodes(id: String, token: Long)
@@ -212,7 +225,7 @@ interface LibraryDao {
 
     @Query(
         """SELECT items.* FROM items LEFT JOIN marks USING(id)
-        WHERE (:source = '' OR source=:source) AND kind!='EPISODE' AND (:kind = '' OR kind=:kind)
+        WHERE category NOT IN (:hidden) AND (:source = '' OR source=:source) AND kind!='EPISODE' AND (:kind = '' OR kind=:kind)
         AND (:category = '' OR category=:category) AND instr(search,:query)>0
         AND (:year='' OR year=:year) AND (:genre='' OR instr(genre,:genre)>0)
         AND (:language='' OR language=:language) AND CAST(rating AS REAL)>=:minRating
@@ -236,26 +249,27 @@ interface LibraryDao {
         genre: String = "",
         language: String = "",
         minRating: Double = 0.0,
+        hidden: List<String> = emptyList(),
     ): Flow<List<Item>>
 
     fun browse(source: String, kind: String, category: String, query: String, shelf: String, limit: Int,
-               year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0): Flow<List<Item>> =
+               year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0, hidden: List<String> = emptyList()): Flow<List<Item>> =
         browseRows(source, kind, category, query, shelf,
             if (kind == "LIVE") limit else if (limit == Int.MAX_VALUE) -1
             else (limit.toLong() * VERSION_HEADROOM).coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
-            year, genre, language, minRating)
+            year, genre, language, minRating, hidden)
             .map { it.mergeVersions().take(limit) }
 
     @Query("SELECT * FROM items WHERE id=:id")
     suspend fun item(id: String): Item?
 
-    @Query("SELECT * FROM items WHERE source=:source AND kind=:kind")
-    suspend fun versionCandidates(source: String, kind: String): List<Item>
+    @Query("SELECT * FROM items WHERE source=:source AND kind=:kind AND category NOT IN (:hidden)")
+    suspend fun versionCandidates(source: String, kind: String, hidden: List<String> = emptyList()): List<Item>
 
     @Query(
-        "SELECT DISTINCT category FROM items WHERE kind=:kind AND (:source='' OR source=:source) ORDER BY category"
+        "SELECT DISTINCT category FROM items WHERE category NOT IN (:hidden) AND kind=:kind AND (:source='' OR source=:source) ORDER BY category"
     )
-    fun categories(kind: String, source: String): Flow<List<String>>
+    fun categories(kind: String, source: String, hidden: List<String> = emptyList()): Flow<List<String>>
 }
 
 @Database(

@@ -5,9 +5,8 @@ import androidx.activity.ComponentActivity
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.junit4.AndroidComposeTestRule
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
-import androidx.compose.ui.test.onRoot
-import androidx.compose.ui.test.performKeyInput
-import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.test.*
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.rules.TestRule
 
@@ -40,4 +39,36 @@ fun ComposeContentTestRule.longOk() {
 fun <R : TestRule, A : ComponentActivity> AndroidComposeTestRule<R, A>.back() {
     runOnUiThread { activity.onBackPressedDispatcher.onBackPressed() }
     waitForIdle()
+}
+
+/** Return through the real Back stack, then activate a Hub card with remote OK. */
+fun <R : TestRule, A : ComponentActivity> AndroidComposeTestRule<R, A>.returnToHub() {
+    repeat(10) {
+        if (onAllNodesWithTag("hub").fetchSemanticsNodes().isNotEmpty()) return
+        back()
+    }
+    onNodeWithTag("hub").assertExists()
+}
+
+fun <R : TestRule, A : ComponentActivity> AndroidComposeTestRule<R, A>.openHubCard(name: String) {
+    returnToHub()
+    onNodeWithTag("hub").performScrollToNode(hasTestTag("hub-$name"))
+    val card = onNodeWithTag("hub-$name")
+    card.performSemanticsAction(SemanticsActions.RequestFocus)
+    waitUntil(30_000) { onAllNodes(hasTestTag("hub-$name") and isFocused()).fetchSemanticsNodes().isNotEmpty() }
+    ok()
+    waitUntil(30_000) { onAllNodesWithTag("section-$name").fetchSemanticsNodes().isNotEmpty() }
+}
+
+fun ComposeContentTestRule.openCategory(name: String) {
+    waitUntil(30_000) {
+        runCatching {
+            onNodeWithTag("category-grid").performScrollToNode(hasTestTag("category-$name"))
+            onAllNodesWithTag("category-$name").fetchSemanticsNodes().isNotEmpty()
+        }.getOrDefault(false)
+    }
+    onNodeWithTag("category-$name").performSemanticsAction(SemanticsActions.RequestFocus)
+    waitUntil(30_000) { onAllNodes(hasTestTag("category-$name") and isFocused()).fetchSemanticsNodes().isNotEmpty() }
+    ok()
+    waitUntil(30_000) { onAllNodesWithTag("category-grid").fetchSemanticsNodes().isEmpty() }
 }

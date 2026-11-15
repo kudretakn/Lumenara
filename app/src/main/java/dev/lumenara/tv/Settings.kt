@@ -13,6 +13,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -49,12 +51,14 @@ internal fun SettingsScreen(
     sourceFocus: FocusRequester,
     openSources: () -> Unit,
 ) {
+    val showAdult by model.prefs.showAdult.collectAsStateWithLifecycle(false)
+    val settingsScope = rememberCoroutineScope()
     val context = LocalContext.current
     val busy by model.busy.collectAsStateWithLifecycle()
     val notice by model.notice.collectAsStateWithLifecycle()
     var token by remember { mutableStateOf("") }
     var configured by remember { mutableStateOf(model.repo.tmdbConfigured()) }
-    var expert by remember { mutableStateOf(false) }
+    var expert by rememberSaveable { mutableStateOf(false) }
     val release by model.update.collectAsStateWithLifecycle()
     val installation by UpdateInstaller.state.collectAsStateWithLifecycle()
     var awaitingInstallPermission by rememberSaveable { mutableStateOf(false) }
@@ -127,29 +131,58 @@ internal fun SettingsScreen(
                     }
                 }
         }
+    val list = rememberLazyListState()
+    var lastEntry by rememberSaveable { mutableIntStateOf(0) }
+    val returnEntry = remember { lastEntry }
+    var positioned by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        list.scrollToItem(returnEntry)
+        positioned = true
+    }
     LazyColumn(
+        state = list,
+        modifier = Modifier.testTag("settings-list"),
         verticalArrangement = Arrangement.spacedBy(7.dp),
         contentPadding = PaddingValues(bottom = 20.dp),
     ) {
-        item {
-            Button(onClick = openSources, modifier = Modifier.focusRequester(sourceFocus)) {
+        var entryIndex = 0
+        fun LazyListScope.setting(content: @Composable () -> Unit) {
+            val index = entryIndex++
+            item {
+                if (index == returnEntry && positioned) LaunchedEffect(Unit) {
+                    withFrameNanos { }
+                    sourceFocus.requestFocus()
+                }
+                Column(Modifier
+                    .then(if (index == returnEntry) Modifier.focusRequester(sourceFocus) else Modifier)
+                    .onFocusChanged { if (it.hasFocus) lastEntry = index }) { content() }
+            }
+        }
+        setting {
+            Button(onClick = openSources) {
                 Text("IPTV Kaynakları")
             }
         }
-        item { Text("Türkçe   ·   Antrasit tema   ·   Lumenara 0.1", color = Ink.muted) }
-        item { Text("Oynatıcı", fontSize = 20.sp) }
-        item { Choice(model, "engine", "Varsayılan motor", listOf("Media3", "VLC")) }
-        item { Choice(model, "fallback", "Codec hatasında VLC", listOf("Açık", "Kapalı")) }
-        item { Choice(model, "buffer", "Media3 tamponu", listOf("Dengeli", "Hızlı", "Kararlı")) }
-        item { Choice(model, "audio", "Ses dili", listOf("Otomatik (Türkçe)", "tr", "en", "de", "fr")) }
-        item { Choice(model, "sub", "Altyazı dili", listOf("Otomatik (Türkçe)", "Kapalı", "tr", "en", "de", "fr")) }
-        item { Choice(model, "size", "Altyazı boyutu", listOf("Orta", "Büyük", "Küçük")) }
-        item { Choice(model, "color", "Altyazı rengi", listOf("Beyaz", "Sarı")) }
-        item {
+        setting { Text("Türkçe   ·   Antrasit tema   ·   Lumenara 0.1", color = Ink.muted) }
+        setting { Text("Oynatıcı", fontSize = 20.sp) }
+        setting { Choice(model, "engine", "Varsayılan motor", listOf("Media3", "VLC")) }
+        setting { Choice(model, "fallback", "Codec hatasında VLC", listOf("Açık", "Kapalı")) }
+        setting { Choice(model, "buffer", "Media3 tamponu", listOf("Dengeli", "Hızlı", "Kararlı")) }
+        setting { Choice(model, "audio", "Ses dili", listOf("Otomatik (Türkçe)", "tr", "en", "de", "fr")) }
+        setting { Choice(model, "sub", "Altyazı dili", listOf("Otomatik (Türkçe)", "Kapalı", "tr", "en", "de", "fr")) }
+        setting { Choice(model, "size", "Altyazı boyutu", listOf("Orta", "Büyük", "Küçük")) }
+        setting { Choice(model, "color", "Altyazı rengi", listOf("Beyaz", "Sarı")) }
+        setting {
+            Button(onClick = { settingsScope.launch { model.prefs.setShowAdult(!showAdult) } },
+                modifier = Modifier.testTag("show-adult")) {
+                Text("+18 içerikleri göster · " + if (showAdult) "Açık" else "Kapalı")
+            }
+        }
+        setting {
             Text("Depolama ve yenileme", fontSize = 20.sp)
             Text("${sources.size} kaynak · ${sources.sumOf { it.count }} içerik", color = Ink.muted)
         }
-        item {
+        setting {
             Button(
                 enabled = !busy,
                 onClick = {
@@ -164,7 +197,7 @@ internal fun SettingsScreen(
                 Text("Otomatik yenileme · $hours saat")
             }
         }
-        item {
+        setting {
             Button(
                 enabled = !busy && sources.isNotEmpty(),
                 onClick = {
@@ -179,7 +212,7 @@ internal fun SettingsScreen(
                 Text("Şimdi yenile")
             }
         }
-        item {
+        setting {
             Button(
                 enabled = !busy,
                 onClick = {
@@ -193,16 +226,16 @@ internal fun SettingsScreen(
                 Text("Görsel önbelleğini temizle · ${disk/1048576} MB")
             }
         }
-        item {
+        setting {
             SubtitleKeys(model)
         }
-        item {
+        setting {
             Text("Film ve dizi bilgileri", fontSize = 20.sp)
             if (model.repo.tmdbBuiltIn())
                 Text("Yerleşik TMDB erişimi var; alan boşsa o kullanılır.", color = Ink.muted)
             Field("TMDB API Read Access Token", token, { token = it }, true)
         }
-        item {
+        setting {
             Button(
                 enabled = !busy && (token.isNotBlank() || configured),
                 onClick = {
@@ -219,7 +252,7 @@ internal fun SettingsScreen(
                 )
             }
         }
-        item {
+        setting {
             AsyncImage(R.raw.tmdb, "TMDB", Modifier.width(75.dp).height(14.dp))
             Text(
                 "This product uses the TMDB API but is not endorsed or certified by TMDB.",
@@ -227,13 +260,13 @@ internal fun SettingsScreen(
                 color = Ink.muted,
             )
         }
-        item {
+        setting {
             Text("Uygulama güncellemeleri", fontSize = 20.sp)
             Field("GitHub deposu · sahip/depo", github, { github = it })
             if (github.isBlank())
                 Text("Önerilen depo: kudretakn/Lumenara-releases", color = Ink.muted)
         }
-        item {
+        setting {
             Button(
                 enabled = !busy && (github.isBlank() || Updates.validRepo(github)),
                 onClick = {
@@ -250,7 +283,7 @@ internal fun SettingsScreen(
             }
         }
         release?.let { info ->
-            item {
+            setting {
                 Text("Yeni sürüm · ${info.version}")
                 Text(info.notes)
                 Text(
@@ -290,15 +323,15 @@ internal fun SettingsScreen(
                 }
             }
         }
-        if (installation.message.isNotEmpty()) item { Text(installation.message, color = Ink.accent) }
-        item {
+        if (installation.message.isNotEmpty()) setting { Text(installation.message, color = Ink.accent) }
+        setting {
             Button(onClick = { expert = !expert }) {
                 Text(if (expert) "Uzman modunu kapat" else "Uzman modu")
             }
         }
         if (expert) {
-            item { Choice(model, "diagnostics", "Yerel olay kaydı", listOf("Kapalı", "Açık")) }
-            item {
+            setting { Choice(model, "diagnostics", "Yerel olay kaydı", listOf("Kapalı", "Açık")) }
+            setting {
                 Button(
                     onClick = {
                         model.job("Çözücüler listelendi.") {
@@ -321,7 +354,7 @@ internal fun SettingsScreen(
                 }
                 Text(codecs, fontSize = 13.sp)
             }
-            item {
+            setting {
                 Text(log, fontSize = 12.sp)
                 Button(
                     onClick = { model.job("Kayıt silindi.") { model.prefs.set("events", "") } }
@@ -329,7 +362,7 @@ internal fun SettingsScreen(
                     Text("Hata kaydını temizle")
                 }
             }
-            item {
+            setting {
                 Button(
                     onClick = {
                         runCatching { export.launch("lumenara-tanilama.txt") }
@@ -342,6 +375,6 @@ internal fun SettingsScreen(
                 }
             }
         }
-        if (notice.isNotEmpty()) item { Text(notice, color = Ink.accent) }
+        if (notice.isNotEmpty()) setting { Text(notice, color = Ink.accent) }
     }
 }

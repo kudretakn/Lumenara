@@ -101,17 +101,14 @@ class ProgramDiscoveryTest {
                 // Close playback in the test host, then select the Live TV page.
                 screen.runOnIdle { playing.value = null }
                 screen.runOnIdle { page.value = "Canlı TV" }
-                runCatching { await(hasTestTag("live-category-airing")) }.onFailure {
-                    screen.onRoot().printToLog("U2")
-                    throw it
-                }
-                screen.onNodeWithTag("live-category-airing").performSemanticsAction(SemanticsActions.RequestFocus)
-                screen.ok()
+                screen.openCategory("Şu an yayında")
                 await(hasTestTag("live-channel-${short.id}"))
                 screen.waitUntil(30_000) {
                     val first = screen.onNodeWithTag("live-channel-${short.id}").fetchSemanticsNode().boundsInRoot.top
                     val second = screen.onNodeWithTag("live-channel-${long.id}").fetchSemanticsNode().boundsInRoot.top
-                    first < second
+                    val firstLeft = screen.onNodeWithTag("live-channel-${short.id}").fetchSemanticsNode().boundsInRoot.left
+                    val secondLeft = screen.onNodeWithTag("live-channel-${long.id}").fetchSemanticsNode().boundsInRoot.left
+                    first < second || first == second && firstLeft < secondLeft
                 }
                 screen.onNode(hasSetTextAction()).performTextInput("uzun")
                 screen.waitUntil(30_000) { screen.onAllNodesWithTag("live-channel-${short.id}").fetchSemanticsNodes().isEmpty() }

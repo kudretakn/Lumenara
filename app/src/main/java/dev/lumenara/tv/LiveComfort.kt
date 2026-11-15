@@ -58,16 +58,16 @@ internal fun BoxScope.Reconnecting(retry: LiveRetry) {
 
 @Composable
 internal fun liveChannels(model: LibraryModel, source: String): List<Item> {
-    // Numbering always follows the unfiltered source's Tümü order, including in the mini guide.
+    // Numbering follows the visible source's Tümü order, including in the mini guide.
     val rows by remember(source) {
-        model.repo.library.browse(source, "LIVE", "", "", "", Int.MAX_VALUE)
+        model.repo.browse(source, "LIVE", "", "", "", Int.MAX_VALUE)
     }.collectAsStateWithLifecycle(emptyList())
     return rows
 }
 
 @Composable
 internal fun liveChannelNumbers(model: LibraryModel, source: String): Map<String, Int> {
-    val order by remember(source) { model.repo.library.liveChannelOrder(source) }
+    val order by remember(source) { model.repo.liveChannelOrder(source) }
         .collectAsStateWithLifecycle(emptyList())
     return remember(order) {
         order.groupBy { it.source }.values.flatMap { rows ->
@@ -129,12 +129,12 @@ internal fun rememberLiveNumberControl(model: LibraryModel, source: String,
         state.current = currentIdState
         state.selectPrevious = {
             scope.launch {
-                val id = model.prefs.recentLive.first().firstOrNull { currentIdState != null && it != currentIdState }
-                val target = id?.let { model.repo.library.liveByIds("", listOf(it)).first().firstOrNull() }
+                val target = model.repo.recentLive("").first()
+                    .firstOrNull { currentIdState != null && it.id != currentIdState }
                 if (target == null) state.markMissing()
                 else {
                     val rows = if (target.source == source) channels else
-                        model.repo.library.browse(target.source, "LIVE", "", "", "", Int.MAX_VALUE).first()
+                        model.repo.browse(target.source, "LIVE", "", "", "", Int.MAX_VALUE).first()
                     currentSelect(target, rows)
                 }
             }
@@ -143,7 +143,7 @@ internal fun rememberLiveNumberControl(model: LibraryModel, source: String,
             val rows = if (channels.any { it.id == target.id }) channels else listOf(target)
             scope.launch {
                 val group = if (target.source == source) rows else
-                    model.repo.library.browse(target.source, "LIVE", "", "", "", Int.MAX_VALUE).first()
+                    model.repo.browse(target.source, "LIVE", "", "", "", Int.MAX_VALUE).first()
                 currentSelect(target, group)
             }
         }

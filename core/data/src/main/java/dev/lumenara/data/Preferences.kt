@@ -15,6 +15,13 @@ class Preferences(context: Context) {
     private val store = context.applicationContext.settings
     private val vault = Vault(context.applicationContext)
 
+    val showAdult = store.data.map { it[booleanPreferencesKey("show_adult")] ?: false }
+        .distinctUntilChanged()
+
+    suspend fun setShowAdult(show: Boolean) {
+        store.edit { it[booleanPreferencesKey("show_adult")] = show }
+    }
+
     suspend fun secret(key: String): String = withContext(Dispatchers.IO) {
         text("secret_$key").first().takeIf { it.isNotEmpty() }?.let(vault::decrypt).orEmpty()
     }

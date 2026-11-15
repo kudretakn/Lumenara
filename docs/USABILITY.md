@@ -61,3 +61,93 @@ Kullanıcı kararları (14 Kasım 2026): internetten altyazı önce OpenSubtitle
 
 - **Ebeveyn kilidi:** Ayarlar'da 4 haneli PIN tanımlanır ve seçilen kategoriler kilitlenir. Kilitli kategorideki kanal ya da içerik PIN ile açılır. Doğru PIN o oturum boyunca geçerlidir. PIN, Keystore ile şifrelenerek DataStore'da tutulur.
 - **Kanal sıralama:** Canlı TV'de uzun OK işlemlerine "Yukarı taşı / Aşağı taşı / Başa al" eklenir. Özel sıra Room'da kaynak ve kanal anahtarıyla tutulur (şema 7→8, otomatik geçiş ve `MigrationTest` güncellenir).
+
+## K — Kartlı gezinme ve +18 filtresi (0.4.0)
+
+Kullanıcı kararları (15 Kasım 2026):
+- Soldaki menü tamamen kalkar. Açılış ekranı kartlardan oluşur.
+- Bugünkü Ana Sayfa'dan yalnız "Son kanal" ve "Kaldığın yerden devam et" rafları kartların altında kalır.
+- +18 içerik varsayılan olarak gizlidir ve PIN istenmez.
+- Canlı TV'de kategori seçilince kanallar kart ızgarası olarak görünür; önizleme yoktur.
+
+### 1. Açılış ekranı (Hub)
+1. Sol menü (`LibraryScreen.kt` içindeki `GlassPanel` rail, `sections`, `railFocus`, `nav-open`/`nav-closed`) kaldırılır. İçerik sol kenardan 48 dp güvenli alanla başlar.
+2. `section == "Ana Sayfa"` yerine Hub gösterilir.
+   - Üstte Lumenara logosu.
+   - Altında iki satır büyük cam kart:
+     - 1. satır: **Canlı TV**, **Filmler**, **Diziler**. Bu kartlar 3 eşit genişlikte, yaklaşık 200 dp yükseklikte olur; simge, ad ve içerik sayısı gösterir (örnek: "412 kanal", "21.304 film").
+     - 2. satır: **Listem**, **Ara**, **Ayarlar**. Daha alçak kartlar (~110 dp).
+   - Her kart `Surface(onClick)`; odakta büyür, odak halkası alır.
+   - Her kartta `testTag("hub-<Ad>")` ve `contentDescription = <Ad>` bulunur. Ayarlar kartında güncelleme varsa `stateDescription = "Güncelleme hazır"` ve nokta işareti olur.
+   - Sayılar +18 filtresine uyar.
+3. Kartların altında yalnız şu iki raf kalır (Home'daki mevcut kod yeniden kullanılır):
+   - "Son kanal": son izlenen canlı kanallar.
+   - "Kaldığın yerden devam et".
+   - Vitrin (`homeFeatures`), sinematik arka plan değişimi, diğer film rafları, koleksiyonlar ve öneriler Hub'dan kalkar. DAO fonksiyonları silinmez.
+4. Açılışta ilk odak Canlı TV kartındadır.
+5. Birden çok kaynak varsa kaynak seçici (`Pill` satırı) Hub'ın en üstünde kalır.
+6. Geri tuşu: alt ekranlardan bir üst seviyeye döner. Dönüşte odak, girilen kartta olur.
+7. **Çift geri ile çıkış** (kullanıcı kararı, 15 Kasım 2026): Hub'da ilk geri basışta altta cam bir bildirim görünür: "Çıkmak için tekrar geri'ye basın".
+   - 2 saniye içinde ikinci geri basışta uygulama tamamen kapanır: `finishAndRemoveTask()`, oynatıcılar serbest bırakılır.
+   - Süre dolarsa bildirim kaybolur ve sayaç sıfırlanır.
+   - Kaynak eklenmemiş ilk açılış ekranında da aynı davranış geçerlidir.
+
+### 2. Kategori kartları
+1. Canlı TV, Filmler ve Diziler'e girince önce kategori kartları ızgarası gelir.
+   - 4 sütun, kart yüksekliği ~120 dp.
+   - Kartta kategori adı (en çok 2 satır) ve içerik sayısı bulunur.
+   - Üstte ekran başlığı ("Canlı TV" vb.) yer alır. Üstte veya yanda sekme ya da Pill satırı yoktur.
+2. Kart sırası:
+   - Önce özel kartlar:
+     - Canlı TV: "Tüm kanallar", "Son izlenenler", "Favoriler", "Şu an yayında", "Yayın akışı" (Timeline).
+     - Filmler ve Diziler: "Tümü".
+   - Ardından sağlayıcı kategorileri gelir. Sıralama (kullanıcı kararı, 15 Kasım 2026):
+     1. Adı "TR" ile başlayanlar önce gelir. Baştaki köşeli parantez ve boşluk gibi simgeler yok sayılır; "TR"den sonra harf olmamalıdır. Örnekler: `TR | Ulusal`, `TR: Spor`, `[TR] Belgesel`, `TR-Haber`. "Trabzonspor" ve "Travel" TR sayılmaz.
+     2. Sonra diğerleri gelir.
+     3. Her iki grup kendi içinde alfabetik sıralanır (Türkçe collation).
+     - Bu kural saf Kotlin `categoryOrder` karşılaştırıcısı olarak `core/catalog`'a yazılır ve JVM testiyle doğrulanır.
+   - +18 kategorileri, gösteriliyorsa, her zaman en sonda yer alır (TR ile başlasalar bile).
+   - Boş özel kartlar gizlenir (örnek: favori yoksa "Favoriler").
+3. Kart seçilince içerik ekranı açılır; ekran başlığı kategori adıdır. Geri tuşu kategori kartlarına, odak seçilen karta döner.
+4. Test etiketleri: `testTag("category-<ad>")` ve `contentDescription = "<ad> · <sayı>"`.
+
+### 3. İçerik ekranları
+- **Canlı TV kategori içi:** Kanal kartı ızgarası.
+  - 4 sütun. Kartta logo, kanal numarası, ad ve şu anki EPG başlığı ile ilerleme bulunur; mevcut `ChannelCard` yeniden kullanılır.
+  - OK tam ekran oynatır. Uzun OK mevcut kanal işlemlerini açar.
+  - Sesli önizleme yoktur.
+  - Rakam tuşlarıyla numara girişi (`rememberLiveNumberControl`) korunur.
+  - Oynatmadan dönünce odak aynı kanala gelir (`returnToChannel`).
+  - "Devamını göster" sayfalama korunur. Kanal araması ekranın üstündeki küçük bir "Kanal ara" alanıyla yapılır.
+- **Filmler/Diziler kategori içi:** Mevcut 6 sütunlu afiş ızgarası.
+  - "Filtrele" düğmesi başlığın sağında kalır; filtre paneli mevcut haliyle açılır.
+  - Kategori Pill satırı kalkar.
+- **Listem:** Önce iki kart: "Favoriler" ve "İzleme listem". Seçince mevcut ızgara açılır.
+- **Ara** ve **Ayarlar** mevcut ekranlardır; yalnız sol menüye bağımlılıkları kaldırılır.
+
+### 4. +18 filtresi
+1. `core/catalog` içine saf Kotlin `fun isAdultCategory(name: String): Boolean` eklenir.
+   - `searchable()` ile normalize edilir.
+   - Kelime/simge eşleşmesi: "adult", "adults", "for adults", "xxx", "18+", "+18", "(18)", "yetiskin", "erotik", "porn", "sex".
+   - "Sextant" gibi yanlış eşleşmeleri önlemek için kelime sınırı kullanılır.
+   - JVM testi yazılır: olumlu, olumsuz ve Türkçe karakterli örnekler.
+2. Ayarlar → Oynatıcı bölümünün altına "+18 içerikleri göster · Kapalı/Açık" düğmesi eklenir.
+   - DataStore anahtarı `show_adult`, varsayılan `false`.
+   - Değişiklik anında uygulanır.
+3. Gizliyken +18 kategorisindeki öğeler hiçbir yerde görünmez: kategori kartları, kanal/afiş ızgaraları, Hub sayıları ve rafları, arama, "Şu an yayında", mini rehber, numara girişi ve kanal sırası, "Son kanal".
+   - Uygulama yolu: `Repository` +18 kategori adlarını `categories`/`liveCategoryCounts` üzerinden Kotlin'de hesaplar ve tercihle birleştirip `hidden: List<String>` akışı üretir.
+   - Liste döndüren DAO sorgularına `AND category NOT IN (:hidden)` eklenir.
+   - Boş liste geçerlidir. Şema değişmez.
+4. Açıkken +18 kategorileri kategori kartlarında en sonda durur. Raflarda ve aramada normal sırada görünür.
+
+### 5. Testler
+- **JVM:** `isAdultCategory` testleri.
+- **Cihaz testleri:**
+  - Sol menüye dayanan bütün testler Hub kartları ve geri tuşuyla güncellenir: `RemoteNavigationTest`, `CinemaJourneyTest`, `LibraryJourneyTest`, `SeriesJourneyTest`, `AudioSubtitleTest`, `LiveComfortTest`, `FullscreenTest`, `ProgramDiscoveryTest`.
+  - Kaldırılan vitrin, raf ve koleksiyon beklentileri silinir; kategori kartı → ızgara → oynat akışına çevrilir.
+  - `RemoteKeys.kt`'ye `openHubCard(name)` ve `openCategory(name)` yardımcıları eklenir.
+- **Yeni cihaz testi `HubAndAdultFilterTest`:**
+  - Sahte M3U'da "Haber", "Spor" ve "For Adults" canlı kategorileri ile "Aksiyon" ve "XXX" film kategorileri bulunur.
+  - Varsayılan durumda +18 kartları ve kanalları görünmez; Hub sayıları buna göre hesaplanır.
+  - Ayarlardan açınca +18 kartları en sonda görünür.
+  - Kumandayla Hub → Canlı TV → Haber → kanal → oynat → geri akışında odak aynı kanala döner.

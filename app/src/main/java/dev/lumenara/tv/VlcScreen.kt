@@ -27,7 +27,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.takeWhile
 import dev.lumenara.catalog.*
 import dev.lumenara.vlc.VlcInput
 import kotlinx.coroutines.*
@@ -55,6 +54,7 @@ internal fun VlcScreen(
     var panel by remember { mutableStateOf(false) }
     var position by remember(item.id) { mutableLongStateOf(initial) }
     val fullscreen = rememberFullscreenState(item)
+    val playbackMutex = remember { Mutex() }
     fun move(delta: Int) {
         val rows = if (item.kind == "EPISODE") group.seriesOrder() else group
         val target = if (item.kind == "EPISODE" && delta == 1) rows.nextItem(item)
@@ -68,9 +68,10 @@ internal fun VlcScreen(
     val context = LocalContext.current
     val composeView = LocalView.current
     val focus = remember { FocusRequester() }
-    var layout by remember { mutableStateOf<VLCVideoLayout?>(null) }
+    // Publishing the view from AndroidView.factory changes the playback effect's
+    // key from null to view, cancelling playback that may already have started.
+    val layout = remember(context) { VLCVideoLayout(context) }
     var player by remember { mutableStateOf<MediaPlayer?>(null) }
-    val playbackMutex = remember { Mutex() }
     var message by remember { mutableStateOf("") }
     var subtitleNotice by remember(item.id) { mutableStateOf("") }
     val subtitleSearch = rememberSubtitleSearchState(model, item, status = { subtitleNotice = it }) {
@@ -88,23 +89,31 @@ internal fun VlcScreen(
         delayMs = model.prefs.text("delay_$preferenceKey", "0").first().toLongOrNull() ?: 0
     }
     var nativePlaying by remember(item.id) { mutableStateOf(false) }
+    var mediaGeneration by remember { mutableIntStateOf(0) }
     val currentSubtitle by rememberUpdatedState(subtitle)
-    var activeSubtitle by remember(player) { mutableStateOf(false) }
-    var attached by remember(player, subtitle?.uri) { mutableStateOf<android.net.Uri?>(null) }
-    var slaveUri by remember(player, subtitle?.uri) { mutableStateOf<android.net.Uri?>(null) }
-    var slaveAttempts by remember(player, subtitle?.uri) { mutableIntStateOf(0) }
-    var tracksBeforeSlave by remember(player, subtitle?.uri) { mutableStateOf(emptySet<Int>()) }
-    var slaveTrack by remember(player, subtitle?.uri) { mutableStateOf<Int?>(null) }
-    var awaitingSlaveSelection by remember(player, subtitle?.uri) { mutableStateOf(false) }
-    var slaveRetryEvent by remember(player) { mutableIntStateOf(0) }
-    LaunchedEffect(player, subtitle?.uri) {
-        activeSubtitle = false
-        if (player == null) return@LaunchedEffect
-        val configuration = subtitle
-        if (configuration == null) {
-            player?.setSpuTrack(-1)
+    var activeSubtitle by remember(player, mediaGeneration, subtitle?.uri) { mutableStateOf(false) }
+    var attached by remember(player, mediaGeneration, subtitle?.uri) { mutableStateOf<android.net.Uri?>(null) }
+    // Resolution belongs to the subtitle, not the asynchronous player lifetime.
+    // Keep a copied content URI alive across input/player recreation.
+    var slaveUri by remember(subtitle?.uri, subtitle?.mimeType) { mutableStateOf<android.net.Uri?>(null) }
+    var slaveAttempts by remember(player, mediaGeneration, subtitle?.uri) { mutableIntStateOf(0) }
+    var tracksBeforeSlave by remember(player, mediaGeneration, subtitle?.uri) { mutableStateOf(emptySet<Int>()) }
+    var slaveTrack by remember(player, mediaGeneration, subtitle?.uri) { mutableStateOf<Int?>(null) }
+    var awaitingSlaveSelection by remember(player, mediaGeneration, subtitle?.uri) { mutableStateOf(false) }
+    var slaveAddedAt by remember(player, mediaGeneration, subtitle?.uri) { mutableLongStateOf(0) }
+    // Capture the same player used as the effect key. A coroutine must not read
+    // a newly published player while still holding the previous input's state.
+    val subtitlePlayer = player
+    val inputGeneration = mediaGeneration
+    LaunchedEffect(subtitlePlayer, subtitle?.uri) {
+        if (subtitle == null) subtitlePlayer?.let { if (it.spuTrack != -1) it.setSpuTrack(-1) }
+    }
+    LaunchedEffect(context, subtitle?.uri, subtitle?.mimeType) {
+        val configuration = subtitle ?: run {
+            android.util.Log.d("LumenaraVlc", "subtitle resolve skipped: no subtitle")
             return@LaunchedEffect
         }
+        android.util.Log.d("LumenaraVlc", "subtitle resolve start scheme=${configuration.uri.scheme}")
         var cached: java.io.File? = null
         try {
             slaveUri = if (configuration.uri.scheme == "content") withContext(Dispatchers.IO) {
@@ -121,24 +130,40 @@ internal fun VlcScreen(
                 }
                 android.net.Uri.fromFile(file)
             } else configuration.uri
+            android.util.Log.d("LumenaraVlc", "subtitle resolve ready scheme=${slaveUri?.scheme}")
             awaitCancellation()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            android.util.Log.d("LumenaraVlc", "subtitle resolve failed scheme=${configuration.uri.scheme}")
+            android.util.Log.d("LumenaraVlc", "subtitle resolve failed scheme=${configuration.uri.scheme} cause=${e.javaClass.simpleName}")
         } finally {
+            android.util.Log.d("LumenaraVlc", "subtitle resolve disposed cached=${cached != null}")
             cached?.delete()
         }
     }
     fun refreshSlave(p: MediaPlayer) {
+        if (p !== player) return
         val tracks = p.spuTracks?.toList().orEmpty()
         textTracks = tracks
+        // addSlave belongs to the current input, not the MediaPlayer. An input
+        // can lose its slave without replacing the Java player or subtitle URI.
+        if (slaveTrack != null && tracks.none { it.id == slaveTrack }) {
+            android.util.Log.d("LumenaraVlc", "subtitle track lost id=$slaveTrack; reattach")
+            attached = null
+            slaveTrack = null
+            tracksBeforeSlave = emptySet()
+            slaveAttempts = 0
+            awaitingSlaveSelection = false
+        }
         if (attached != null) {
             if (slaveTrack == null) {
                 slaveTrack = tracks.lastOrNull { it.id >= 0 && it.id !in tracksBeforeSlave }?.id
             }
             slaveTrack?.let { id ->
-                if (awaitingSlaveSelection && p.spuTrack != id) p.setSpuTrack(id)
+                if (awaitingSlaveSelection && p.spuTrack != id) {
+                    val selected = p.setSpuTrack(id)
+                    android.util.Log.d("LumenaraVlc", "subtitle select id=$id result=$selected")
+                }
                 if (p.spuTrack == id) awaitingSlaveSelection = false
             }
         }
@@ -147,37 +172,66 @@ internal fun VlcScreen(
         android.util.Log.d("LumenaraVlc", "subtitle spuCount=${tracks.count { it.id >= 0 }} selected=$selected")
     }
     val refreshCurrentSlave by rememberUpdatedState<(MediaPlayer) -> Unit> { refreshSlave(it) }
-    LaunchedEffect(player, subtitle?.uri, slaveUri, nativePlaying, slaveRetryEvent) {
-        val p = player ?: return@LaunchedEffect
-        val uri = slaveUri ?: return@LaunchedEffect
-        if (nativePlaying && attached == null && slaveAttempts < 3) {
-            if (slaveAttempts == 0) tracksBeforeSlave = p.spuTracks?.map { it.id }?.toSet().orEmpty()
-            slaveAttempts++
-            val added = p.addSlave(org.videolan.libvlc.interfaces.IMedia.Slave.Type.Subtitle, uri, true)
-            android.util.Log.d("LumenaraVlc", "addSlave result=$added scheme=${uri.scheme} attempt=$slaveAttempts")
-            if (added) {
-                attached = subtitle?.uri
-                awaitingSlaveSelection = true
+    val resolvedSlaveUri = slaveUri
+    LaunchedEffect(subtitlePlayer, inputGeneration, subtitle?.uri, resolvedSlaveUri, nativePlaying) {
+        val p = subtitlePlayer
+        val uri = resolvedSlaveUri
+        android.util.Log.d("LumenaraVlc", "subtitle attach effect player=${p != null} generation=$mediaGeneration subtitle=${subtitle != null} resolved=${uri != null} eventPlaying=$nativePlaying")
+        if (p == null || uri == null) return@LaunchedEffect
+        var decision = ""
+        // The playback effect owns playbackMutex until disposal. Never acquire
+        // it here: attachment must run while that input is still playing.
+        wallClockTicks(250).collect { now ->
+            if (p !== player || inputGeneration != mediaGeneration) return@collect
+            refreshCurrentSlave(p)
+            // A successful addSlave only queues the request; confirm an actual ES.
+            if (attached != null && slaveTrack == null && now - slaveAddedAt >= 2000) {
+                android.util.Log.d("LumenaraVlc", "subtitle attach timed out waiting for track attempt=$slaveAttempts")
+                attached = null
+                awaitingSlaveSelection = false
             }
-            refreshSlave(p)
+            // Playing can precede effect startup or be followed by Opening.
+            // Query this input instead of relying on the last delivered event.
+            val playing = p.isPlaying
+            val nextDecision = when {
+                !playing -> "waiting for native playback (eventPlaying=$nativePlaying)"
+                attached != null -> "attached track=$slaveTrack active=$activeSubtitle"
+                slaveAttempts >= 3 -> "attempts exhausted"
+                else -> "adding slave"
+            }
+            if (decision != nextDecision) {
+                decision = nextDecision
+                android.util.Log.d("LumenaraVlc", "subtitle attach decision=$decision generation=$mediaGeneration")
+            }
+            if (playing && attached == null && slaveAttempts < 3) {
+                tracksBeforeSlave = p.spuTracks?.map { it.id }?.toSet().orEmpty()
+                slaveAttempts++
+                val added = p.addSlave(org.videolan.libvlc.interfaces.IMedia.Slave.Type.Subtitle, uri, true)
+                android.util.Log.d("LumenaraVlc", "addSlave result=$added scheme=${uri.scheme} attempt=$slaveAttempts")
+                if (added) {
+                    slaveAddedAt = now
+                    attached = subtitle?.uri
+                    awaitingSlaveSelection = true
+                }
+                refreshCurrentSlave(p)
+            }
         }
     }
-    LaunchedEffect(player, attached) {
-        val p = player ?: return@LaunchedEffect
-        if (attached == null) return@LaunchedEffect
-        val until = System.currentTimeMillis() + 10_000
-        wallClockTicks(250).takeWhile { it <= until }.collect { refreshSlave(p) }
-    }
-    LaunchedEffect(player, subtitle?.uri) {
-        val p = player ?: return@LaunchedEffect
+    LaunchedEffect(subtitlePlayer, inputGeneration, subtitle?.uri) {
+        val p = subtitlePlayer ?: return@LaunchedEffect
         val key = model.repo.preferenceKey(item)
-        var signature = ""
+        var audioSignature = ""
+        var textSignature = ""
         wallClockTicks(500).collect {
+            if (p !== player || inputGeneration != mediaGeneration) return@collect
             val audio = p.audioTracks?.toList().orEmpty()
             val text = p.spuTracks?.toList().orEmpty()
-            val current = audio.joinToString { "${it.id}:${it.name}" } + text.joinToString { "${it.id}:${it.name}" }
-            if (current != signature) {
-                signature = current
+            val currentAudio = audio.joinToString { "${it.id}:${it.name}" }
+            val currentText = text.joinToString { "${it.id}:${it.name}" }
+            val audioChanged = currentAudio != audioSignature
+            if (audioChanged || currentText != textSignature) {
+                audioSignature = currentAudio
+                textSignature = currentText
                 audioTracks = audio
                 textTracks = text
                 val media = p.media
@@ -192,22 +246,25 @@ internal fun VlcScreen(
                     .minByOrNull { trackPreferenceRank(savedAudio, languages[it.id], it.id.toString()) }
                     ?: audio.firstOrNull { isTurkish(languages[it.id]) || it.name.contains("Turkish", true) || it.name.contains("Türkçe", true) }
                     ?: audio.firstOrNull { it.id >= 0 }
-                chosenAudio?.let { p.setAudioTrack(it.id) }
+                // A subtitle ES change must not reapply the audio default.
+                if (audioChanged) chosenAudio?.let { if (p.audioTrack != it.id) p.setAudioTrack(it.id) }
                 val dubbed = productionName(item.title, item.year).version == AudioVersion.DUBBED ||
                     chosenAudio?.let { isTurkish(languages[it.id]) || it.name.contains("Turkish", true) || it.name.contains("Türkçe", true) } == true
                 // An explicitly attached subtitle takes precedence over automatic language defaults.
                 if (currentSubtitle == null) {
-                    if (subtitlesDisabled(savedText, turkishAudio = dubbed, dubbed = false)) p.setSpuTrack(-1)
-                    else {
+                    if (subtitlesDisabled(savedText, turkishAudio = dubbed, dubbed = false)) {
+                        if (p.spuTrack != -1) p.setSpuTrack(-1)
+                    } else {
                         val chosenText = text.filter { trackPreferenceRank(savedText, languages[it.id], it.id.toString()) < 2 }
                             .minByOrNull { trackPreferenceRank(savedText, languages[it.id], it.id.toString()) }
                             ?: text.firstOrNull { isTurkish(languages[it.id]) || it.name.contains("Türkçe", true) || it.name.contains("Turkish", true) }
-                        p.setSpuTrack(chosenText?.id ?: -1)
+                        val id = chosenText?.id ?: -1
+                        if (p.spuTrack != id) p.setSpuTrack(id)
                     }
                 }
             }
             activeSubtitle = attached != null && slaveTrack != null && p.spuTrack == slaveTrack
-            p.setSpuDelay(delayMs * 1000)
+            if (nativePlaying && p.spuDelay != delayMs * 1000) p.setSpuDelay(delayMs * 1000)
         }
     }
     LaunchedEffect(subtitleSearch.open, layout, panel, fullscreen.guide, fullscreen.finished, player, retry.generation, retry.reconnecting) {
@@ -215,21 +272,21 @@ internal fun VlcScreen(
             if (!composeView.hasFocus()) composeView.requestFocus()
             val initialGranted = focus.requestFocus()
             android.util.Log.d("LumenaraFocus", "VLC trigger=layout/panel/fullscreen/retry initialGranted=$initialGranted viewHasFocus=${composeView.hasFocus()}")
-            if (layout != null) {
-                // Reclaim Compose focus after native reattachment and reconnect badge removal.
-                withFrameNanos { }
-                if (!composeView.hasFocus()) composeView.requestFocus()
-                val granted = focus.requestFocus()
-                android.util.Log.d("LumenaraFocus", "VLC trigger=reattach/retry granted=$granted viewHasFocus=${composeView.hasFocus()}")
-            }
+            // Reclaim Compose focus after native reattachment and reconnect badge removal.
+            withFrameNanos { }
+            if (!composeView.hasFocus()) composeView.requestFocus()
+            val granted = focus.requestFocus()
+            android.util.Log.d("LumenaraFocus", "VLC trigger=reattach/retry granted=$granted viewHasFocus=${composeView.hasFocus()}")
         }
     }
     LaunchedEffect(layout, item.id, retry.generation) {
-        val surface = layout ?: return@LaunchedEffect
+        val surface = layout
         nativePlaying = false
         message = ""
         val playbackScope = this
+        android.util.Log.d("LumenaraVlc", "playback waiting for mutex retry=${retry.generation}")
         playbackMutex.withLock {
+            android.util.Log.d("LumenaraVlc", "playback acquired mutex")
             var input: VlcInput? = null
             var library: LibVLC? = null
             var engine: MediaPlayer? = null
@@ -263,15 +320,20 @@ internal fun VlcScreen(
                 val p = checkNotNull(engine)
                 var recorded = false
                 withContext(Dispatchers.Main.immediate) {
-                    player = p
-                    p.attachViews(surface, null, true, false)
                     // Listener registration creates a Handler; UI writes stay on Main.
+                    // Install it before attaching views, which can start playback.
                     p.setEventListener { event ->
                         playbackScope.launch(Dispatchers.Main.immediate) {
+                            if (p !== player) return@launch
                             when (event.type) {
+                                MediaPlayer.Event.Opening -> {
+                                    nativePlaying = false
+                                    mediaGeneration++
+                                    android.util.Log.d("LumenaraVlc", "playback Opening generation=$mediaGeneration")
+                                }
                                 MediaPlayer.Event.Playing -> {
                                     nativePlaying = true
-                                    slaveRetryEvent++
+                                    android.util.Log.d("LumenaraVlc", "playback Playing generation=$mediaGeneration")
                                     retry.playing()
                                     message = ""
                                     if (!recorded) {
@@ -280,29 +342,39 @@ internal fun VlcScreen(
                                     }
                                 }
                                 MediaPlayer.Event.Vout -> {
-                                    slaveRetryEvent++
                                     refreshCurrentSlave(p)
                                 }
-                                MediaPlayer.Event.ESAdded, MediaPlayer.Event.ESSelected -> {
+                                MediaPlayer.Event.ESAdded, MediaPlayer.Event.ESDeleted, MediaPlayer.Event.ESSelected -> {
                                     refreshCurrentSlave(p)
                                 }
                                 MediaPlayer.Event.EncounteredError -> {
+                                    nativePlaying = false
                                     if (item.kind != "LIVE" || !retry.failed()) {
                                         message = "VLC bu yayını oynatamadı."
                                         panel = true
                                     }
                                 }
                                 MediaPlayer.Event.EndReached -> {
+                                    nativePlaying = false
                                     completed = true
                                     model.progress(item, p.length, p.length)
                                     if (item.kind == "EPISODE")
                                         fullscreen.finished = group.nextItem(item) != null
                                 }
+                                MediaPlayer.Event.Stopped -> {
+                                    nativePlaying = false
+                                    android.util.Log.d("LumenaraVlc", "playback Stopped generation=$mediaGeneration")
+                                }
                             }
                         }
                     }
+                    player = p
+                    p.attachViews(surface, null, true, false)
+                    // libVLC may also call play() from its surface-created callback.
+                    // Serialize that callback and the initial request on Main.
+                    p.play()
+                    android.util.Log.d("LumenaraVlc", "playback play requested generation=$mediaGeneration")
                 }
-                withContext(Dispatchers.IO) { p.play() }
                 wallClockTicks(5000).collect {
                     if (p.isPlaying) model.progress(item, p.time, p.length)
                 }
@@ -318,8 +390,11 @@ internal fun VlcScreen(
                 withContext(NonCancellable) {
                     val p = engine
                     withContext(Dispatchers.Main.immediate) {
-                        player = null
-                        nativePlaying = false
+                        android.util.Log.d("LumenaraVlc", "playback cleanup current=${player === p} generation=$mediaGeneration")
+                        if (player === p) {
+                            player = null
+                            nativePlaying = false
+                        }
                         p?.setEventListener(null)
                         p?.detachViews()
                     }
@@ -350,6 +425,7 @@ internal fun VlcScreen(
         Modifier.fillMaxSize()
             .background(androidx.compose.ui.graphics.Color.Black)
             .focusRequester(focus)
+            .testTag("vlc-player")
             .semantics {
                 contentDescription = "Tam ekran oynatıcı"
                 if (activeSubtitle) stateDescription = "İndirilen altyazı etkin"
@@ -371,12 +447,12 @@ internal fun VlcScreen(
     ) {
         AndroidView(
             factory = {
-                VLCVideoLayout(it).apply {
+                layout.apply {
                     // VLC adds native SurfaceViews after attachViews; keep remote focus in Compose.
                     descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS
                     isFocusable = false
                     isFocusableInTouchMode = false
-                }.also { view -> layout = view }
+                }
             },
             update = {
                 it.descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS
@@ -421,7 +497,7 @@ internal fun VlcScreen(
                         }
                         if (snapshot != null)
                             model.repo.updateMark(item.id) { it.copy(position = snapshot.first, duration = snapshot.second) }
-                        val rows = if (version.kind == "EPISODE") model.repo.library.episodeSnapshot(version.parent).seriesOrder() else group
+                        val rows = if (version.kind == "EPISODE") model.repo.episodeSnapshot(version.parent).seriesOrder() else group
                         select(version, rows)
                     }
                 } }

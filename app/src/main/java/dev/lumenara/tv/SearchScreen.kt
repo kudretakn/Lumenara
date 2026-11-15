@@ -12,6 +12,9 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusRestorer
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -35,6 +38,17 @@ internal fun SearchScreen(
     open: (Item) -> Unit,
     play: (Item, List<Item>) -> Unit,
 ) {
+    var lastShelf by rememberSaveable(source) { mutableStateOf<String?>(null) }
+    var restoring by remember { mutableStateOf(true) }
+    val entryFocus = remember { FocusRequester() }
+    val resultsState = rememberLazyListState()
+    LaunchedEffect(Unit) {
+        if (lastShelf == null) {
+            withFrameNanos { }
+            entryFocus.requestFocus()
+            restoring = false
+        }
+    }
     var query by rememberSaveable { mutableStateOf("") }
     var limit by rememberSaveable(source, query) { mutableIntStateOf(80) }
     val voice = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
@@ -59,7 +73,7 @@ internal fun SearchScreen(
     }
     val shelves = listOf("Kanallar" to "LIVE", "Filmler" to "MOVIE", "Diziler" to "SERIES").map { (title, kind) ->
         val rows by remember(source, kind, query, limit) {
-            model.repo.library.browse(source, kind, "", searchable(query), "", limit)
+            model.repo.browse(source, kind, "", searchable(query), "", limit)
         }.collectAsStateWithLifecycle(emptyList())
         title to rows
     }
@@ -67,33 +81,44 @@ internal fun SearchScreen(
     LaunchedEffect(Unit) { wallClockTicks(30_000).collect { now = it } }
     val programs by remember(source, query, now) {
         if (query.isBlank()) flowOf(emptyList())
-        else model.repo.guide.searchPrograms(source, searchable(query), now - 7 * 86_400_000L, now)
+        else model.repo.searchPrograms(source, searchable(query), now - 7 * 86_400_000L, now)
             .flatMapLatest { hits ->
                 val ids = hits.map { it.itemId }.distinct()
                 if (ids.isEmpty()) flowOf(emptyList())
-                else model.repo.library.liveByIds(source, ids).map { items ->
+                else model.repo.liveByIds(source, ids).map { items ->
                     val byId = items.associateBy { it.id }
                     hits.mapNotNull { hit -> byId[hit.itemId]?.let { hit to it } }
                 }
             }
     }.collectAsStateWithLifecycle(emptyList())
+    LaunchedEffect(shelves, programs) {
+        if (restoring && lastShelf != null) {
+            val visible = shelves.filter { it.second.isNotEmpty() }.map { it.first } +
+                if (programs.isNotEmpty()) listOf("Programlar") else emptyList()
+            val index = visible.indexOf(lastShelf)
+            if (index >= 0) {
+                resultsState.scrollToItem(index)
+                restoring = false
+            } else if (visible.isEmpty()) entryFocus.requestFocus()
+        }
+    }
     val notice by model.notice.collectAsStateWithLifecycle()
     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-        Column(Modifier.width(240.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Column(Modifier.width(240.dp).focusRequester(entryFocus).focusGroup(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Field("Kanal adı, kategori veya yayın kimliği", query, { query = it })
             Button(onClick = { listen() }) { Text("Sesle ara") }
             if (notice.isNotEmpty()) Text(notice, color = Ink.accent)
         }
-        LazyColumn(Modifier.weight(1f).testTag("search-results").focusRestorer().focusGroup(),
+        LazyColumn(Modifier.weight(1f).testTag("search-results").focusRestorer().focusGroup(), state = resultsState,
             contentPadding = PaddingValues(8.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
             if (programs.isEmpty() && shelves.all { it.second.isEmpty() }) item { Text("Eşleşen içerik yok.", color = Ink.muted) }
             items(shelves.filter { it.second.isNotEmpty() }, key = { it.first }) { (title, rows) ->
-                if (title == "Kanallar") ChannelShelf(model, title, rows, play, {})
+                if (title == "Kanallar") ChannelShelf(model, title, rows, play, { lastShelf = title })
                 else Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
                     Text(title, fontSize = 19.sp)
                     LazyRow(Modifier.testTag("search-shelf-$title").focusRestorer().focusGroup(),
                         contentPadding = PaddingValues(8.dp), horizontalArrangement = Arrangement.spacedBy(15.dp)) {
-                        items(rows, key = { it.id }) { MovieCard(model, it, true, open) }
+                        items(rows, key = { it.id }) { MovieCard(model, it, true, open, { lastShelf = title }) }
                     }
                 }
             }
@@ -103,7 +128,7 @@ internal fun SearchScreen(
                     LazyRow(Modifier.testTag("search-shelf-Programlar").focusRestorer().focusGroup(),
                         contentPadding = PaddingValues(8.dp), horizontalArrangement = Arrangement.spacedBy(15.dp)) {
                         items(programs, key = { (hit, _) -> "${hit.itemId}:${hit.slot.feed}:${hit.slot.channel}:${hit.slot.start}" }) { (hit, channel) ->
-                            ProgramCard(hit, channel, now) {
+                            ProgramCard(hit, channel, now, { lastShelf = "Programlar" }) {
                                 val slot = hit.slot
                                 val atClick = System.currentTimeMillis()
                                 when {
@@ -129,7 +154,12 @@ internal fun SearchScreen(
 }
 
 @Composable
-private fun ProgramCard(hit: ProgramHit, channel: Item, now: Long, click: () -> Unit) {
+private fun ProgramCard(hit: ProgramHit, channel: Item, now: Long, focus: () -> Unit, click: () -> Unit) {
+    var restoreFocus by rememberSaveable(channel.id, hit.slot.start) { mutableStateOf(false) }
+    val requester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        if (restoreFocus) { withFrameNanos { }; requester.requestFocus(); restoreFocus = false }
+    }
     val slot = hit.slot
     val zone = ZoneId.systemDefault()
     val day = Instant.ofEpochMilli(slot.start).atZone(zone).toLocalDate()
@@ -141,7 +171,8 @@ private fun ProgramCard(hit: ProgramHit, channel: Item, now: Long, click: () -> 
         else -> day.format(DateTimeFormatter.ofPattern("dd.MM"))
     }
     val time = DateTimeFormatter.ofPattern("HH:mm").withZone(zone)
-    FocusCard(click, Modifier.width(260.dp).testTag("search-program-${channel.id}-${slot.start}")) {
+    FocusCard({ restoreFocus = true; click() }, Modifier.width(260.dp).focusRequester(requester)
+        .onFocusChanged { if (it.isFocused) focus() }.testTag("search-program-${channel.id}-${slot.start}")) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(slot.title, fontSize = 18.sp, maxLines = 2)
             Text(channel.title, color = Ink.muted, fontSize = 15.sp)

@@ -40,8 +40,6 @@ class AudioSubtitleTest {
     private fun optionsScrollTo(matcher: SemanticsMatcher) {
         screen.onNodeWithTag("player-options").performScrollToNode(matcher)
     }
-    private fun navigation(label: String) = hasContentDescription(label) and
-        hasAnyAncestor(hasTestTag("nav-open") or hasTestTag("nav-closed"))
 
     @Test fun xtreamVersionsShareStateAndSubtitleSearchAttachesAndReusesCache() {
         val test = InstrumentationRegistry.getInstrumentation()
@@ -121,7 +119,8 @@ class AudioSubtitleTest {
                     repo.updateMark(movie.id) { it.copy(favorite = true, listed = true, position = 500, duration = 120000, updated = 1) }
                     versions.forEach { assertTrue(repo.library.mark(it.id)!!.favorite); assertTrue(repo.library.mark(it.id)!!.listed) }
                 }
-                select(navigation("Filmler"))
+                screen.openHubCard("Filmler")
+                screen.openCategory("Tümü")
                 val card = hasContentDescription(movieTitle) and hasAnyAncestor(hasTestTag("poster-grid"))
                 waitFor(card)
                 screen.onAllNodes(card).assertCountEquals(1)

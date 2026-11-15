@@ -1,5 +1,16 @@
 # Lumenara sürüm kaydı
 
+## 0.4.0 · 15 Kasım 2026
+
+- Sol menü yerine altı cam kartlı açılış ekranı; son kanal ve devam et rafları.
+- Canlı TV, film ve dizilerde TR öncelikli kategori kartları; önizlemesiz kanal ızgarası ve geri dönüşte odak koruma.
+- Ana ekranda ve ilk kurulumda iki saniye içinde çift geriyle çıkış.
+- +18 kategorileri varsayılan gizli; Ayarlar’dan anında açılıp kapanan filtre arama, rehber, kanal numaraları ve listelerde de geçerli.
+- Hub ve +18 testleri eklendi; kumanda yolculukları kartlı gezinmeye uyarlandı.
+- Sesi çözülemeyen yayınlar (ör. MP2/AC-3 sesli canlı kanallar) artık sessiz oynamıyor; Media3 otomatik olarak VLC'ye geçiyor.
+- VLC'ye geçince indirilen altyazının kaybolması düzeltildi.
+- Açılıştan hemen sonra eklenen kaynağın kurulum ekranında görünmemesi düzeltildi.
+
 ## 0.3.2 · 15 Kasım 2026
 
 - Büyük kataloglarda (~40.000 içerik) Ana Sayfa, Filmler ve Diziler boş kalıyor, uygulama donuyordu. Film/dizi sorguları sürüm birleştirmeden önce bütün tabloyu okuyordu. Sonuç 2 MB'lık CursorWindow'a sığmayınca sorgu defalarca yeniden çalışıyor, Mi Box 4'te işlemcinin %340'ı harcanıyordu. Raflar, vitrin, öneriler ve listeler artık veritabanı düzeyinde sınırlanıyor; dublaj/altyazılı sürümleri birleştirmek için yeterli pay bırakılıyor.

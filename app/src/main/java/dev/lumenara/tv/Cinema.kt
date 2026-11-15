@@ -232,7 +232,7 @@ internal fun MovieCard(
     val requester = remember { FocusRequester() }
     LaunchedEffect(Unit) { if (restoreFocus) { withFrameNanos { }; requester.requestFocus(); restoreFocus = false } }
     val episodes by remember(item.id, progress) {
-        if (progress && item.kind == "SERIES") model.repo.library.episodes(item.id)
+        if (progress && item.kind == "SERIES") model.repo.episodes(item.id)
         else kotlinx.coroutines.flow.flowOf(emptyList<Item>())
     }.collectAsStateWithLifecycle(emptyList())
     val marks by remember(item.id, progress) {

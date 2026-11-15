@@ -36,6 +36,7 @@ class FullscreenTest {
         val device = UiDevice.getInstance(test)
         val repo = Repository.get(context)
         val prefs = Preferences(context)
+        val previousAdult = runBlocking { prefs.showAdult.first() }
         val previousEngine = runBlocking { prefs.text("engine", "Media3").first() }
         val previousFallback = runBlocking { prefs.text("fallback", "Açık").first() }
         val previousRecent = runBlocking { prefs.text("recent_live").first() }
@@ -70,6 +71,8 @@ class FullscreenTest {
                             appendLine("#EXTINF:-1 group-title=\"Test\",Kanal %05d".format(it))
                             appendLine(server.url("/live/$it.ts"))
                         }
+                        appendLine("#EXTINF:-1 group-title=\"For Adults\",Gizli Kanal")
+                        appendLine(server.url("/live/adult.ts"))
                     })
                     if (request.path?.endsWith(".ts") == true) return MockResponse()
                         .setHeader("Content-Type", "video/mp2t")
@@ -80,11 +83,12 @@ class FullscreenTest {
             server.start()
             try {
                 val channels = runBlocking {
+                    prefs.setShowAdult(false)
                     prefs.set("engine", engine)
                     prefs.set("fallback", "Kapalı")
                     repo.add(name, SourceSpec(server.url("/list").toString(), true))
                     val source = repo.library.snapshot().single { it.name == name }
-                    repo.library.browse(source.id, "LIVE", "", "", "", Int.MAX_VALUE).first()
+                    repo.browse(source.id, "LIVE", "", "", "", Int.MAX_VALUE).first()
                 }
                 assertEquals(count, channels.size)
                 screen.runOnUiThread {
@@ -106,6 +110,8 @@ class FullscreenTest {
                 await(hasContentDescription("Tam ekran oynatıcı") and isFocused())
                 screen.dpad(Key.DirectionLeft)
                 await(hasTestTag("mini-guide"))
+                screen.onNodeWithContentDescription("For Adults").assertDoesNotExist()
+                screen.onNodeWithContentDescription("Gizli Kanal").assertDoesNotExist()
                 await(hasTestTag("live-channel-${channels[0].id}") and isFocused())
                 val guideBounds = screen.onNodeWithTag("mini-guide").fetchSemanticsNode().boundsInRoot
                 val hostBounds = screen.onNodeWithTag("fullscreen-test-host").fetchSemanticsNode().boundsInRoot
@@ -160,6 +166,7 @@ class FullscreenTest {
             } finally {
                 screen.runOnUiThread { screen.activity.setContent {} }
                 runBlocking {
+                    prefs.setShowAdult(previousAdult)
                     prefs.set("engine", previousEngine)
                     prefs.set("fallback", previousFallback)
                     prefs.set("recent_live", previousRecent)
