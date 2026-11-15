@@ -18,7 +18,12 @@ class RemoteNavigationTest {
 
     @Test fun setupBackAndSettingsSourceNavigation() {
         fun waitFor(matcher: SemanticsMatcher) {
-            screen.waitUntil(30_000) { screen.onAllNodes(matcher).fetchSemanticsNodes().isNotEmpty() }
+            try {
+                screen.waitUntil(30_000) { screen.onAllNodes(matcher).fetchSemanticsNodes().isNotEmpty() }
+            } catch (failure: Throwable) {
+                screen.onRoot().printToLog("HUB")
+                throw failure
+            }
         }
         val repo = Repository.get(InstrumentationRegistry.getInstrumentation().targetContext)
         val name = "Test · Kumanda"
@@ -30,11 +35,16 @@ class RemoteNavigationTest {
                     server.enqueue(MockResponse().setBody("#EXTM3U\n#EXTINF:-1 group-title=\"Haber\",Kumanda Haber\n${server.url("/live.ts")}\n"))
                     repo.add(name, SourceSpec(server.url("/list").toString(), true))
                 }
-                screen.waitUntil(30_000) {
-                    runCatching {
-                        screen.onNodeWithTag("source-setup").performScrollToNode(hasText(name))
-                        screen.onAllNodesWithText(name).fetchSemanticsNodes().isNotEmpty()
-                    }.getOrDefault(false)
+                try {
+                    screen.waitUntil(30_000) {
+                        runCatching {
+                            screen.onNodeWithTag("source-setup").performScrollToNode(hasText(name))
+                            screen.onAllNodesWithText(name).fetchSemanticsNodes().isNotEmpty()
+                        }.getOrDefault(false)
+                    }
+                } catch (failure: Throwable) {
+                    screen.onRoot().printToLog("HUB")
+                    throw failure
                 }
                 screen.back()
                 waitFor(hasTestTag("hub-Canlı TV") and isFocused())

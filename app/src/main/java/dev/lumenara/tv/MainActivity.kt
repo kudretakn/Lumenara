@@ -17,6 +17,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { LumenaraTheme { LibraryScreen(library) } }
+        // Start the model's launch snapshot before the first composition.
+        val model = library
+        setContent { LumenaraTheme { LibraryScreen(model) } }
     }
 }
