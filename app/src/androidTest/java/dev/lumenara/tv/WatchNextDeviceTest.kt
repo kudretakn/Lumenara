@@ -1,7 +1,11 @@
 package dev.lumenara.tv
 
+import android.content.Context
 import android.content.Intent
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.*
+import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.lifecycle.Lifecycle
+import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.tvprovider.media.tv.TvContractCompat
 import androidx.tvprovider.media.tv.WatchNextProgram
@@ -15,7 +19,7 @@ import org.junit.Rule
 import org.junit.Test
 
 class WatchNextDeviceTest {
-    @get:Rule val screen = createAndroidComposeRule<MainActivity>()
+    @get:Rule val screen = createEmptyComposeRule()
 
     private fun published(id: String): WatchNextProgram? {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -38,7 +42,9 @@ class WatchNextDeviceTest {
         val publisher = WatchNext.get(context)
         val oldSetting = runBlocking { prefs.text("watch_next", "Açık").first() }
         val oldEngine = runBlocking { prefs.text("engine", "Media3").first() }
-        val videoRequested = java.util.concurrent.CountDownLatch(1)
+        val state = context.getSharedPreferences("watch_next_state", Context.MODE_PRIVATE)
+        val oldExcluded = state.getStringSet("excluded", null)?.toSet()
+        val videoRequested = java.util.concurrent.atomic.AtomicReference(java.util.concurrent.CountDownLatch(1))
         val bytes = test.context.assets.open("lumenara-test.mp4").use { it.readBytes() }
         MockWebServer().use { server ->
             server.dispatcher = object : Dispatcher() {
@@ -48,9 +54,12 @@ class WatchNextDeviceTest {
                         #EXTINF:-1 group-title="Film",Watch Next Deneme
                         ${server.url("/movie/test.mp4")}
                     """.trimIndent())
-                    videoRequested.countDown()
-                    return MockResponse().setHeader("Content-Type", "video/mp4")
-                        .setBody(Buffer().write(bytes))
+                    if (request.path == "/movie/test.mp4") {
+                        videoRequested.get().countDown()
+                        return MockResponse().setHeader("Content-Type", "video/mp4")
+                            .setBody(Buffer().write(bytes))
+                    }
+                    return MockResponse().setResponseCode(404)
                 }
             }
             server.start()
@@ -73,14 +82,45 @@ class WatchNextDeviceTest {
                 assertEquals(1234L, row.lastEngagementTimeUtcMillis)
                 assertEquals(movie.title, row.title)
                 assertEquals(WatchNextPlayback(movie.id, 1_000), parseWatchNextLink(row.intentUri.toString()))
-                screen.runOnUiThread {
-                    screen.activity.startActivity(Intent(Intent.ACTION_VIEW, row.intentUri,
-                        context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP))
+                val link = Intent(Intent.ACTION_VIEW, row.intentUri, context, MainActivity::class.java)
+                // Use the real VIEW intent for both launches: ActivityScenario matches lifecycle
+                // callbacks against its launch intent, while onNewIntent calls setIntent.
+                val playback = ActivityScenario.launch<MainActivity>(link)
+                playback.use { scenario ->
+                    fun awaitVideo() {
+                        // A blocking latch await starves Compose's test clock and LaunchedEffects.
+                        screen.waitUntil(30_000) { videoRequested.get().count == 0L }
+                        assertTrue("Deep link video isteği başlatmalı", videoRequested.get().count == 0L)
+                        screen.onNodeWithContentDescription("Tam ekran oynatıcı").assertExists()
+                    }
+                    awaitVideo() // Cold launch: onCreate.
+                    lateinit var firstActivity: MainActivity
+                    scenario.onActivity { firstActivity = it }
+                    // Back dismisses the initial playback banner before exiting the player.
+                    repeat(2) {
+                        if (screen.onAllNodesWithContentDescription("Tam ekran oynatıcı").fetchSemanticsNodes().isNotEmpty()) {
+                            scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+                            screen.waitForIdle()
+                        }
+                    }
+                    screen.waitUntil(30_000) {
+                        screen.onAllNodesWithContentDescription("Tam ekran oynatıcı").fetchSemanticsNodes().isEmpty()
+                    }
+                    screen.waitForIdle()
+                    videoRequested.set(java.util.concurrent.CountDownLatch(1))
+                    scenario.onActivity {
+                        it.startActivity(Intent(link).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP))
+                    }
+                    awaitVideo() // Warm launch: onNewIntent must reuse the existing activity.
+                    scenario.onActivity {
+                        assertSame(firstActivity, it)
+                        assertEquals(row.intentUri, it.intent.data)
+                        assertEquals(Lifecycle.State.RESUMED, it.lifecycle.currentState)
+                    }
                 }
-                assertTrue("Deep link video isteği başlatmalı", videoRequested.await(30, java.util.concurrent.TimeUnit.SECONDS))
-                // Stop playback before changing history so the player cannot write over the fixture.
-                test.runOnMainSync { screen.activity.finish() }
-                test.waitForIdleSync()
+                // close() waits for destruction, including when a playback assertion fails.
+                // Stop playback before changing history so the player cannot overwrite the fixture.
+                assertEquals(Lifecycle.State.DESTROYED, playback.state)
                 runBlocking {
                     repo.updateMark(movie.id) { it.copy(position = 95_000, duration = 100_000) }
                     publisher.sync()
@@ -117,6 +157,11 @@ class WatchNextDeviceTest {
                     prefs.set("watch_next", oldSetting)
                     prefs.set("engine", oldEngine)
                     publisher.sync()
+                    // exclude() deliberately persists across toggles/restarts; undo the fixture too.
+                    val edit = state.edit()
+                    if (oldExcluded == null) edit.remove("excluded")
+                    else edit.putStringSet("excluded", oldExcluded)
+                    check(edit.commit())
                 }
             }
         }
