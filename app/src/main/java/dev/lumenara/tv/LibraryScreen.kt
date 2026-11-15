@@ -96,7 +96,11 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
                         "IPTV Kaynakları" -> {
                             LumenaraLogo(showName = true)
                             Text("IPTV Kaynakları", fontSize = 28.sp)
-                            Setup(model, available) { section = "Ana Sayfa" }
+                            Setup(model, available, openRestore = { section = "Yedek geri yükle" }) { section = "Ana Sayfa" }
+                        }
+                        "Yedek geri yükle" -> BackupScreen(model, restore = true,
+                            finishLabel = if (available.isEmpty()) "Kuruluma dön" else "Ana Sayfaya dön") {
+                            section = if (available.isEmpty()) "IPTV Kaynakları" else "Ana Sayfa"
                         }
                         "Ayarlar" -> {
                             Text("Ayarlar", fontSize = 28.sp)

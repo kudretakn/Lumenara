@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 
 private val Context.settings by preferencesDataStore(name = "preferences")
 
@@ -35,6 +36,60 @@ class Preferences(context: Context) {
 
     suspend fun set(key: String, value: String) {
         store.edit { it[stringPreferencesKey(key)] = value }
+    }
+
+    internal suspend fun backupSettings(): List<BackupSetting> = withContext(Dispatchers.IO) {
+        store.data.first().asMap().map { (key, value) ->
+            val type = when (value) {
+                is String -> "string"
+                is Boolean -> "boolean"
+                is Int -> "int"
+                is Long -> "long"
+                is Float -> "float"
+                is Double -> "double"
+                is Set<*> -> "strings"
+                else -> error("Desteklenmeyen ayar türü.")
+            }
+            val text = when {
+                key.name.startsWith("secret_") && value is String && value.isNotEmpty() -> vault.decrypt(value)
+                value is Set<*> -> JSONArray(value.toList()).toString()
+                else -> value.toString()
+            }
+            BackupSetting(key.name, type, text)
+        }
+    }
+
+    internal suspend fun restoreSettings(
+        settings: List<BackupSetting>, sources: Map<String, String>, items: Map<String, String>,
+    ) = withContext(Dispatchers.IO) {
+        // Prepare all secrets before the atomic DataStore edit; Keystore values are device specific.
+        val sourcePattern = sources.keys.takeIf { it.isNotEmpty() }
+            ?.joinToString("|") { Regex.escape(it) }?.let { Regex(it) }
+        val prepared = settings.map { saved ->
+            val name = sourcePattern?.replace(saved.name) { sources.getValue(it.value) } ?: saved.name
+            val value = when {
+                saved.name == "recent_live" -> saved.value.lines().mapNotNull { items[it] }.distinct().take(20).joinToString("\n")
+                saved.name.startsWith("secret_") && saved.value.isNotEmpty() -> vault.encrypt(saved.value)
+                else -> saved.value
+            }
+            saved.copy(name = name, value = value)
+        }
+        store.edit { target ->
+            // Missing keys represent defaults in the snapshot, including unset secrets.
+            target.clear()
+            for ((name, type, value) in prepared) when (type) {
+                "string" -> target[stringPreferencesKey(name)] = value
+                "boolean" -> target[booleanPreferencesKey(name)] = value.toBooleanStrict()
+                "int" -> target[intPreferencesKey(name)] = value.toInt()
+                "long" -> target[longPreferencesKey(name)] = value.toLong()
+                "float" -> target[floatPreferencesKey(name)] = value.toFloat()
+                "double" -> target[doublePreferencesKey(name)] = value.toDouble()
+                "strings" -> {
+                    val rows = JSONArray(value)
+                    target[stringSetPreferencesKey(name)] = (0 until rows.length()).map { rows.getString(it) }.toSet()
+                }
+            }
+        }
     }
 
     suspend fun playbackChoice(type: String, key: String): String {

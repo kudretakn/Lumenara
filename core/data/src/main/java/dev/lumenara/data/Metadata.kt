@@ -43,6 +43,8 @@ internal class Metadata(private val context: Context, private val vault: Vault) 
 
     fun userConfigured() = prefs.contains("access")
 
+    internal fun backupToken(): String = prefs.getString("access", null)?.let(vault::decrypt).orEmpty()
+
     fun configured() = userConfigured() || BuildConfig.TMDB_READ_TOKEN.isNotBlank()
 
     val hasBuiltInToken get() = BuildConfig.TMDB_READ_TOKEN.isNotBlank()

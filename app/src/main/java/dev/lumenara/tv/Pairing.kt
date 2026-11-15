@@ -68,6 +68,17 @@ internal class PairSession(address: Inet4Address) : Closeable {
     }
 
     fun receive(): Paired? {
+        var result: Paired? = null
+        exchange(null, "") { result = it }
+        return result
+    }
+
+    fun sendBackup(bytes: ByteArray, filename: String): Boolean {
+        require(filename.matches(Regex("lumenara-yedek-[0-9-]+\\.lmb")))
+        return exchange(bytes, filename) { }
+    }
+
+    private fun exchange(backup: ByteArray?, filename: String, paired: (Paired) -> Unit): Boolean {
         listener.soTimeout = 1000
         var failures = 0
         while (!listener.isClosed && start.elapsedNow() < 3.minutes && failures < 5) {
@@ -113,7 +124,7 @@ internal class PairSession(address: Inet4Address) : Closeable {
                     }
                     if (headers["host"] != url.removePrefix("https://"))
                         reply("403 Forbidden", "Erişim reddedildi.")
-                    else if (method == "GET / HTTP/1.1") reply("200 OK", FORM)
+                    else if (method == "GET / HTTP/1.1") reply("200 OK", if (backup == null) FORM else DOWNLOAD_FORM)
                     else if (
                         method == "POST / HTTP/1.1" &&
                             headers["origin"] == url &&
@@ -134,6 +145,17 @@ internal class PairSession(address: Inet4Address) : Closeable {
                             if (start.elapsedNow() >= 3.minutes || fields["code"] != code) {
                                 failures++
                                 reply("403 Forbidden", "Kod geçersiz veya süresi doldu.")
+                            } else if (backup != null) {
+                                val head = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n" +
+                                    "Content-Disposition: attachment; filename=\"$filename\"\r\n" +
+                                    "Content-Length: ${backup.size}\r\nCache-Control: no-store\r\n" +
+                                    "X-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n"
+                                socket.getOutputStream().apply {
+                                    write(head.toByteArray(Charsets.US_ASCII))
+                                    write(backup)
+                                    flush()
+                                }
+                                return true
                             } else {
                                 val name = fields["name"].orEmpty().trim()
                                 val address = fields["address"].orEmpty().trim()
@@ -158,7 +180,8 @@ internal class PairSession(address: Inet4Address) : Closeable {
                                         "200 OK",
                                         "Kaynak TV’ye aktarıldı. Bağlantı sonucunu TV üzerinden kontrol edin.",
                                     )
-                                    return Paired(name, spec)
+                                    paired(Paired(name, spec))
+                                    return true
                                 }
                             }
                         }
@@ -172,10 +195,14 @@ internal class PairSession(address: Inet4Address) : Closeable {
                 }
             }
         }
-        return null
+        return false
     }
 
     companion object {
+        private const val DOWNLOAD_FORM =
+            """<!doctype html><html lang="tr"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Lumenara yedek</title>
+            <h1>Lumenara yedeği</h1><form method="post"><p><label>TV eşleştirme kodu <input name="code" required inputmode="numeric"></label></p>
+            <p>Dosyayı açmak için TV’de belirlediğiniz yedek parolası gerekir.</p><button>Şifreli yedeği indir</button></form></html>"""
         private const val FORM =
             """<!doctype html><html lang="tr"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Lumenara</title>
         <h1>Lumenara</h1><form method="post"><p><label>TV eşleştirme kodu <input name="code" required inputmode="numeric"></label></p>
@@ -237,7 +264,11 @@ internal fun PairPanel(model: LibraryModel, finish: () -> Unit) {
     DisposableEffect(lifecycle) { onDispose { session?.close() } }
     val active = session
     if (active == null) Text(status, color = Ink.accent)
-    else {
+    else PairSessionInfo(active)
+}
+
+@Composable
+internal fun PairSessionInfo(active: PairSession) {
         val qr =
             remember(active.url) {
                 val bits = QRCodeWriter().encode(active.url, BarcodeFormat.QR_CODE, 192, 192)
@@ -261,5 +292,4 @@ internal fun PairPanel(model: LibraryModel, finish: () -> Unit) {
                 Text(active.fingerprint, fontSize = 11.sp, color = Ink.muted)
             }
         }
-    }
 }

@@ -92,6 +92,7 @@ internal fun SettingsScreen(
     var codecs by remember { mutableStateOf("") }
     var disk by remember { mutableLongStateOf(0) }
     val log by remember { model.prefs.text("events") }.collectAsStateWithLifecycle("")
+    var backupMode by remember { mutableStateOf<String?>(null) }
     val hours by remember { model.prefs.text("hours", "12") }.collectAsStateWithLifecycle("12")
     LaunchedEffect(Unit) {
         disk = withContext(Dispatchers.IO) { context.imageLoader.diskCache?.size ?: 0L }
@@ -133,8 +134,15 @@ internal fun SettingsScreen(
         }
     val list = rememberLazyListState()
     var lastEntry by rememberSaveable { mutableIntStateOf(0) }
-    val returnEntry = remember { lastEntry }
+    val returnEntry = remember(backupMode) { lastEntry }
     var positioned by remember { mutableStateOf(false) }
+    backupMode?.let { mode ->
+        BackupScreen(model, restore = mode == "restore", finish = {
+            backupMode = null
+            configured = model.repo.tmdbConfigured()
+        })
+        return
+    }
     LaunchedEffect(Unit) {
         list.scrollToItem(returnEntry)
         positioned = true
@@ -181,6 +189,12 @@ internal fun SettingsScreen(
         setting {
             Text("Depolama ve yenileme", fontSize = 20.sp)
             Text("${sources.size} kaynak · ${sources.sumOf { it.count }} içerik", color = Ink.muted)
+        }
+        setting {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Button(enabled = !busy, onClick = { backupMode = "backup" }, modifier = Modifier.testTag("settings-backup")) { Text("Yedekle") }
+                Button(enabled = !busy, onClick = { backupMode = "restore" }, modifier = Modifier.testTag("settings-restore")) { Text("Geri yükle") }
+            }
         }
         setting {
             Button(

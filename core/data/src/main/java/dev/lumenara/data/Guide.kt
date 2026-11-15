@@ -101,6 +101,8 @@ interface GuideDao {
         WHERE (:source='' OR i.source=:source)""")
     fun sourceMappings(source: String): Flow<List<Mapping>>
 
+    @Query("SELECT * FROM mappings") suspend fun backupMappings(): List<Mapping>
+
     @Query("""SELECT n.* FROM epgNames n JOIN feeds f ON n.feed=f.id
         WHERE (:source='' OR f.source=:source)""")
     fun sourceNames(source: String): Flow<List<GuideName>>

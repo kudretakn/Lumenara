@@ -192,6 +192,30 @@ class Repository private constructor(private val context: Context) {
 
     private val lock = Mutex()
 
+    private val backups by lazy {
+        BackupStore(db, vault, preferences, metadata, ::import, ::expandUnlocked) { source ->
+            for (feed in guide.feeds(source.id)) syncGuide(source, feed)
+        }
+    }
+
+    suspend fun createBackup(password: CharArray): ByteArray = withContext(Dispatchers.IO) {
+        lock.withLock { BackupCodec.encrypt(backups.snapshot(), password) }
+    }
+
+    suspend fun previewBackup(bytes: ByteArray, password: CharArray): BackupPreview = withContext(Dispatchers.IO) {
+        BackupPreview(BackupCodec.decrypt(bytes, password))
+    }
+
+    suspend fun restoreBackup(preview: BackupPreview): BackupRestoreResult = withContext(Dispatchers.IO) {
+        lock.withLock {
+            try {
+                val result = backups.restore(preview.data)
+                schedule(preferences.text("hours", "12").first().toLongOrNull()?.coerceIn(1L, 168L) ?: 12L)
+                result
+            } finally { versionIndex.clear() }
+        }
+    }
+
     companion object {
         @Volatile private var instance: Repository? = null
 
@@ -383,38 +407,39 @@ class Repository private constructor(private val context: Context) {
 
     suspend fun expand(series: Item): List<Item> =
         withContext(Dispatchers.IO) {
-            lock.withLock {
-                val source = library.source(series.source) ?: return@withLock emptyList()
-                val spec = SourceSpec.decode(vault.decrypt(source.endpoint))
-                if (spec.user.isEmpty()) return@withLock library.episodeSnapshot(series.id)
-                val token = System.currentTimeMillis()
-                val listings =
-                    Xtream(spec)
-                        .episodes(vault.decrypt(series.encryptedUrl), series.title)
-                        .distinctBy { it.url }
-                val entries = listings.map { item(source.id, token, it).copy(parent = series.id) }
-                db.withTransaction {
-                    library.save(entries)
-                    listings.zip(entries).forEach { (listing, episode) ->
-                        val mark = library.mark(episode.id) ?: Mark(episode.id)
-                        if (mark.duration <= 0 && listing.durationMs > 0)
-                            library.save(mark.copy(duration = listing.durationMs))
-                    }
-                    library.pruneEpisodes(series.id, token)
-                }
-                for (entry in entries) {
-                    if (library.mark(entry.id)?.updated == 0L || library.mark(entry.id) == null) {
-                        val number = entry.seriesEpisode()
-                        val shared = allVersions(series).filter { it.id != series.id }
-                            .flatMap { library.episodeSnapshot(it.id) }.filter {
-                                val n = it.seriesEpisode(); n.season == number.season && n.episode == number.episode
-                            }.mapNotNull { library.mark(it.id) }.maxByOrNull { it.updated }
-                        if (shared != null) library.save(shared.copy(id = entry.id))
-                    }
-                }
-                entries
+            lock.withLock { expandUnlocked(series) }
+        }
+
+    private suspend fun expandUnlocked(series: Item): List<Item> {
+        val source = library.source(series.source) ?: return emptyList()
+        val spec = SourceSpec.decode(vault.decrypt(source.endpoint))
+        if (spec.user.isEmpty()) return library.episodeSnapshot(series.id)
+        val token = System.currentTimeMillis()
+        val listings = Xtream(spec)
+            .episodes(vault.decrypt(series.encryptedUrl), series.title)
+            .distinctBy { it.url }
+        val entries = listings.map { item(source.id, token, it).copy(parent = series.id) }
+        db.withTransaction {
+            library.save(entries)
+            listings.zip(entries).forEach { (listing, episode) ->
+                val mark = library.mark(episode.id) ?: Mark(episode.id)
+                if (mark.duration <= 0 && listing.durationMs > 0)
+                    library.save(mark.copy(duration = listing.durationMs))
+            }
+            library.pruneEpisodes(series.id, token)
+        }
+        for (entry in entries) {
+            if (library.mark(entry.id)?.updated == 0L || library.mark(entry.id) == null) {
+                val number = entry.seriesEpisode()
+                val shared = allVersions(series).filter { it.id != series.id }
+                    .flatMap { library.episodeSnapshot(it.id) }.filter {
+                        val n = it.seriesEpisode(); n.season == number.season && n.episode == number.episode
+                    }.mapNotNull { library.mark(it.id) }.maxByOrNull { it.updated }
+                if (shared != null) library.save(shared.copy(id = entry.id))
             }
         }
+        return entries
+    }
 
     suspend fun address(item: Item) =
         withContext(Dispatchers.IO) { vault.decrypt(item.encryptedUrl) }
