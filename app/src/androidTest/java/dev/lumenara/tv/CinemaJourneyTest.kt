@@ -52,7 +52,7 @@ class CinemaJourneyTest {
                 "Son Sefer",
                 "Kadife Gece",
             )
-        val art = listOf("coast", "tile0", "tile1", "tile2", "tile3", "tile4", "tile5")
+        val art = (0..6).map { "tile$it" }
         val previous = Coil.imageLoader(context)
         val loader =
             ImageLoader.Builder(context)
@@ -176,7 +176,7 @@ class CinemaJourneyTest {
                         .put("stream_icon", "https://cinema.invalid/${art[i]}.jpg")
                         .put(
                             "backdrop_path",
-                            if (i == 0) JSONArray().put("https://cinema.invalid/${art[i]}.jpg")
+                            if (i == 0) JSONArray().put("https://cinema.invalid/backdrop.jpg")
                             else JSONArray(),
                         )
                         .put("year", "2025")
@@ -208,7 +208,7 @@ class CinemaJourneyTest {
                                 "get_live_categories" ->
                                     """[{"category_id":2,"category_name":"Haber"}]"""
                                 "get_live_streams" ->
-                                    """[{"stream_id":101,"name":"Test Haber","category_id":"2","stream_icon":"https://cinema.invalid/tile0.jpg"}]"""
+                                    """[{"stream_id":101,"name":"Test Haber","category_id":"2","stream_icon":"https://cinema.invalid/channel.jpg"}]"""
                                 else -> "[]"
                             }
                         )
@@ -228,7 +228,7 @@ class CinemaJourneyTest {
                             it.title == "Açık Deniz"
                         }
                     assertFalse(movie.backdrop.contains("cinema.invalid"))
-                    assertEquals("https://cinema.invalid/coast.jpg", repo.backdrop(movie))
+                    assertEquals("https://cinema.invalid/backdrop.jpg", repo.backdrop(movie))
                     val channel = repo.library.browse(source.id, "LIVE", "", "", "", 1).first().single()
                     val now = System.currentTimeMillis()
                     repo.guide.put(Feed("home-test-guide", source.id, ""))

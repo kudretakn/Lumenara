@@ -3,14 +3,24 @@
 package dev.lumenara.tv
 
 import android.content.Context
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.tv.material3.Text
+import dev.lumenara.design.LumenColors
+import dev.lumenara.design.LumenIcon
+import dev.lumenara.design.LumenType
+import dev.lumenara.design.Spacing
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import coil.imageLoader
@@ -72,9 +82,49 @@ internal fun Artwork(model: LibraryModel, item: Item?, address: String?,
     val request = remember(context, address, permitted, w, h, role) {
         address?.takeIf { w > 0 && h > 0 }?.let { artworkRequest(context, it, permitted, w, h, role) }
     }
-    AsyncImage(request, null,
-        if (width > 0 && height > 0) modifier else modifier.onSizeChanged { measured = it },
-        contentScale = contentScale, alignment = alignment)
+    var loaded by remember(request) { mutableStateOf(false) }
+    val channel = item?.kind == "LIVE"
+    Box((if (width > 0 && height > 0) modifier else modifier.onSizeChanged { measured = it })
+        .then(if (channel) Modifier.background(LumenColors.surface3) else Modifier)) {
+        // Never invent a backdrop or substitute a show's poster for a person's portrait.
+        if (!loaded && item != null && role !in listOf("backdrop", "person")) {
+            ArtworkFallback(item.title, item.kind, Modifier.matchParentSize())
+        }
+        Box(Modifier.matchParentSize(), contentAlignment = Alignment.Center) {
+            AsyncImage(request, null, Modifier.fillMaxSize(if (channel) .7f else 1f),
+                contentScale = if (channel) ContentScale.Fit else contentScale,
+                alignment = alignment,
+                onSuccess = { loaded = true }, onError = { loaded = false })
+        }
+    }
+}
+
+private val channelTones = listOf(
+    Color(0xFF1E2430), Color(0xFF2A1F24), Color(0xFF1F2A24),
+    Color(0xFF2B2619), Color(0xFF24202E), Color(0xFF1C2A2B),
+)
+
+/** Local artwork treatment; dimensions and focus remain the responsibility of each caller. */
+@Composable
+private fun ArtworkFallback(title: String, kind: String, modifier: Modifier = Modifier) {
+    val channel = kind == "LIVE"
+    val tone = remember(title) { channelTones[Math.floorMod(title.hashCode(), channelTones.size)] }
+    Box(modifier.background(if (channel) tone else LumenColors.surface2)) {
+        if (channel) {
+            Text(title.trim().split(Regex("\\s+")).take(2).joinToString(" "),
+                Modifier.align(Alignment.Center).fillMaxWidth(.7f),
+                style = LumenType.label, color = LumenColors.textPrimary,
+                textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        } else {
+            LumenIcon(if (kind == "SERIES" || kind == "EPISODE") LumenIcon.Series else LumenIcon.Film,
+                contentDescription = null,
+                modifier = Modifier.align(Alignment.TopEnd).padding(Spacing.cardGap),
+                tint = LumenColors.textPrimary.copy(alpha = .4f))
+            Text(title, Modifier.align(Alignment.BottomStart).padding(Spacing.cardGap),
+                style = LumenType.cardTitle, color = LumenColors.textPrimary,
+                maxLines = 3, overflow = TextOverflow.Ellipsis)
+        }
+    }
 }
 
 /** A bounded session cache for permanently broken URLs; transient network failures remain retryable. */

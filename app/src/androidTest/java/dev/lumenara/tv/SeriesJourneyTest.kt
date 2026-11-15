@@ -1,6 +1,8 @@
 package dev.lumenara.tv
 
 import androidx.compose.ui.input.key.Key
+import android.graphics.BitmapFactory
+import android.graphics.Color
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
@@ -93,9 +95,17 @@ class SeriesJourneyTest {
         val requestedEpisode = AtomicReference("")
         fun capture(name: String) {
             screen.waitForIdle()
+            screen.onNodeWithText("K", substring = false).assertDoesNotExist()
             val file = File(context.getExternalFilesDir(null), "screens/$name.png")
             checkNotNull(file.parentFile).mkdirs()
             assertTrue(device.takeScreenshot(file))
+            // This provider deliberately has no artwork. The right safe margin must remain
+            // plain neutral bg, never a bundled landscape presented as the show's backdrop.
+            BitmapFactory.decodeFile(file.absolutePath).let { bitmap ->
+                try {
+                    assertEquals(Color.rgb(11, 11, 13), bitmap.getPixel(bitmap.width - 8, bitmap.height / 2))
+                } finally { bitmap.recycle() }
+            }
         }
         MockWebServer().use { server ->
             server.start()

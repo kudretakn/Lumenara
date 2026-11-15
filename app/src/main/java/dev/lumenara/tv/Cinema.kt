@@ -13,7 +13,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -76,13 +75,7 @@ internal fun CinemaBackdrop(
                         role = if (art.second) "poster" else "backdrop",
                     )
                 }
-            } else
-                Image(
-                    painterResource(R.drawable.lumenara_coast),
-                    null,
-                    Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                )
+            }
         }
         Box(
             Modifier.fillMaxSize()
