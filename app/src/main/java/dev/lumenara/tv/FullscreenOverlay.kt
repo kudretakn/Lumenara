@@ -92,7 +92,6 @@ internal fun BoxScope.FullscreenOverlay(
     select: (Item, List<Item>) -> Unit, options: () -> Unit,
     position: () -> Long, duration: () -> Long, next: (() -> Unit)?,
 ) {
-    val numbers = if (item.kind == "LIVE") liveChannelNumbers(model, item.source) else emptyMap()
     if (state.guide && item.kind == "LIVE") {
         MiniGuide(model, item, state, select, options)
     } else if (state.finished && next != null) {
@@ -122,6 +121,7 @@ internal fun BoxScope.FullscreenOverlay(
             .fillMaxWidth().testTag(if (item.kind == "LIVE") "fullscreen-banner" else "vod-timeline")) {
             Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (item.kind == "LIVE") {
+                    val numbers = liveChannelNumbers(model, item.source, listOf(item))
                     val slots = liveProgrammes(model, item, state.now / 30_000 * 30_000, 86_400_000)
                     val current = slots.firstOrNull { state.now >= it.start && state.now < it.end }
                     val following = slots.firstOrNull { it.start >= (current?.end ?: state.now) }
@@ -158,11 +158,11 @@ private fun playbackTime(ms: Long): String = "%d:%02d".format(ms / 60_000, ms / 
 @Composable
 private fun MiniGuide(model: LibraryModel, playing: Item, state: FullscreenState,
                       select: (Item, List<Item>) -> Unit, options: () -> Unit) {
-    val numbers = liveChannelNumbers(model, playing.source)
     var category by remember { mutableStateOf("") }
     val categories by remember(playing.source) { model.repo.categories("LIVE", playing.source) }
         .collectAsStateWithLifecycle(emptyList())
     val channels = rememberLivePages(model, playing.source, category, returnId = playing.id)
+    val numbers = liveChannelNumbers(model, playing.source, channels.loaded())
     val list = rememberLazyListState()
     val currentFocus = remember(category) { FocusRequester() }
     val target = channels.anchor ?: 0

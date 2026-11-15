@@ -3,6 +3,7 @@ package dev.lumenara.data
 import android.content.Context
 import android.net.Uri
 import androidx.room.Room
+import androidx.room.InvalidationTracker
 import androidx.room.withTransaction
 import androidx.work.*
 import dev.lumenara.catalog.*
@@ -51,6 +52,8 @@ data class SourceSpec(
     }
 }
 
+data class LiveWindow(val rows: List<Item>, val revision: Long, val hidden: List<String>)
+
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class Repository private constructor(private val context: Context) {
     private val db = Room.databaseBuilder(context, LibraryDb::class.java, "lumenara.db")
@@ -84,12 +87,12 @@ class Repository private constructor(private val context: Context) {
         hidden.flatMapLatest { library.liveByIds(source, ids, it) }
     private val liveScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val liveOrders = mutableMapOf<String, StateFlow<List<LiveChannelId>>>()
-    // Room invalidation refreshes imports/deletions; hidden changes restart the filtered query.
-    // Keep the flow alive between screens, so each source is queried just once per invalidation.
+    // This compatibility stream runs only while explicitly requested. Channel badges use
+    // a demand-driven snapshot; opening a screen must not keep the full order subscribed.
     fun liveChannelOrder(source: String): StateFlow<List<LiveChannelId>> = synchronized(liveOrders) {
         liveOrders.getOrPut(source) {
             hidden.flatMapLatest { library.liveChannelOrder(source, it) }
-                .distinctUntilChanged().stateIn(liveScope, SharingStarted.Lazily, emptyList())
+                .distinctUntilChanged().stateIn(liveScope, SharingStarted.WhileSubscribed(stopTimeoutMillis = 0, replayExpirationMillis = 0), emptyList())
         }
     }
     suspend fun liveChannel(number: Int, source: String): Item? {
@@ -104,6 +107,72 @@ class Repository private constructor(private val context: Context) {
     }
     fun livePage(source: String, category: String, query: String, shelf: String, limit: Int, offset: Int) =
         hidden.flatMapLatest { library.livePage(source, category, query, shelf, limit, offset, it) }
+    fun livePageAfter(source: String, category: String, query: String, shelf: String, limit: Int,
+        after: LiveCursor?, backwards: Boolean = false) =
+        hidden.flatMapLatest { library.livePageAfter(source, category, query, shelf, limit, after, backwards, it) }
+
+    fun liveNeighbors(source: String, category: String, query: String, shelf: String, limit: Int,
+        id: String, backwards: Boolean = false) =
+        hidden.flatMapLatest { library.liveNeighbors(source, category, query, shelf, limit, id, backwards, it) }
+
+    /** Keep absolute lazy-list indices correct if an import/mark/visibility change moves a boundary. */
+    fun liveWindow(source: String, category: String, query: String, shelf: String, limit: Int,
+        offset: Int, after: LiveWindowCursor?): Flow<LiveWindow> = hidden.flatMapLatest { visible ->
+        flow {
+            val cursor = after?.takeIf { it.revision == liveWindowEpoch(shelf) && it.hidden == visible }?.cursor
+            var initial = true
+            val rows = if (cursor == null) library.livePage(source, category, query, shelf, limit, offset, visible)
+                else library.livePageAfter(source, category, query, shelf, limit, cursor, hidden = visible)
+            rows.collect { page ->
+                val current = if (initial || cursor == null) page
+                    else library.livePage(source, category, query, shelf, limit, offset, visible).first()
+                emit(LiveWindow(current, liveWindowEpoch(shelf), visible))
+                initial = false
+            }
+        }
+    }
+
+    private val liveOrderEpoch = java.util.concurrent.atomic.AtomicLong()
+    private val liveFavoriteEpoch = java.util.concurrent.atomic.AtomicLong()
+    private fun liveWindowEpoch(shelf: String): Long =
+        if (shelf == "favorite") liveFavoriteEpoch.get() else liveOrderEpoch.get()
+    private data class NumberSnapshot(val epoch: Long, val hidden: List<String>, val numbers: Map<String, Int>)
+    private val liveNumberSnapshots = mutableMapOf<String, NumberSnapshot>()
+    private val liveNumberMutex = Mutex()
+    private val liveInvalidation = object : InvalidationTracker.Observer("items", "marks") {
+        override fun onInvalidated(tables: Set<String>) {
+            if ("items" in tables) liveOrderEpoch.incrementAndGet()
+            liveFavoriteEpoch.incrementAndGet()
+        }
+    }
+    init { db.invalidationTracker.addObserver(liveInvalidation) }
+
+    /** A demand-driven snapshot, not an always-subscribed sort on every item write.
+     * Badges and number entry share source-local numbering. Only id/title (plus source when
+     * unselected) are read, and the map is reused across page changes until invalidated.
+     */
+    fun liveChannelNumbers(source: String, ids: List<String>): Flow<Map<String, Int>> = flow {
+        if (ids.isEmpty()) { emit(emptyMap()); return@flow }
+        val visible = hidden.first()
+        val numbers = liveNumberMutex.withLock {
+            val epoch = liveOrderEpoch.get()
+            val cached = liveNumberSnapshots[source]
+            if (cached != null && cached.epoch == epoch && cached.hidden == visible) cached.numbers
+            else {
+                val order = library.liveChannelOrder(source, visible).first()
+                val perSource = mutableMapOf<String, Int>()
+                val result = order.associate { row ->
+                    val number = (perSource[row.source] ?: 0) + 1
+                    perSource[row.source] = number
+                    row.id to number
+                }
+                liveNumberSnapshots[source] = NumberSnapshot(epoch, visible, result)
+                result
+            }
+        }
+        emit(ids.mapNotNull { id -> numbers[id]?.let { id to it } }.toMap())
+    }.flowOn(Dispatchers.Default)
+
     fun liveCount(source: String, category: String = "", query: String = "", shelf: String = "") =
         hidden.flatMapLatest { library.liveCount(source, category, query, shelf, it) }
     suspend fun liveIndex(source: String, id: String, category: String = "", query: String = "", shelf: String = "") =

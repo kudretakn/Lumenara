@@ -41,7 +41,6 @@ internal fun LiveScreen(
 ) {
     var numberSource by remember(source) { mutableStateOf(source) }
     val numbers = rememberLiveNumberControl(model, numberSource, select = play)
-    val channelNumbers = liveChannelNumbers(model, source)
     var category by rememberSaveable(source) { mutableStateOf<String?>(null) }
     var categoryTitle by rememberSaveable(source) { mutableStateOf("") }
     var query by rememberSaveable(source, category) { mutableStateOf("") }
@@ -107,6 +106,7 @@ internal fun LiveScreen(
                     rows.filter { it.search.contains(searchable(query)) }.take(limit)
                 } else flowOf(emptyList())
             }.collectAsStateWithLifecycle(emptyList())
+            val channelNumbers = liveChannelNumbers(model, source, paged?.loaded() ?: rows)
             pages.SaveableStateProvider("channels-$category") {
                 LiveChannelGrid(model, categoryTitle, rows, channelNumbers, now, query, { query = it },
                     limit, { limit += 80 }, returnToChannel ?: focusedId, { item ->

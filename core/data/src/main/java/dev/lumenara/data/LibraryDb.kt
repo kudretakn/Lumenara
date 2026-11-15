@@ -5,6 +5,7 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteQuery
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 @Entity(tableName = "sources")
@@ -108,7 +109,7 @@ data class Member(@PrimaryKey val id: String, val name: String)
 data class LiveCategoryCount(val category: String, val count: Int)
 
 /** Lightweight projection; this is not a persisted entity or schema change. */
-data class LiveChannelId(val id: String, val source: String)
+data class LiveChannelId(val id: String, val source: String, val title: String = "")
 
 @Dao
 interface LibraryDao {
@@ -123,40 +124,63 @@ interface LibraryDao {
 
     @RawQuery(observedEntities = [Item::class])
     fun catalogCategories(query: SupportSQLiteQuery): Flow<List<String>>
-    @Query("""SELECT * FROM items WHERE kind='LIVE' AND source=:source
-        AND category NOT IN (:hidden) ORDER BY title,id LIMIT 1 OFFSET :offset""")
-    suspend fun liveAtOffset(source: String, offset: Int, hidden: List<String> = emptyList()): Item?
+    suspend fun liveAtOffset(source: String, offset: Int, hidden: List<String> = emptyList()): Item? =
+        livePage(source, "", "", "", 1, offset, hidden).first().firstOrNull()
 
-    @Query("""SELECT items.* FROM items LEFT JOIN marks USING(id)
-        WHERE kind='LIVE' AND (:source='' OR source=:source) AND category NOT IN (:hidden)
-        AND (:category='' OR category=:category) AND instr(search,:query)>0
-        AND (:shelf!='favorite' OR favorite=1)
-        ORDER BY title,items.id LIMIT :limit OFFSET :offset""")
+    @RawQuery(observedEntities = [Item::class])
+    fun liveRows(query: SupportSQLiteQuery): Flow<List<Item>>
+
+    @RawQuery(observedEntities = [Item::class])
+    fun liveTotal(query: SupportSQLiteQuery): Flow<Int>
+
+    @RawQuery(observedEntities = [Item::class, Mark::class])
+    fun liveFavoriteRows(query: SupportSQLiteQuery): Flow<List<Item>>
+
+    @RawQuery(observedEntities = [Item::class, Mark::class])
+    fun liveFavoriteTotal(query: SupportSQLiteQuery): Flow<Int>
+
+    fun liveFilteredRows(query: SupportSQLiteQuery, shelf: String): Flow<List<Item>> =
+        if (shelf == "favorite") liveFavoriteRows(query) else liveRows(query)
+
+    @RawQuery
+    suspend fun livePosition(query: SupportSQLiteQuery): Int?
+
+    @RawQuery(observedEntities = [Item::class])
+    fun liveOrder(query: SupportSQLiteQuery): Flow<List<LiveChannelId>>
+
     fun livePage(source: String, category: String, query: String, shelf: String, limit: Int,
-        offset: Int, hidden: List<String> = emptyList()): Flow<List<Item>>
+        offset: Int, hidden: List<String> = emptyList()): Flow<List<Item>> =
+        liveFilteredRows(livePageQuery(CatalogFilter(source = source, category = category, query = query,
+            shelf = shelf, hidden = hidden), limit, offset = offset), shelf)
 
-    @Query("""SELECT COUNT(*) FROM items LEFT JOIN marks USING(id)
-        WHERE kind='LIVE' AND (:source='' OR source=:source) AND category NOT IN (:hidden)
-        AND (:category='' OR category=:category) AND instr(search,:query)>0
-        AND (:shelf!='favorite' OR favorite=1)""")
+    fun livePageAfter(source: String, category: String, query: String, shelf: String, limit: Int,
+        after: LiveCursor?, backwards: Boolean = false, hidden: List<String> = emptyList()): Flow<List<Item>> =
+        liveFilteredRows(livePageQuery(CatalogFilter(source = source, category = category, query = query,
+            shelf = shelf, hidden = hidden), limit, after, backwards), shelf)
+
+    fun liveNeighbors(source: String, category: String, query: String, shelf: String, limit: Int,
+        id: String, backwards: Boolean = false, hidden: List<String> = emptyList()): Flow<List<Item>> =
+        liveFilteredRows(livePageQuery(CatalogFilter(source = source, category = category, query = query,
+            shelf = shelf, hidden = hidden), limit, backwards = backwards, targetId = id), shelf)
+
     fun liveCount(source: String, category: String, query: String, shelf: String,
-        hidden: List<String> = emptyList()): Flow<Int>
+        hidden: List<String> = emptyList()): Flow<Int> {
+        val sql = liveCountQuery(CatalogFilter(source = source, category = category, query = query,
+            shelf = shelf, hidden = hidden))
+        return if (shelf == "favorite") liveFavoriteTotal(sql) else liveTotal(sql)
+    }
 
-    // The same BINARY title/id order as livePage; missing/hidden targets have no index.
-    @Query("""SELECT (SELECT COUNT(*) FROM items i LEFT JOIN marks m ON m.id=i.id
-        WHERE i.kind='LIVE' AND (:source='' OR i.source=:source) AND i.category NOT IN (:hidden)
-        AND (:category='' OR i.category=:category) AND instr(i.search,:query)>0
-        AND (:shelf!='favorite' OR m.favorite=1) AND (i.title,i.id)<(t.title,t.id))
-        FROM items t LEFT JOIN marks tm ON tm.id=t.id WHERE t.id=:id AND t.kind='LIVE'
-        AND (:source='' OR t.source=:source) AND t.category NOT IN (:hidden)
-        AND (:category='' OR t.category=:category) AND instr(t.search,:query)>0
-        AND (:shelf!='favorite' OR tm.favorite=1)""")
     suspend fun liveIndex(source: String, id: String, category: String = "", query: String = "",
-        shelf: String = "", hidden: List<String> = emptyList()): Int?
+        shelf: String = "", hidden: List<String> = emptyList()): Int? =
+        livePosition(liveIndexQuery(CatalogFilter(source = source, category = category, query = query,
+            shelf = shelf, hidden = hidden), id))
 
-    @Query("""SELECT id,source FROM items WHERE kind='LIVE' AND category NOT IN (:hidden) AND (:source='' OR source=:source)
-        ORDER BY source,title,id""")
-    fun liveChannelOrder(source: String, hidden: List<String> = emptyList()): Flow<List<LiveChannelId>>
+    fun liveChannelOrder(source: String, hidden: List<String> = emptyList()): Flow<List<LiveChannelId>> =
+        liveOrder(liveChannelOrderQuery(CatalogFilter(source = source, hidden = hidden))).map { rows ->
+            // The SQL streams title/id. Preserve the public source/title/id order in O(n),
+            // sorting only the (usually single) source keys, when a full order is requested.
+            if (source.isNotEmpty()) rows else rows.groupBy { it.source }.toSortedMap().values.flatten()
+        }
 
     @Query("""SELECT * FROM items WHERE id IN (:ids) AND kind='LIVE'
         AND category NOT IN (:hidden) AND (:source='' OR source=:source)""")
