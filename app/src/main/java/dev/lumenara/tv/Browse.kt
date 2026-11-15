@@ -30,12 +30,8 @@ import kotlinx.coroutines.flow.*
 internal fun Poster(model: LibraryModel, item: Item, modifier: Modifier,
     allowHttp: Boolean? = null, width: Int = 0, height: Int = 0) {
     val image by produceState<String?>(null, item.logo) { value = model.repo.poster(item) }
-    Box(modifier.background(Ink.surface), contentAlignment = Alignment.Center) {
-        Text(item.title.take(1), color = Ink.accent, fontSize = 30.sp)
-        if (image != null)
-            Artwork(model, item, image, Modifier.fillMaxSize(), contentScale = ContentScale.Crop,
-                allowHttp = allowHttp, width = width, height = height)
-    }
+    Artwork(model, item, image, modifier, contentScale = ContentScale.Crop,
+        allowHttp = allowHttp, width = width, height = height)
 }
 
 @Composable
