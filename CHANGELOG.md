@@ -7,6 +7,9 @@
 - Ana ekranda ve ilk kurulumda iki saniye içinde çift geriyle çıkış.
 - +18 kategorileri varsayılan gizli; Ayarlar’dan anında açılıp kapanan filtre arama, rehber, kanal numaraları ve listelerde de geçerli.
 - Hub ve +18 testleri eklendi; kumanda yolculukları kartlı gezinmeye uyarlandı.
+- Sesi çözülemeyen yayınlar (ör. MP2/AC-3 sesli canlı kanallar) artık sessiz oynamıyor; Media3 otomatik olarak VLC'ye geçiyor.
+- VLC'ye geçince indirilen altyazının kaybolması düzeltildi.
+- Açılıştan hemen sonra eklenen kaynağın kurulum ekranında görünmemesi düzeltildi.
 
 ## 0.3.2 · 15 Kasım 2026
 
