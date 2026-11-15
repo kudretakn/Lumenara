@@ -307,6 +307,9 @@ interface LibraryDao {
     @Query("SELECT * FROM marks WHERE id IN (:ids)")
     fun visibleMarks(ids: List<String>): Flow<List<Mark>>
 
+    @Query("SELECT * FROM marks WHERE favorite=1 OR listed=1 OR position>0 OR updated>0")
+    suspend fun backupMarks(): List<Mark>
+
     @Query("SELECT * FROM marks WHERE id=:id") fun observeMark(id: String): Flow<Mark?>
 
     @Query("""SELECT * FROM items WHERE parent=:id AND category NOT IN (:hidden)

@@ -54,9 +54,10 @@ internal fun VlcScreen(
     onSleepTimerChanged: () -> Unit,
     episodeEnded: () -> Unit,
 ) {
-    @Suppress("UNUSED_VARIABLE") val timerRefresh = sleepTimerVersion
+    val sleepCountdown = sleepTimerVersion.let { sleepTimer.showCountdown() }
     val life by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
     var panel by remember { mutableStateOf(false) }
+    LaunchedEffect(sleepCountdown) { if (sleepCountdown) panel = false }
     var position by remember(item.id) { mutableLongStateOf(initial) }
     val fullscreen = rememberFullscreenState(item)
     val moveScope = rememberCoroutineScope()
@@ -300,8 +301,8 @@ internal fun VlcScreen(
             if (nativePlaying && p.spuDelay != delayMs * 1000) p.setSpuDelay(delayMs * 1000)
         }
     }
-    LaunchedEffect(subtitleSearch.open, layout, panel, fullscreen.guide, fullscreen.finished, player, retry.generation, retry.reconnecting) {
-        if (!subtitleSearch.open && !panel && !fullscreen.guide && !fullscreen.finished) {
+    LaunchedEffect(subtitleSearch.open, layout, panel, fullscreen.guide, fullscreen.finished, player, retry.generation, retry.reconnecting, sleepCountdown) {
+        if (!subtitleSearch.open && !panel && !fullscreen.guide && !fullscreen.finished && !sleepCountdown) {
             if (!composeView.hasFocus()) composeView.requestFocus()
             val initialGranted = focus.requestFocus()
             android.util.Log.d("LumenaraFocus", "VLC trigger=layout/panel/fullscreen/retry initialGranted=$initialGranted viewHasFocus=${composeView.hasFocus()}")
@@ -465,7 +466,7 @@ internal fun VlcScreen(
                 if (activeSubtitle) stateDescription = "İndirilen altyazı etkin"
             }
             .onPreviewKeyEvent {
-                if (subtitleSearch.open) return@onPreviewKeyEvent false
+                if (subtitleSearch.open || sleepCountdown) return@onPreviewKeyEvent false
                 val key = it.nativeKeyEvent
                 val code = key.keyCode
                 if (!panel && fullscreen.key(key, item.kind == "LIVE", ::move, { panel = true },
@@ -495,7 +496,7 @@ internal fun VlcScreen(
             },
             modifier = Modifier.fillMaxSize().focusProperties { canFocus = false },
         )
-        if (!panel) FullscreenOverlay(model, item, group, fullscreen, select, { panel = true },
+        if (!panel && !sleepCountdown) FullscreenOverlay(model, item, group, fullscreen, select, { panel = true },
             { player?.time ?: 0 }, { player?.length ?: 0 },
             if (item.kind == "EPISODE" && group.nextItem(item) != null) next else null)
         FrameRateMatch(model, item.kind, frameRate, layout)

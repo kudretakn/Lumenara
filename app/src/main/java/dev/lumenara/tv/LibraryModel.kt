@@ -59,6 +59,8 @@ constructor(val repo: Repository, val prefs: Preferences) : androidx.lifecycle.V
     private var searchIntentId = 0
 
     fun receiveSearchIntent(request: dev.lumenara.catalog.SearchRequest) {
+        watchNextPlayback.value = null
+        remoteSearch.value = 0
         searchIntent.value = (++searchIntentId) to request
     }
 

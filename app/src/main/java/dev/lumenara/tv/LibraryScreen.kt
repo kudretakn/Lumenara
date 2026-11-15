@@ -46,9 +46,11 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
     val open: (Item) -> Unit = { detail = it }
     var launchPosition by remember { mutableLongStateOf(-1) }
     val playbackScope = rememberCoroutineScope()
+    var playJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     val play: (Item, List<Item>) -> Unit = { item, group ->
         Perf.mark("channel")
-        playbackScope.launch {
+        playJob?.cancel()
+        playJob = playbackScope.launch {
             try {
                 val chosen = model.repo.selectedVersion(item)
                 siblings = if (chosen.kind == "EPISODE" && chosen.parent != item.parent)
@@ -62,17 +64,18 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
     }
     val searchIntent by model.searchIntent.collectAsStateWithLifecycle()
     LaunchedEffect(searchIntent) {
-        val (id, search) = searchIntent ?: return@LaunchedEffect
+        val pending = searchIntent ?: return@LaunchedEffect
+        val (id, search) = pending
+        playJob?.cancel()
         playing = null
         detail = null
         if (search.playFromSearch) {
             try {
-                val candidates = model.repo.browse("", "LIVE", "", searchable(search.query), "", 500)
-                    .first()
-                val index = exactChannelIndex(search.query, candidates.map { it.title })
-                if (index != null) {
+                val channel = uniqueSearchChannel(model, search.query)
+                if (channel != null) {
                     section = "Canlı TV"
-                    play(candidates[index], candidates)
+                    play(channel, LiveChannelGroup(listOf(channel), channel.source))
+                    model.searchIntent.compareAndSet(pending, null)
                     return@LaunchedEffect
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -83,6 +86,7 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
         }
         section = "Ara"
         model.searchPrefill.value = id to search.query
+        model.searchIntent.compareAndSet(pending, null)
     }
     LaunchedEffect(request) {
         if (request > 0) {
@@ -95,6 +99,7 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
     val watchNextRequest by model.watchNextPlayback.collectAsStateWithLifecycle()
     LaunchedEffect(watchNextRequest) {
         val target = watchNextRequest ?: return@LaunchedEffect
+        playJob?.cancel()
         try {
             val row = model.repo.library.item(target.itemId)
             val hidden = model.repo.hidden.first()
@@ -163,7 +168,11 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
                         "IPTV Kaynakları" -> {
                             LumenaraLogo(showName = true)
                             Text("IPTV Kaynakları", fontSize = 28.sp)
-                            Setup(model, available) { section = "Ana Sayfa" }
+                            Setup(model, available, openRestore = { section = "Yedek geri yükle" }) { section = "Ana Sayfa" }
+                        }
+                        "Yedek geri yükle" -> BackupScreen(model, restore = true,
+                            finishLabel = if (available.isEmpty()) "Kuruluma dön" else "Ana Sayfaya dön") {
+                            section = if (available.isEmpty()) "IPTV Kaynakları" else "Ana Sayfa"
                         }
                         "Ayarlar" -> {
                             Text("Ayarlar", fontSize = 28.sp)
@@ -200,4 +209,22 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
                 available.isEmpty() && section == "IPTV Kaynakları" && sourceParent == "Ana Sayfa")
         }
     }
+}
+
+/** Search in bounded pages so a unique name beyond the first page can still launch directly. */
+private suspend fun uniqueSearchChannel(model: LibraryModel, query: String): Item? {
+    val normalized = searchable(query)
+    if (normalized.isBlank()) return null
+    val matches = mutableListOf<Item>()
+    var after: LiveCursor? = null
+    while (true) {
+        val rows = model.repo.livePageAfter("", "", normalized, "", LIVE_PAGE_SIZE, after).first()
+        for (row in rows) if (searchable(row.title) == normalized) {
+            matches += row
+            if (matches.size > 1) return null
+        }
+        if (rows.size < LIVE_PAGE_SIZE) break
+        after = rows.last().let { LiveCursor(it.title, it.id) }
+    }
+    return exactChannelIndex(query, matches.map { it.title })?.let { matches[it] }
 }

@@ -307,6 +307,28 @@ class Repository private constructor(private val context: Context) {
     // overtake the first composition. Downloads do not hold up this snapshot.
     suspend fun sourceSnapshot(): List<Source> = db.withTransaction { library.snapshot() }
 
+    private val backups by lazy {
+        BackupStore(db, vault, preferences, metadata, ::import, { expandUnlocked(it, force = true) }) { source ->
+            for (feed in guide.feeds(source.id)) syncGuide(source, feed)
+        }
+    }
+
+    suspend fun createBackup(password: CharArray): ByteArray = withContext(Dispatchers.IO) {
+        lock.withLock { BackupCodec.encrypt(backups.snapshot(), password) }
+    }
+
+    suspend fun previewBackup(bytes: ByteArray, password: CharArray): BackupPreview = withContext(Dispatchers.IO) {
+        BackupPreview(BackupCodec.decrypt(bytes, password))
+    }
+
+    suspend fun restoreBackup(preview: BackupPreview): BackupRestoreResult = withContext(Dispatchers.IO) {
+        lock.withLock {
+            val result = backups.restore(preview.data)
+            schedule(preferences.text("hours", "12").first().toLongOrNull()?.coerceIn(1L, 168L) ?: 12L)
+            result
+        }
+    }
+
     companion object {
         @Volatile private var instance: Repository? = null
 
@@ -555,47 +577,52 @@ class Repository private constructor(private val context: Context) {
 
     suspend fun expand(series: Item): List<Item> =
         withContext(Dispatchers.IO) {
-            lock.withLock {
-                val source = library.source(series.source) ?: return@withLock emptyList()
-                val spec = SourceSpec.decode(vault.decrypt(source.endpoint))
-                if (spec.user.isEmpty()) return@withLock library.episodeSnapshot(series.id)
-                seriesExpansionCache.get(series.id, cached = { library.episodeSnapshot(series.id) }) {
-                    val token = System.currentTimeMillis()
-                    val listings = Xtream(spec)
-                        .episodes(vault.decrypt(series.encryptedUrl), series.title)
-                        .distinctBy { it.url }
-                    val entries = listings.map { item(source.id, token, it).copy(parent = series.id) }
-                    db.withTransaction {
-                        library.save(entries)
-                        val siblings = if (entries.isEmpty()) emptyList() else allVersions(series)
-                            .filter { it.id != series.id }.flatMap { library.episodeSnapshot(it.id) }
-                        // Android 9 SQLite allows 999 binds: normally one IN query, bounded for
-                        // very long series. Read current and sibling marks together, never per episode.
-                        val marks = (entries + siblings).map { it.id }.distinct().chunked(900)
-                            .flatMap { library.marksByIds(it) }.associateBy { it.id }
-                        val shared = siblings.groupBy { it.seriesEpisode().let { n -> n.season to n.episode } }
-                            .mapValues { (_, episodes) -> episodes.mapNotNull { marks[it.id] }.maxByOrNull { it.updated } }
-                        listings.zip(entries).forEach { (listing, episode) ->
-                            val existing = marks[episode.id]
-                            var mark = existing ?: Mark(episode.id)
-                            var changed = false
-                            if (mark.duration <= 0 && listing.durationMs > 0)
-                                mark = mark.copy(duration = listing.durationMs).also { changed = true }
-                            if (mark.updated == 0L) {
-                                val number = episode.seriesEpisode()
-                                shared[number.season to number.episode]?.let {
-                                    mark = it.copy(id = episode.id)
-                                    changed = true
-                                }
-                            }
-                            if (changed) library.save(mark)
-                        }
-                        library.pruneEpisodes(series.id, token)
-                    }
-                    entries
-                }
-            }
+            lock.withLock { expandUnlocked(series) }
         }
+
+    // Restore already owns the repository lock and must refresh episodes even with a warm cache.
+    private suspend fun expandUnlocked(series: Item, force: Boolean = false): List<Item> {
+        val source = library.source(series.source) ?: return emptyList()
+        val spec = SourceSpec.decode(vault.decrypt(source.endpoint))
+        if (spec.user.isEmpty()) return library.episodeSnapshot(series.id)
+        suspend fun fetch(): List<Item> {
+            val token = System.currentTimeMillis()
+            val listings = Xtream(spec)
+                .episodes(vault.decrypt(series.encryptedUrl), series.title)
+                .distinctBy { it.url }
+            val entries = listings.map { item(source.id, token, it).copy(parent = series.id) }
+            db.withTransaction {
+                library.save(entries)
+                val siblings = if (entries.isEmpty()) emptyList() else allVersions(series)
+                    .filter { it.id != series.id }.flatMap { library.episodeSnapshot(it.id) }
+                // Android 9 SQLite allows 999 binds: normally one IN query, bounded for
+                // very long series. Read current and sibling marks together, never per episode.
+                val marks = (entries + siblings).map { it.id }.distinct().chunked(900)
+                    .flatMap { library.marksByIds(it) }.associateBy { it.id }
+                val shared = siblings.groupBy { it.seriesEpisode().let { n -> n.season to n.episode } }
+                    .mapValues { (_, episodes) -> episodes.mapNotNull { marks[it.id] }.maxByOrNull { it.updated } }
+                listings.zip(entries).forEach { (listing, episode) ->
+                    val existing = marks[episode.id]
+                    var mark = existing ?: Mark(episode.id)
+                    var changed = false
+                    if (mark.duration <= 0 && listing.durationMs > 0)
+                        mark = mark.copy(duration = listing.durationMs).also { changed = true }
+                    if (mark.updated == 0L) {
+                        val number = episode.seriesEpisode()
+                        shared[number.season to number.episode]?.let {
+                            mark = it.copy(id = episode.id)
+                            changed = true
+                        }
+                    }
+                    if (changed) library.save(mark)
+                }
+                library.pruneEpisodes(series.id, token)
+            }
+            return entries
+        }
+        return if (force) fetch() else seriesExpansionCache.get(series.id,
+            cached = { library.episodeSnapshot(series.id) }, fetch = { fetch() })
+    }
 
     suspend fun address(item: Item) =
         withContext(Dispatchers.IO) { vault.decrypt(item.encryptedUrl) }

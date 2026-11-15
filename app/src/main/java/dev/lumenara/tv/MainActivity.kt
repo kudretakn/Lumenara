@@ -24,6 +24,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onSearchRequested(): Boolean {
+        library.searchIntent.value = null
+        library.watchNextPlayback.value = null
         library.remoteSearch.value++
         return true
     }
@@ -55,6 +57,8 @@ class MainActivity : ComponentActivity() {
     private fun handlePlaybackIntent(intent: Intent?) {
         if (intent?.action != Intent.ACTION_VIEW) return
         parseWatchNextLink(intent.dataString.orEmpty())?.let {
+            library.searchIntent.value = null
+            library.remoteSearch.value = 0
             library.watchNextPlayback.value = it
         }
     }

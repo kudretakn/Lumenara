@@ -354,6 +354,8 @@ internal fun Playback(
             if (activeSleepTimer.poll()) currentSleepTimerExpired()
         }
     }
+    val sleepCountdown = sleepTimerVersion.let { activeSleepTimer.showCountdown() }
+    LaunchedEffect(sleepCountdown) { if (sleepCountdown) { panel = false; multi = emptyList() } }
     if (multi.isNotEmpty()) {
         MultiView(
             model,
@@ -449,8 +451,8 @@ internal fun Playback(
         panel = false
     }
     BackHandler { if (panel) panel = false else if (!fullscreen.dismiss()) back() }
-    LaunchedEffect(subtitleSearch.open, panel, fullscreen.guide, fullscreen.finished, failed, engine, retry.generation, retry.reconnecting) {
-        if (!subtitleSearch.open && !panel && !fullscreen.guide && !fullscreen.finished && !failed) {
+    LaunchedEffect(subtitleSearch.open, panel, fullscreen.guide, fullscreen.finished, failed, engine, retry.generation, retry.reconnecting, sleepCountdown) {
+        if (!subtitleSearch.open && !panel && !fullscreen.guide && !fullscreen.finished && !failed && !sleepCountdown) {
             // PlayerView updates and reconnect badge removal must finish before reclaiming focus.
             withFrameNanos { }
             if (!composeView.hasFocus()) composeView.requestFocus()
@@ -464,7 +466,7 @@ internal fun Playback(
             .focusRequester(focus)
             .semantics { contentDescription = "Tam ekran oynatıcı" }
             .onPreviewKeyEvent {
-                if (subtitleSearch.open) return@onPreviewKeyEvent false
+                if (subtitleSearch.open || sleepCountdown) return@onPreviewKeyEvent false
                 val key = it.nativeKeyEvent
                 val code = key.keyCode
                 if (!panel && !failed && fullscreen.key(key, live, ::move,
@@ -515,7 +517,7 @@ internal fun Playback(
                 if (item.kind == "EPISODE") episodeEnded()
             },
         )
-        if (!panel) FullscreenOverlay(model, item, group, fullscreen,
+        if (!panel && !sleepCountdown) FullscreenOverlay(model, item, group, fullscreen,
             { channel, rows -> changeGroup(rows); select(channel) },
             { panel = true },
             { engine?.currentPosition ?: 0 }, { engine?.duration ?: 0 },
@@ -765,6 +767,8 @@ internal fun androidx.compose.foundation.layout.BoxScope.SleepTimerCard(
 ) {
     @Suppress("UNUSED_VARIABLE") val refresh = version
     if (!timer.showCountdown()) return
+    val cancelFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { withFrameNanos { }; cancelFocus.requestFocus() }
     val seconds = ((timer.remainingMs() ?: 0L) + 999) / 1000
     Row(
         Modifier.align(Alignment.TopCenter).padding(top = 36.dp).glass().padding(12.dp),
@@ -772,7 +776,7 @@ internal fun androidx.compose.foundation.layout.BoxScope.SleepTimerCard(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text("Lumenara $seconds sn sonra duracak")
-        Button(onClick = cancel) { Text("İptal (OK)") }
+        Button(onClick = cancel, modifier = Modifier.focusRequester(cancelFocus)) { Text("İptal (OK)") }
         Button(onClick = { timer.addFifteenMinutes() }) { Text("+15 dk") }
     }
 }

@@ -1,6 +1,6 @@
 package dev.lumenara.catalog
 
-/** Playback-scoped timer. The caller owns its lifetime, so leaving playback resets it. */
+/** Session-owned timer. Reuse the instance across channel and player changes. */
 class SleepTimer(private val now: () -> Long = System::currentTimeMillis) {
     enum class Choice(val label: String, val minutes: Long?) {
         OFF("Kapalı", null), MINUTES_15("15 dk", 15), MINUTES_30("30 dk", 30),
