@@ -8,6 +8,32 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class XtreamTest {
+ @get:org.junit.Rule val cache = org.junit.rules.TemporaryFolder()
+
+ @Test fun snapshotComparesAllEndpointsAndIgnoresVolatileAccountFields() = MockWebServer().use { s ->
+  val x = Xtream(SourceSpec(s.url("/").toString(), true, "u", "p"))
+  fun enqueue(clock: Int, changedCategory: Boolean = false) {
+   s.enqueue(MockResponse().setBody("""{"user_info":{"auth":1,"max_connections":2,"active_cons":$clock},"server_info":{"timezone":"Europe/Istanbul","timestamp_now":$clock}}"""))
+   repeat(6) { index -> s.enqueue(MockResponse().setBody(if (index == 0 && changedCategory) "[{\"category_id\":\"new\"}]" else "[]")) }
+  }
+  enqueue(1)
+  val state = x.prepare(cache.root, FetchState()).use { assertFalse(it.unchanged); it.state }
+  enqueue(2)
+  x.prepare(cache.root, FetchState.decode(state.encode())).use { assertTrue(it.unchanged) }
+  enqueue(3, changedCategory = true)
+  x.prepare(cache.root, state).use { assertFalse(it.unchanged) }
+  assertEquals(21, s.requestCount)
+  assertTrue(cache.root.listFiles()!!.isEmpty())
+ }
+
+ @Test fun failedSnapshotRemovesAlreadyDownloadedBodies() = MockWebServer().use { s ->
+  s.enqueue(MockResponse().setBody("""{"user_info":{"auth":1}}"""))
+  s.enqueue(MockResponse().setBody("[]"))
+  s.enqueue(MockResponse().setResponseCode(503))
+  val error = runCatching { Xtream(SourceSpec(s.url("/").toString(), true, "u", "p")).prepare(cache.root, FetchState()) }.exceptionOrNull()
+  assertTrue(error is SourceFailure)
+  assertTrue(cache.root.listFiles()!!.isEmpty())
+ }
  @Test fun guideAddressEncodesCredentialsAsQueryParameters() = MockWebServer().use { s ->
   val x=Xtream(SourceSpec(s.url("/root").toString().trimEnd('/'),true,"user name","p&ss")); val url=x.guideAddress().toHttpUrl()
   assertEquals("xmltv.php",url.pathSegments.last()); assertEquals("user name",url.queryParameter("username")); assertEquals("p&ss",url.queryParameter("password"))

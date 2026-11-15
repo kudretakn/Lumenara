@@ -16,6 +16,12 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import org.json.JSONObject
 
 data class SourceSpec(
@@ -288,32 +294,84 @@ class Repository private constructor(private val context: Context) {
             }
         }
 
-    private suspend fun syncGuide(source: Source, feed: Feed) = db.withTransaction {
-        Transport.read(vault.decrypt(feed.encryptedAddress), source.allowHttp) { input, _ ->
-            val buffered = input.buffered()
-            buffered.mark(2)
-            val gzip = buffered.read() == 0x1f && buffered.read() == 0x8b
-            buffered.reset()
-            val xml =
-                if (gzip) bounded(java.util.zip.GZIPInputStream(buffered), 256L * 1024 * 1024)
-                else buffered
-            populateGuide(db, feed, xml)
+    private suspend fun syncGuide(source: Source, feed: Feed) {
+        val key = "feed_${feed.id}"
+        val job = currentCoroutineContext()
+        Transport.download(vault.decrypt(feed.encryptedAddress), source.allowHttp, context.cacheDir,
+            preferences.fetchState(key), limit = 256L * 1024 * 1024, checkActive = { job.ensureActive() }).use { downloaded ->
+            job.ensureActive()
+            val now = System.currentTimeMillis()
+            val changed = downloaded.importIfChanged {
+                db.withTransaction {
+                    downloaded.read { input, _ ->
+                        val buffered = input.buffered()
+                        buffered.mark(2)
+                        val gzip = buffered.read() == 0x1f && buffered.read() == 0x8b
+                        buffered.reset()
+                        val xml = if (gzip) bounded(java.util.zip.GZIPInputStream(buffered), 256L * 1024 * 1024)
+                            else buffered
+                        populateGuide(db, feed, xml, now) { job.ensureActive() }
+                    }
+                }
+            }
+            if (!changed) {
+                // Window maintenance is independent of importing an unchanged feed.
+                val (from, until) = guideWindow(now)
+                if (guide.hasOutsideWindow(feed.id, from, until)) guide.pruneWindow(feed.id, from, until)
+            }
+            preferences.setFetchState(key, downloaded.state)
         }
     }
 
     private suspend fun import(source: Source, spec: SourceSpec) {
         val token = maxOf(System.currentTimeMillis(), source.refreshed + 1)
+        val key = "source_${source.id}"
+        val previous = if (source.refreshed > 0) preferences.fetchState(key) else FetchState()
+        val xtream = if (spec.user.isNotEmpty()) Xtream(spec) else null
+        var downloaded: Download? = null
+        var snapshot: Xtream.Snapshot? = null
+        val job = currentCoroutineContext()
+        try {
+            if (xtream != null) snapshot = xtream.prepare(context.cacheDir, previous) { job.ensureActive() }
+            else if (!spec.address.startsWith("content://"))
+                downloaded = Transport.download(spec.address, spec.allowHttp, context.cacheDir, previous,
+                    checkActive = { job.ensureActive() })
+            job.ensureActive()
+            val body = downloaded
+            val catalog = snapshot
+            val state = catalog?.state ?: body?.state
+            val changed = if (body != null) body.importIfChanged {
+                importChanged(source, spec, token, xtream, catalog, body)
+            } else if (catalog?.unchanged != true) {
+                importChanged(source, spec, token, xtream, catalog, body)
+                true
+            } else false
+            if (!changed) {
+                library.save(source.copy(refreshed = token))
+            }
+            val providerLimit = catalog?.account?.optJSONObject("user_info")?.optInt("max_connections", 0) ?: 0
+            if (providerLimit > 0) preferences.set("provider_${source.id}", providerLimit.toString())
+            if (state != null) preferences.setFetchState(key, state)
+        } finally {
+            snapshot?.close()
+            downloaded?.close()
+        }
+    }
+
+    private suspend fun importChanged(source: Source, spec: SourceSpec, token: Long,
+        xtream: Xtream?, snapshot: Xtream.Snapshot?, downloaded: Download?) {
         val staged = CatalogStage(context.cacheDir, source.id, token)
-        var providerLimit = 0
+        val job = currentCoroutineContext()
         try {
             staged.write { append ->
                 val grouper = SeriesGrouper()
                 fun accept(row: Listing) {
+                    job.ensureActive()
                     if (spec.user.isNotEmpty()) append(item(source.id, token, row))
                     else grouper.accept(row) { append(item(source.id, token, it)) }
                 }
                 when {
-                    spec.user.isNotEmpty() -> providerLimit = Xtream(spec).read(::accept)
+                    spec.user.isNotEmpty() -> checkNotNull(xtream).read(snapshot, ::accept)
                     spec.address.startsWith("content://") ->
                         context.contentResolver.openInputStream(Uri.parse(spec.address))?.use {
                             Playlist.read(
@@ -324,7 +382,7 @@ class Repository private constructor(private val context: Context) {
                             )
                         }
                     else ->
-                        Transport.read(spec.address, spec.allowHttp) { input, finalUrl ->
+                        checkNotNull(downloaded).read { input, finalUrl ->
                             Playlist.read(
                                 input.bufferedReader(),
                                 URI(finalUrl),
@@ -334,11 +392,10 @@ class Repository private constructor(private val context: Context) {
                         }
                 }
             }
-            if (providerLimit > 0)
-                Preferences(context).set("provider_${source.id}", providerLimit.toString())
             db.withTransaction {
                 library.save(source)
                 staged.read { batch ->
+                    job.ensureActive()
                     library.writeBatch(batch.map { it.copy(versionKey = it.id, displayTitle = it.title, displayYear = it.year) })
                 }
                 if (spec.user.isEmpty()) library.prunePlaylist(source.id, token)
@@ -350,6 +407,7 @@ class Repository private constructor(private val context: Context) {
                     // translated titles and a missing TMDB ID may occur in distant batches.
                     library.assignVersions(rows.versionAssignments())
                     rows.versionGroups().filter { it.size > 1 }.forEach { versions ->
+                        job.ensureActive()
                         val marks = versions.mapNotNull { library.mark(it.id) }
                         val newest = marks.maxByOrNull { it.updated }
                         if (newest != null) {
@@ -358,6 +416,7 @@ class Repository private constructor(private val context: Context) {
                         }
                     }
                 }
+                job.ensureActive()
                 library.save(source.copy(refreshed = token, count = library.count(source.id)))
             }
             versionIndex.keys.removeAll { it.startsWith("${source.id}|") }
@@ -508,11 +567,55 @@ class Repository private constructor(private val context: Context) {
 }
 
 class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
-    override suspend fun doWork(): Result {
+    private fun postponeIfBusy(forceAll: Boolean = false): Result? {
+        if (!RefreshGate.busy) return null
+        val now = System.currentTimeMillis()
+        val deadline = inputData.getLong("deferUntil", 0).takeIf { it > 0 }
+            ?: (now + TimeUnit.MINUTES.toMillis(30))
+        if (RefreshGate.defer(now, deadline)) {
+            WorkManager.getInstance(applicationContext).enqueueUniqueWork(
+                "deferred-refresh", ExistingWorkPolicy.APPEND_OR_REPLACE,
+                OneTimeWorkRequestBuilder<RefreshWorker>()
+                    .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                    .setInitialDelay(minOf(TimeUnit.MINUTES.toMillis(5), deadline - now), TimeUnit.MILLISECONDS)
+                    .setInputData(workDataOf("deferUntil" to deadline,
+                        "staleHours" to if (forceAll) 0L else inputData.getLong("staleHours", 0)))
+                    .build())
+        }
+        // At 30 minutes skip this occurrence, rather than starting heavy work during playback.
+        return Result.success()
+    }
+
+    private class RefreshBusy : kotlinx.coroutines.CancellationException()
+
+    override suspend fun doWork(): Result = coroutineScope {
+        val refresh = async { refreshSources() }
+        val monitor = launch {
+            while (refresh.isActive) {
+                delay(500)
+                if (RefreshGate.busy) {
+                    refresh.cancel(RefreshBusy())
+                    break
+                }
+            }
+        }
+        try {
+            refresh.await()
+        } catch (_: RefreshBusy) {
+            // Cancellation may follow a catalog commit but precede its guide; resume both.
+            postponeIfBusy(forceAll = true) ?: Result.retry()
+        } finally {
+            monitor.cancel()
+        }
+    }
+
+    private suspend fun refreshSources(): Result {
+        postponeIfBusy()?.let { return it }
         val repo = Repository.get(applicationContext)
         var failed = false
         val prefs = Preferences(applicationContext)
         for (source in repo.library.snapshot()) {
+            postponeIfBusy()?.let { return it }
             val threshold = inputData.getLong("staleHours", 0)
             if (
                 threshold > 0 &&

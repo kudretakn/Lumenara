@@ -30,6 +30,10 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
     LaunchedEffect(available) { if (available.none { it.id == scope }) scope = "" }
     var detail by remember { mutableStateOf<Item?>(null) }
     var playing by remember { mutableStateOf<Item?>(null) }
+    DisposableEffect(playing != null) {
+        RefreshGate.playing = playing != null
+        onDispose { RefreshGate.playing = false }
+    }
     var returnToChannel by remember { mutableStateOf<String?>(null) }
     var siblings by remember { mutableStateOf(emptyList<Item>()) }
     val pages = androidx.compose.runtime.saveable.rememberSaveableStateHolder()

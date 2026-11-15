@@ -19,12 +19,41 @@ internal class Xtream(private val spec: SourceSpec) {
             .addQueryParameter("password", spec.password)
             .apply { if (action.isNotEmpty()) addQueryParameter("action", action) }
 
-    private fun rows(action: String, consume: (Map<String, String>) -> Unit) {
+    internal class Snapshot(val account: JSONObject, val bodies: Map<String, Download>, val state: FetchState,
+        val unchanged: Boolean, val checkActive: () -> Unit = {}) : java.io.Closeable {
+        override fun close() { bodies.values.forEach { it.close() } }
+    }
 
-        Transport.read(api(action).build().toString(), spec.allowHttp) { input, _ ->
+    // Xtream validators are unreliable. Download each endpoint once, then compare the whole catalog.
+    // Account timestamps/online status are deliberately excluded from the catalog digest.
+    fun prepare(cache: java.io.File, previous: FetchState, checkActive: () -> Unit = {}): Snapshot {
+        checkActive()
+        val account = account()
+        val bodies = linkedMapOf<String, Download>()
+        try {
+            for (type in listOf("live", "vod", "series")) {
+                for (action in listOf("get_${type}_categories", if (type == "series") "get_series" else "get_${type}_streams"))
+                    bodies[action] = Transport.download(api(action).build().toString(), spec.allowHttp, cache,
+                        checkActive = checkActive)
+            }
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            bodies.forEach { (action, body) -> digest.update("$action:${body.state.digest}\n".toByteArray(Charsets.UTF_8)) }
+            digest.update(account.optJSONObject("server_info")?.optString("timezone").orEmpty().toByteArray(Charsets.UTF_8))
+            val state = FetchState(digest = digest.digest().joinToString("") { "%02x".format(it) })
+            checkActive()
+            return Snapshot(account, bodies, state, state.digest == previous.digest, checkActive)
+        } catch (error: Throwable) {
+            bodies.values.forEach { it.close() }
+            throw error
+        }
+    }
+
+    private fun rows(action: String, snapshot: Snapshot?, consume: (Map<String, String>) -> Unit) {
+        val parse: (java.io.InputStream, String) -> Unit = { input, _ ->
             JsonReader(input.reader()).use { reader ->
                 reader.beginArray()
                 while (reader.hasNext()) {
+                    snapshot?.checkActive?.invoke()
                     val row = mutableMapOf<String, String>()
                     reader.beginObject()
                     while (reader.hasNext()) {
@@ -54,6 +83,8 @@ internal class Xtream(private val spec: SourceSpec) {
                 reader.endArray()
             }
         }
+        if (snapshot != null) snapshot.bodies.getValue(action).read(parse)
+        else Transport.read(api(action).build().toString(), spec.allowHttp, parse)
     }
 
     fun guideAddress(): String =
@@ -65,22 +96,29 @@ internal class Xtream(private val spec: SourceSpec) {
             .build()
             .toString()
 
-    fun read(emit: (Listing) -> Unit): Int {
+    private fun account(): JSONObject {
         val account =
             Transport.read(api().build().toString(), spec.allowHttp) { input, _ ->
                 JSONObject(input.reader().readText())
             }
         if (account.optJSONObject("user_info")?.optInt("auth") != 1)
             throw SourceFailure("Xtream kullanıcı adı veya şifre kabul edilmedi.")
+        return account
+    }
+
+    fun read(emit: (Listing) -> Unit): Int = read(null, emit)
+
+    fun read(snapshot: Snapshot?, emit: (Listing) -> Unit): Int {
+        val account = snapshot?.account ?: account()
         val zone = account.optJSONObject("server_info")?.optString("timezone").orEmpty()
         for ((type, kind) in
             listOf("live" to Kind.LIVE, "vod" to Kind.MOVIE, "series" to Kind.SERIES)) {
             val categories = mutableMapOf<String, String>()
-            rows("get_${type}_categories") { row ->
+            rows("get_${type}_categories", snapshot) { row ->
                 row["category_id"]?.let { categories[it] = row["category_name"].orEmpty() }
             }
             val action = if (type == "series") "get_series" else "get_${type}_streams"
-            rows(action) { row ->
+            rows(action, snapshot) { row ->
                 val id = row[if (kind == Kind.SERIES) "series_id" else "stream_id"] ?: return@rows
                 val url =
                     if (kind == Kind.SERIES)
