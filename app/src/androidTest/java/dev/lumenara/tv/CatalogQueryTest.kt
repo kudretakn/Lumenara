@@ -98,7 +98,7 @@ class CatalogQueryTest {
             dao.writeBatch(refreshed)
             dao.prune("a", 2)
             dao.orphans("a")
-            dao.assignVersions(dao.versionCandidates("a", "MOVIE").versionAssignments())
+            dao.assignVersions(dao.versionCandidates("a", "MOVIE").map(VersionCandidate::asItem).versionAssignments())
             assertNull(dao.item("dub"))
             assertEquals("original", dao.browse("a", "MOVIE", "", "", "", 120).first().single().id)
             assertEquals("sub", dao.browse("a", "MOVIE", "", "", "favorite", 120).first().single().id)

@@ -12,4 +12,5 @@ dependencies {
     api("androidx.media3:media3-ui:1.10.1")
     implementation("androidx.media3:media3-datasource-okhttp:1.10.1")
     implementation(project(":core:data"))
+    testImplementation("junit:junit:4.13.2")
 }
