@@ -1,5 +1,13 @@
 # Lumenara sürüm kaydı
 
+## 0.4.1 · 15 Kasım 2026
+
+- Büyük kataloglar (40 bin içerik) için performans: yeni veritabanı indeksleri, önceden hesaplanan sürüm anahtarları (şema 7→8), sayfalı canlı kanal listesi, kart boyutunda ve önbellekli görseller, değişmeyen liste ve EPG'nin yeniden indirilmemesi.
+- Listeler yüklenirken "İçerik yok" yerine kart iskeletleri; boş uyarısı yalnız liste gerçekten boşsa.
+- Uygulama içi güncelleme Android 9'da imza denetimine takılmıyor.
+- Hata mesajları nedeni söylüyor (ör. yanlış cihaz saati, DNS, bağlantı).
+- VLC'de akış okuma hatası yüzünden altyazının düşmesi ve durması düzeltildi; numarayla kanal girişinde takılan zamanlayıcı düzeltildi.
+
 ## 0.4.0 · 15 Kasım 2026
 
 - Sol menü yerine altı cam kartlı açılış ekranı; son kanal ve devam et rafları.
