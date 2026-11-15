@@ -27,10 +27,10 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 
 @Composable
-private fun Choice(model: LibraryModel, key: String, label: String, options: List<String>) {
+private fun Choice(model: LibraryModel, key: String, label: String, options: List<String>, default: String = options.first()) {
     val current by
-        remember(key) { model.prefs.text(key, options.first()) }
-            .collectAsStateWithLifecycle(options.first())
+        remember(key) { model.prefs.text(key, default) }
+            .collectAsStateWithLifecycle(default)
     val scope = rememberCoroutineScope()
     Button(
         onClick = {
@@ -165,6 +165,7 @@ internal fun SettingsScreen(
         }
         setting { Text("Türkçe   ·   Antrasit tema   ·   Lumenara 0.1", color = Ink.muted) }
         setting { Text("Oynatıcı", fontSize = 20.sp) }
+        setting { Choice(model, "frame_rate", "Kare hızını eşle", dev.lumenara.catalog.frameRateOptions, dev.lumenara.catalog.FRAME_RATE_DEFAULT) }
         setting { Choice(model, "engine", "Varsayılan motor", listOf("Media3", "VLC")) }
         setting { Choice(model, "fallback", "Codec hatasında VLC", listOf("Açık", "Kapalı")) }
         setting { Choice(model, "buffer", "Media3 tamponu", listOf("Dengeli", "Hızlı", "Kararlı")) }

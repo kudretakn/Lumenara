@@ -70,6 +70,21 @@ internal fun VlcScreen(
     val focus = remember { FocusRequester() }
     var layout by remember { mutableStateOf<VLCVideoLayout?>(null) }
     var player by remember { mutableStateOf<MediaPlayer?>(null) }
+    var frameRate by remember(item.id, retry.generation) { mutableStateOf<Float?>(null) }
+    LaunchedEffect(player) {
+        val p = player ?: return@LaunchedEffect
+        while (frameRate == null) {
+            val media = p.media
+            try {
+                frameRate = (0 until (media?.trackCount ?: 0)).asSequence()
+                    .mapNotNull { media?.getTrack(it) as? org.videolan.libvlc.interfaces.IMedia.VideoTrack }
+                    .filter { it.frameRateNum > 0 && it.frameRateDen > 0 }
+                    .map { it.frameRateNum.toFloat() / it.frameRateDen }
+                    .firstOrNull()
+            } finally { media?.release() }
+            delay(500)
+        }
+    }
     val playbackMutex = remember { Mutex() }
     var message by remember { mutableStateOf("") }
     var subtitleNotice by remember(item.id) { mutableStateOf("") }
@@ -389,6 +404,7 @@ internal fun VlcScreen(
         if (!panel) FullscreenOverlay(model, item, group, fullscreen, select, { panel = true },
             { player?.time ?: 0 }, { player?.length ?: 0 },
             if (item.kind == "EPISODE" && group.nextItem(item) != null) next else null)
+        FrameRateMatch(model, item.kind, frameRate, layout)
         Reconnecting(retry)
         numbers?.let { NumberEntry(it) }
         SubtitleNotice(subtitleNotice) { subtitleNotice = "" }
