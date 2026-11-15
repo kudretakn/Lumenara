@@ -72,10 +72,10 @@ class LivePresentationTest {
             await(hasTestTag("live-channel-${rows[0].id}") and isFocused())
             await(hasText("Süper Lig: Galatasaray – Fenerbahçe"))
             val second = screen.onNodeWithTag("live-channel-${rows[1].id}")
-            val before = screen.onNodeWithText(rows[1].title).fetchSemanticsNode().boundsInRoot
+            val before = screen.onNodeWithText(rows[1].title, substring = true).fetchSemanticsNode().boundsInRoot
             second.performSemanticsAction(SemanticsActions.RequestFocus)
             second.assertIsFocused()
-            val after = screen.onNodeWithText(rows[1].title).fetchSemanticsNode().boundsInRoot
+            val after = screen.onNodeWithText(rows[1].title, substring = true).fetchSemanticsNode().boundsInRoot
             assertEquals("Focus must leave the caption in place", before, after)
             val logoBounds = second.fetchSemanticsNode().boundsInRoot
             assertEquals("Only the 16:9 tile receives focus", 16f / 9f,

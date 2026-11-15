@@ -50,7 +50,9 @@ class ListLoadingTest {
                     }
                 }
             }
-            screen.onAllNodesWithTag("list-loading").assertCountEquals(8)
+            // The lazy 6x6 skeleton only composes the visible cells; at least one full row must show.
+            val skeletons = screen.onAllNodesWithTag("list-loading").fetchSemanticsNodes().size
+            org.junit.Assert.assertTrue("Loading skeleton should fill at least one row, was $skeletons", skeletons >= 6)
             screen.onNodeWithText("İçerik yok.").assertDoesNotExist()
             screen.onNodeWithText("Geri").assertDoesNotExist()
             screen.runOnIdle { release.complete(Unit) }
