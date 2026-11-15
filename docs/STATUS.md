@@ -1,16 +1,34 @@
 # Durum
 
-Son güncelleme: 15 Kasım 2026 · sunucu oturumu
+Son güncelleme: 15 Kasım 2026 akşam · sunucu oturumundan yerel (Windows) oturuma devir
 
-> **Sunucudaki Claude için devir notu.** Bu dosya `feat/k-card-navigation` dalında (PR #18). `main`'deki STATUS eski.
->
-> Başlangıç:
+> **Yerel Claude için devir notu.** Başlangıç:
 > ```
 > git fetch --all --prune
-> git switch feat/k-card-navigation
+> git switch design/0.5
 > git pull
 > ```
-> Sonra aşağıdaki "Açık" ve "Sıradaki" bölümlerine göre devam et.
+> Sonra bu dosyayı ve `CLAUDE.md`'yi oku. Çalışma düzeni: sen ekip liderisin; işleri Codex alt ajanlarına (zorluğa göre luna/sol/astra) ve Claude alt ajanlarına (haiku/sonnet/opus) dağıt, kendin kod yazma (yalnız birleştirme çakışması ve tek satırlık mekanik düzeltme).
+
+## Şu an açık
+- **PR #22 — Tasarım 0.5.0** (dal `design/0.5`): `docs/DESIGN-0.5.md` D0–D7 uygulandı; D8 (temizlik: `Glass.kt`, `Ink` alias, `NavIcon`, Unicode glif taraması, jank kontrolü) **yapılmadı**. Yerelde `test lintDebug assembleDebug assembleDebugAndroidTest` geçti; CI cihaz testleri bu PR'da ilk kez koşuyor — düşen test olursa `gh run download <id> -n android-tv-device-artifacts` ile incele ve her testi ayrı ajana ver. Yeşil olunca merge → `v0.5.0` etiketi. Yeni ekran görüntüleri artifact'ta `files/screens/` altında; kullanıcıya göster.
+- Onaylı maketler: `docs/DESIGN-0.5.md` §6 istemleri; PNG'ler sunucudaydı, gerekirse SVG istemleriyle yeniden üretilir.
+
+## Yayınlanan sürümler (Lumenara-releases)
+- v0.4.0 kartlı Hub, +18 filtresi, sessiz yayında VLC'ye geçiş (kullanıcının canlı kanallarında ses yoktu).
+- v0.4.1 performans paketi, yüklenme iskeletleri, Android 9 güncelleme imza düzeltmesi, açıklayıcı hata mesajları.
+- v0.4.2 derin performans + bellek (Opus taramaları; uyarlanabilir Media3 tamponu 32–96 MB, tek LibVLC, onTrimMemory). Şema 9.
+- v0.4.3 Watch Next, sesli arama, kare hızı eşleme, uyku zamanlayıcısı, şifreli yedek/geri yükleme (her şey ya da hiç; şema 10).
+- **Kullanıcının TV'sinde 0.4.0 kurulu** (ADB ile). 0.4.0'ın güncelleyicisi Android 9'da imza kontrolüne takılıyor; ilk güncelleme bir kez ADB ile gerekebilir (`gh release download vX -R kudretakn/Lumenara-releases -p "*.apk"`, `adb connect 192.168.1.14:5555`, `adb install -r`). 0.4.1+ güncelleyicisi düzeltildi.
+
+## Kullanıcı bilgileri ve kararları (bu oturum)
+- Mi Box 4 (Android 9, 2 GB), Xtream 39.682 içerik, Mi Box'ta 100–150 Mbps; 4K ve yüksek bit hızlı (remux) dosyalar oynatacak.
+- TV saati yanlıştı → GitHub TLS hatası; otomatik saat açıldı.
+- "Uygulama çok hızlı olmalı", RAM kullanımı yüksekti → 0.4.2. Kullanıcıdan ölçüm (`adb shell dumpsys meminfo dev.lumenara.tv`, `adb logcat -s LumenaraPerf`) henüz alınmadı; TV'ye kurduğunda iste.
+- U3 (ebeveyn kilidi, kanal sıralama) ertelendi; şema değişikliği artık 10→11 olur.
+- Depo 15 Kasım'da **herkese açık** yapıldı (Actions dakikaları bitmişti; kullanıcı kararı). Geçmiş gizli bilgi açısından tarandı, temiz.
+- Codex sandbox'ı worktree'lerin ortak `.git`'ine yazamaz: birleştirme işlerinde ajan `/tmp` altına klon açıp bundle üretir, lider bundle'ı içe alır. Codex'e "testler JUnit 4 `@Test` sınıfı olmalı, `const val` sınıf içinde olmaz" kuralını her istemde ver (aksi halde Gradle "no tests discovered" verir).
+- Sunucu diski dar (~6 GB boş); her derlemeden sonra build klasörleri silindi.
 
 ## Biten
 - 0.3.x: arayüz, Lumenara adı, güncelleme, U1, S, A, U2 (#1–#17). Yayınlar v0.3.0–v0.3.2.
