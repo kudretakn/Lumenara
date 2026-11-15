@@ -350,6 +350,7 @@ internal fun VlcScreen(
         Modifier.fillMaxSize()
             .background(androidx.compose.ui.graphics.Color.Black)
             .focusRequester(focus)
+            .testTag("vlc-player")
             .semantics {
                 contentDescription = "Tam ekran oynatıcı"
                 if (activeSubtitle) stateDescription = "İndirilen altyazı etkin"

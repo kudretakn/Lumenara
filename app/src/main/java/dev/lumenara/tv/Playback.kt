@@ -119,8 +119,18 @@ internal fun Video(
                             val signature = tracks.groups.joinToString { g -> (0 until g.length).joinToString { g.getTrackFormat(it).toString() } }
                             if (signature == formats) return
                             formats = signature
-                            val audio = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+                            val audioGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+                            val audio = audioGroups
                                 .flatMap { g -> (0 until g.length).filter { g.isTrackSupported(it) }.map { g to it } }
+                            if (audioGroups.isNotEmpty() && audio.isEmpty()) {
+                                // Media3 plays video silently when no audio track can be decoded
+                                // (e.g. MPEG-L2 or AC-3 on devices without a decoder); VLC can.
+                                val mimes = audioGroups.flatMap { g -> (0 until g.length).map { g.getTrackFormat(it).sampleMimeType } }
+                                    .distinct().joinToString()
+                                model.diagnostic("Media3 unsupported audio: $mimes")
+                                error = "Bu yayının ses biçimi ($mimes) Media3 ile çözülemiyor. Ayarlar'dan VLC'yi seçebilirsiniz."
+                                decoderFailure(engine.currentPosition)
+                            }
                             val requested = audio.filter { (g, i) -> trackPreferenceRank(audioPreference, g.getTrackFormat(i).language, g.getTrackFormat(i).id) < 2 }
                                 .minByOrNull { (g, i) -> trackPreferenceRank(audioPreference, g.getTrackFormat(i).language, g.getTrackFormat(i).id) }
                             val turkish = audio.firstOrNull { (g, i) -> dev.lumenara.catalog.isTurkish(g.getTrackFormat(i).language) }

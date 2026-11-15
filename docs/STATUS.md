@@ -68,7 +68,12 @@ Devam yöntemi:
 ## Sıradaki
 1. PR #18 → v0.4.0.
 2. Performans 0.4.1 (yukarıda).
-3. **U3** (`docs/USABILITY.md`). Kullanıcı başlama talimatı verene kadar bekliyor.
+3. Kullanıcı kararı (15 Kasım 2026): U3 yerine sırayla şunlar yapılacak:
+   - **Android TV ana ekranı:** "İzlemeye devam et" (Watch Next) satırı ve Google Asistan sesli arama.
+   - **Kare hızı eşleme + uyku zamanlayıcısı:** Filmlerde 24/25/50 Hz geçişi; 30/60/90 dk uyku zamanlayıcısı.
+   - **Yedekle / geri yükle:** Ayarlar, kaynaklar, Listem ve izleme geçmişi.
+4. **Tasarım yenilemesi (0.5.0)** — kullanıcı isteği (15 Kasım 2026), yukarıdaki üç işten sonra: "şık, sade, minimalist, kullanıcı odaklı; çok amatör duruyor, daha profesyonel görünsün". Giriş ekranındaki fotoğraflar, tema, renk, tipografi, kartlar, boşluklar dahil her şey gözden geçirilecek. Yöntem: CI ekran görüntüleriyle mevcut durumun eleştirisi → `docs/DESIGN-0.5.md` tasarım dili (az renk, tek vurgu, net tipografi ölçeği, gerçek içerik görselleri, süs yok) → maket görseller (Codex) → ekran ekran PR'lar.
+5. **U3** (`docs/USABILITY.md`) ertelendi; kullanıcı istemedikçe başlama.
    - Ebeveyn kilidi.
    - Kanal sıralama. Şema artık 8→9 olur.
    - +18 filtresi K'de PIN'siz geldi; U3'te PIN ile birleştirilebilir.
