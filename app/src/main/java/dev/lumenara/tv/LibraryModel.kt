@@ -24,6 +24,11 @@ internal data class Filter(
 internal class LibraryModel
 @javax.inject.Inject
 constructor(val repo: Repository, val prefs: Preferences) : androidx.lifecycle.ViewModel() {
+    val startInSetup: StateFlow<Boolean?> = MutableStateFlow<Boolean?>(null).also { state ->
+        viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            state.value = repo.sourceSnapshot().isEmpty()
+        }
+    }.asStateFlow()
     val sources = repo.library.sources().stateIn(viewModelScope, SharingStarted.Eagerly, null)
     val filter = MutableStateFlow(Filter())
     val results =

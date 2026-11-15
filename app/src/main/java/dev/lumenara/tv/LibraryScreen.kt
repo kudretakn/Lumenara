@@ -21,9 +21,11 @@ import kotlinx.coroutines.launch
 @Composable
 internal fun LibraryScreen(model: LibraryModel = viewModel()) {
     val sources by model.sources.collectAsStateWithLifecycle()
+    val startInSetup by model.startInSetup.collectAsStateWithLifecycle()
     val available = sources ?: return
+    val initialSetup = startInSetup ?: return
     var section by rememberSaveable {
-        mutableStateOf(if (available.isEmpty()) "IPTV Kaynakları" else "Ana Sayfa")
+        mutableStateOf(if (initialSetup) "IPTV Kaynakları" else "Ana Sayfa")
     }
     var sourceParent by rememberSaveable { mutableStateOf("Ana Sayfa") }
     var scope by rememberSaveable { mutableStateOf("") }

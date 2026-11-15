@@ -67,15 +67,14 @@ internal fun LiveScreen(
         CategoryEntry("timeline", "Yayın akışı", total),
     ).filter { it.count > 0 } + providerCategories(groups)
     androidx.activity.compose.BackHandler(category != null) { category = null }
-    LaunchedEffect(returnToChannel) {
+    LaunchedEffect(source, returnToChannel) {
         val target = returnToChannel ?: return@LaunchedEffect
         if (target != focusedId) {
             category = "all"
             categoryTitle = "Tüm kanallar"
             query = ""
             val index = model.repo.liveIndex(source, target)
-            if (index != null) limit = maxOf(limit, index + 1)
-            else onChannelFocusRestored()
+            if (index == null) onChannelFocusRestored()
         }
     }
     if (category == "timeline") {
@@ -129,22 +128,25 @@ private fun LiveChannelGrid(model: LibraryModel, title: String, rows: List<Item>
     PrefetchArtwork(model, grid, rows, columns = 4)
     val focus = remember { FocusRequester() }
     val searchFocus = remember { FocusRequester() }
-    var positioned by remember { mutableStateOf(false) }
-    var requestPending by remember { mutableStateOf(true) }
+    var positioned by remember(paged, query) { mutableStateOf(false) }
+    var requestPending by remember(paged, query) { mutableStateOf(true) }
     val restoreId = remember { returnId }
-    val count = paged?.count?.coerceAtMost(limit) ?: rows.size
+    // SQL pages bound memory; the lazy grid still needs every absolute index.
+    // A limit captured before changing category belongs to the old saveable state.
+    val count = paged?.count ?: rows.size
     val target = paged?.anchor ?: rows.indexOfFirst { it.id == restoreId }.coerceAtLeast(0)
     val targetReady = if (paged != null) paged.anchor != null && paged[target] != null else rows.isNotEmpty()
-    LaunchedEffect(paged) { positioned = false }
-    LaunchedEffect(targetReady, count, query) {
+    LaunchedEffect(paged, target, targetReady, count, query) {
         if (!positioned && count == 0) searchFocus.requestFocus()
         if (!positioned && targetReady && target < count) {
             grid.scrollToItem(target)
             positioned = true
         }
     }
-    LaunchedEffect(paged, positioned) {
-        if (paged != null && positioned) snapshotFlow { grid.firstVisibleItemIndex }.collect { paged.focused(it) }
+    LaunchedEffect(paged, positioned, requestPending) {
+        // Keep the return page pinned until its card has received focus.
+        if (paged != null && positioned && !requestPending)
+            snapshotFlow { grid.firstVisibleItemIndex }.collect { paged.focused(it) }
     }
     LaunchedEffect(targetReady) {
         if (targetReady) { withFrameNanos { }; withFrameNanos { }; Perf.since("category", "category_grid_first_draw") }
@@ -182,7 +184,7 @@ private fun LiveChannelGrid(model: LibraryModel, title: String, rows: List<Item>
                         .then(if (index == target) Modifier.focusRequester(focus) else Modifier),
                     number = numbers[item.id], operations = { open(item) })
             }
-            if (count >= limit) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(4) }) {
+            if (paged == null && count >= limit) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(4) }) {
                 FocusCard(more, Modifier.fillMaxWidth()) {
                     Text("Devamını göster", Modifier.padding(12.dp))
                 }

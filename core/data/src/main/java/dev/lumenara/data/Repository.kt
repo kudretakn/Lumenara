@@ -230,6 +230,10 @@ class Repository private constructor(private val context: Context) {
 
     private val lock = Mutex()
 
+    // Queue the launch read with catalog commits, before a later import can
+    // overtake the first composition. Downloads do not hold up this snapshot.
+    suspend fun sourceSnapshot(): List<Source> = db.withTransaction { library.snapshot() }
+
     companion object {
         @Volatile private var instance: Repository? = null
 
