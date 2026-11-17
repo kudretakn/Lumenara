@@ -13,6 +13,8 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.tv.material3.*
 import dev.lumenara.design.LumenColors
 import dev.lumenara.data.Item
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @Composable
 internal fun MultiView(
@@ -27,7 +29,10 @@ internal fun MultiView(
     val active = remember { mutableStateMapOf<Int, ExoPlayer>() }
     val first = remember { FocusRequester() }
     LaunchedEffect(focus, active.toMap()) {
-        active.forEach { (i, engine) -> engine.volume = if (i == focus) 1f else 0f }
+        withContext(Dispatchers.Main.immediate) {
+            requireMainThread()
+            active.forEach { (i, engine) -> engine.volume = if (i == focus) 1f else 0f }
+        }
     }
     LaunchedEffect(Unit) { first.requestFocus() }
     BackHandler(onBack = back)
@@ -94,6 +99,7 @@ internal fun MultiView(
                                 ready = { p ->
                                     if (p == null) active.remove(index)
                                     else {
+                                        requireMainThread()
                                         p.volume = if (index == focus) 1f else 0f
                                         active[index] = p
                                     }
