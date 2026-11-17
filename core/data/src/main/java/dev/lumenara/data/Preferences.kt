@@ -105,7 +105,7 @@ class Preferences internal constructor(
                 if (key.name.startsWith("subtitle_delay_")) {
                     val newName = remapSubtitleDelayKey(key.name, ids) ?: continue
                     val newKey = stringPreferencesKey(newName)
-                    if (newKey !in snapshot) target[newKey] = value
+                    if (newKey !in snapshot) (value as? String)?.let { target[newKey] = it }
                     target.remove(key)
                     continue
                 }
