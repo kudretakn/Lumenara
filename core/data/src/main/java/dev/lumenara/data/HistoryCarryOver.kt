@@ -133,3 +133,12 @@ internal fun carryPlaybackIdentity(row: CarryRow, identities: Map<String, String
     val number = episodeName(row.title, row.category)
     return "$base|${number.season}|${number.episode}"
 }
+
+internal fun remapSubtitleDelayKey(name: String, ids: Map<String, String>): String? {
+    val identity = name.removePrefix("subtitle_delay_")
+    val separator = identity.lastIndexOf('|')
+    if (!name.startsWith("subtitle_delay_") || separator < 0) return null
+    val itemId = identity.substring(separator + 1)
+    val replacement = ids[itemId] ?: return null
+    return "subtitle_delay_${identity.substring(0, separator + 1)}$replacement"
+}

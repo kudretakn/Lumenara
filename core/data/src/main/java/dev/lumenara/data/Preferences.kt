@@ -102,6 +102,13 @@ class Preferences internal constructor(
                 .distinct().take(20).joinToString("\n") }
             val snapshot = target.asMap()
             for ((key, value) in snapshot) {
+                if (key.name.startsWith("subtitle_delay_")) {
+                    val newName = remapSubtitleDelayKey(key.name, ids) ?: continue
+                    val newKey = stringPreferencesKey(newName)
+                    if (newKey !in snapshot) target[newKey] = value
+                    target.remove(key)
+                    continue
+                }
                 val prefix = listOf("version_", "audio_", "text_", "delay_", "sub_", "subtitle_", "engine_", "series_expanded_")
                     .firstOrNull { key.name.startsWith(it) } ?: continue
                 val identity = key.name.removePrefix(prefix)

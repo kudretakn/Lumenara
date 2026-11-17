@@ -1,14 +1,36 @@
 package dev.lumenara.data
 
 import java.util.Calendar
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences as StoredPreferences
+import androidx.datastore.preferences.core.emptyPreferences
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.junit.Assert.*
 import org.junit.Test
 
 class HistoryCarryOverTest {
+    private class MemoryStore : DataStore<StoredPreferences> {
+        override val data = MutableStateFlow(emptyPreferences())
+        private val mutex = Mutex()
+        override suspend fun updateData(transform: suspend (StoredPreferences) -> StoredPreferences): StoredPreferences =
+            mutex.withLock { transform(data.value).toPreferences().also { data.value = it } }
+    }
     private val year = Calendar.getInstance().apply { timeInMillis = System.currentTimeMillis() }.get(Calendar.YEAR).toString()
     private fun row(id: String, title: String, kind: String = "MOVIE", provider: String = "", date: String = year,
         tvg: String = "", name: String = "", group: String = "Films", parent: String = "") =
         CarryRow(id, "source", title, group, kind, tvg, date, parent, provider, name, group)
+
+    @Test fun subtitleDelayPreferenceFollowsItemId() = runBlocking {
+        val prefs = Preferences(MemoryStore(), { it }, { it })
+        prefs.set("subtitle_delay_source|old-item", "750")
+        prefs.carryItems(mapOf("old-item" to "new-item"), emptyMap())
+        assertEquals("750", prefs.text("subtitle_delay_source|new-item").first())
+        assertEquals("", prefs.text("subtitle_delay_source|old-item").first())
+    }
 
     @Test fun xtreamIdsSurviveChangedHostCredentialsAndTitlesButRespectKind() {
         val old = listOf(row("a", "Before", provider = "42"), row("b", "TV", "LIVE", "42"))
