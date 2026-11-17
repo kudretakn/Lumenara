@@ -43,6 +43,7 @@ class AudioSubtitleTest {
         screen.onNodeWithTag("player-options").performScrollToNode(matcher)
     }
     private fun assertOptionsKeepRemoteFocus() {
+        screen.onNodeWithText("Devamını göster").assertDoesNotExist()
         val focusedOption = isFocused() and hasAnyAncestor(hasTestTag("player-options"))
         waitFor(focusedOption)
         screen.dpad(Key.DirectionLeft)

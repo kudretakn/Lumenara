@@ -11,6 +11,7 @@ import java.util.concurrent.ConcurrentHashMap
 /** Fixed event names only: never pass content titles, IDs or addresses. Enabled in release. */
 internal object Perf {
     private val marks = ConcurrentHashMap<String, Long>()
+    fun duration(name: String, millis: Long) { Log.i("LumenaraPerf", "$name ms=$millis") }
     fun mark(name: String) { marks[name] = SystemClock.elapsedRealtime() }
     fun elapsed(name: String, label: String) {
         val start = marks[name] ?: return

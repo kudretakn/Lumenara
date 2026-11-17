@@ -117,7 +117,7 @@ internal fun rememberFullscreenState(item: Item): FullscreenState {
 internal fun BoxScope.FullscreenOverlay(
     model: LibraryModel, item: Item, group: List<Item>, state: FullscreenState,
     select: (Item, List<Item>) -> Unit, options: () -> Unit,
-    position: () -> Long, duration: () -> Long, next: (() -> Unit)?,
+    position: Long, duration: Long, next: (() -> Unit)?,
 ) {
     LaunchedEffect(state, item.kind == "LIVE") {
         if (item.kind == "LIVE" && !state.hintClaimed) {
@@ -171,8 +171,8 @@ internal fun BoxScope.FullscreenOverlay(
             if (item.kind == "LIVE") {
                 LiveBanner(model, item, state)
             } else {
-                val elapsed = position().coerceAtLeast(0)
-                val total = duration().coerceAtLeast(0)
+                val elapsed = position.coerceAtLeast(0)
+                val total = duration.coerceAtLeast(0)
                 Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                     .padding(horizontal = Spacing.screenHorizontal, vertical = Spacing.screenVertical),
                     verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
@@ -255,15 +255,16 @@ private fun MiniGuide(model: LibraryModel, playing: Item, state: FullscreenState
     val channels = rememberLivePages(model, playing.source, category, returnId = playing.id)
     val numbers = liveChannelNumbers(model, playing.source, channels.loaded())
     val list = rememberLazyListState()
-    val currentFocus = remember(category) { FocusRequester() }
+    val currentFocus = remember(channels) { FocusRequester() }
     val target = channels.anchor ?: 0
-    var positioned by remember(category) { mutableStateOf(false) }
-    var focusPending by remember(category) { mutableStateOf(true) }
-    LaunchedEffect(channels[target], category) {
+    var positioned by remember(channels) { mutableStateOf(false) }
+    var focusPending by remember(channels) { mutableStateOf(true) }
+    LaunchedEffect(channels, channels[target]) {
         if (channels[target] != null && !positioned) { list.scrollToItem(target); positioned = true }
     }
     LaunchedEffect(channels, positioned) {
-        if (positioned) snapshotFlow { list.firstVisibleItemIndex }.collect { channels.focused(it) }
+        if (positioned) snapshotFlow { list.layoutInfo.visibleItemsInfo.lastOrNull()?.index }
+            .collect { it?.let(channels::visible) }
     }
     Panel(Modifier.width(400.dp).fillMaxHeight().testTag("mini-guide").onPreviewKeyEvent {
         state.activity = System.currentTimeMillis(); false
@@ -288,20 +289,17 @@ private fun MiniGuide(model: LibraryModel, playing: Item, state: FullscreenState
                 contentPadding = PaddingValues(end = Spacing.unit, bottom = Spacing.screenVertical)) {
                 items(channels.count, key = { it }) { index ->
                     val row = channels[index]
-                    if (row == null) {
-                        Box(Modifier.fillMaxWidth().height(64.dp))
-                        return@items
-                    }
                     val isTarget = index == target
                     if (isTarget && positioned && focusPending) LaunchedEffect(category, positioned) {
                         currentFocus.requestFocus(); focusPending = false
                     }
-                    LiveChannelRow(model, row, numbers[row.id] ?: 1, state.now / 30_000 * 30_000,
-                        { Perf.mark("channel"); state.guide = false; state.showBanner(); select(row, channels.loaded()) },
+                    LiveChannelRow(model, row, row?.let { numbers[it.id] } ?: (index + 1), state.now / 30_000 * 30_000,
+                        { row?.let { Perf.mark("channel"); state.guide = false; state.showBanner(); select(it, channels.loaded()) } },
                         { state.guide = false; options() },
                         { channels.focused(index); state.activity = System.currentTimeMillis() },
-                        if (isTarget) Modifier.focusRequester(currentFocus) else Modifier,
-                        selected = row.id == playing.id, compactHeight = 64.dp)
+                        (if (isTarget) Modifier.focusRequester(currentFocus) else Modifier)
+                            .onFocusChanged { if (it.isFocused) channels.focused(index) },
+                        selected = row?.id == playing.id, compactHeight = 64.dp)
                 }
             }
         }

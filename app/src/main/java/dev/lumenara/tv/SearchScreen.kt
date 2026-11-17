@@ -19,6 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.*
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
@@ -43,6 +44,7 @@ import dev.lumenara.design.Spacing
 import java.time.*
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 @Composable
@@ -57,7 +59,12 @@ internal fun SearchScreen(
     var restoring by remember { mutableStateOf(true) }
     var fieldFocused by remember { mutableStateOf(false) }
     val entryFocus = remember { FocusRequester() }
+    // The wide input's spatial centre can point at a later card. Keep DOWN on the
+    // first absolute slot, including while the combined row separates into shelves.
+    val firstResultFocus = remember { FocusRequester() }
     val resultsState = rememberLazyListState()
+    val firstResultsState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) {
         if (lastShelf == null) {
             withFrameNanos { }
@@ -69,7 +76,6 @@ internal fun SearchScreen(
     val settledQuery by remember(source) {
         snapshotFlow { query }.debouncedSearchQuery()
     }.collectAsStateWithLifecycle("")
-    var limit by rememberSaveable(source, settledQuery) { mutableIntStateOf(80) }
     val searchPrefill by model.searchPrefill.collectAsStateWithLifecycle()
     LaunchedEffect(searchPrefill) {
         searchPrefill?.let { query = it.second; model.searchPrefill.value = null }
@@ -95,12 +101,13 @@ internal fun SearchScreen(
             listen()
         }
     }
-    val shelfResults = listOf("Kanallar" to "LIVE", "Filmler" to "MOVIE", "Diziler" to "SERIES").map { (title, kind) ->
-        val rows by remember(source, kind, settledQuery, limit) {
-            if (settledQuery.isEmpty()) flowOf(emptyList())
-            else model.repo.browse(source, kind, "", settledQuery, "", limit)
-        }.collectAsLoadingState()
-        title to rows
+    val shelves = if (settledQuery.isEmpty()) emptyList() else
+        listOf("Kanallar" to "LIVE", "Filmler" to "MOVIE", "Diziler" to "SERIES").map { (title, kind) ->
+            title to rememberCatalogPages(model, source, kind, query = settledQuery, columns = 1)
+        }
+    LaunchedEffect(source, settledQuery, shelves.map { it.second }) {
+        resultsState.scrollToItem(0)
+        firstResultsState.scrollToItem(0)
     }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { wallClockTicks(30_000).collect { now = it } }
@@ -116,12 +123,12 @@ internal fun SearchScreen(
                 }
             }
     }.collectAsLoadingState()
-    val loading = shelfResults.any { it.second == null } || programResult == null
-    val shelves = shelfResults.map { it.first to it.second.orEmpty() }
+    val loading = shelves.any { !it.second.firstPageLoaded } || programResult == null
     val programs = programResult.orEmpty()
+    val firstCatalogShelf = shelves.firstOrNull { it.second.count > 0 }?.first
     LaunchedEffect(shelves, programs, loading) {
         if (restoring && lastShelf != null && !loading) {
-            val visible = shelves.filter { it.second.isNotEmpty() }.map { it.first } +
+            val visible = shelves.filter { it.second.count > 0 }.map { it.first } +
                 if (programs.isNotEmpty()) listOf("Programlar") else emptyList()
             val index = visible.indexOf(lastShelf)
             if (index >= 0) {
@@ -140,7 +147,16 @@ internal fun SearchScreen(
                     recentSearches = (listOf(query.trim()) + recentSearches.filterNot { it.equals(query.trim(), true) }).take(6)
                 }
                 fieldFocused = focused
-            }, Modifier.weight(1f))
+            }, Modifier.weight(1f), if (firstCatalogShelf != null) {
+                {
+                    scope.launch {
+                        resultsState.scrollToItem(0)
+                        firstResultsState.scrollToItem(0)
+                        withFrameNanos { }
+                        firstResultFocus.requestFocus()
+                    }
+                }
+            } else null)
             LumenButton(onClick = { listen() }, style = LumenButtonStyle.Secondary,
                 modifier = Modifier.size(56.dp).testTag("search-voice")) {
                 LumenIcon(LumenIcon.Search, contentDescription = "Sesle ara")
@@ -169,42 +185,23 @@ internal fun SearchScreen(
                     items(8) { LoadingCard(Modifier.width(140.dp).aspectRatio(2f / 3f)) }
                 }
             }
-            if (!loading && programs.isEmpty() && shelves.all { it.second.isEmpty() }) item { Text("Eşleşen içerik yok.", color = LumenColors.textSecondary, style = LumenType.body) }
-            val populated = shelves.filter { it.second.isNotEmpty() }
-            if (fieldFocused && populated.isNotEmpty()) item(key = "single-search-shelf") {
-                val combined = populated.flatMap { (title, rows) -> rows.map { title to it } }
+            if (!loading && programs.isEmpty() && shelves.all { it.second.count == 0 }) item { Text("Eşleşen içerik yok.", color = LumenColors.textSecondary, style = LumenType.body) }
+            val populated = shelves.filter { it.second.count > 0 }
+            val displayed = if (fieldFocused && populated.isNotEmpty()) listOf(populated)
+                else populated.map { listOf(it) }
+            items(displayed, key = { it.first().first }) { rowShelves ->
+                val title = rowShelves.first().first
                 Column(verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
-                    Text("SONUÇLAR", style = LumenType.caption, color = LumenColors.textSecondary)
-                    LazyRow(Modifier.testTag("search-shelf-${populated.first().first}").focusRestorer().focusGroup(),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        items(combined, key = { (kind, item) -> "$kind:${item.id}" }) { (kind, item) ->
-                            if (kind == "Kanallar") {
-                                Box(Modifier.testTag("channel-shelf-Kanallar")) {
-                                    SearchResultCard(model, item, { lastShelf = kind }) {
-                                        play(item, shelves.first { it.first == kind }.second)
-                                    }
-                                }
-                            } else {
-                                Box(if (kind == populated.first().first) Modifier else Modifier.testTag("search-shelf-$kind")) {
-                                    SearchResultCard(model, item, { lastShelf = kind }) { open(item) }
-                                }
-                            }
-                        }
-                    }
-                }
-            } else items(populated, key = { it.first }) { (title, rows) ->
-                Column(verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
-                    Text(title, style = LumenType.cardTitle)
-                    LazyRow(Modifier.testTag(if (title == "Kanallar") "channel-shelf-$title" else "search-shelf-$title")
-                        .focusRestorer().focusGroup(),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        items(rows, key = { it.id }) { item ->
-                            SearchResultCard(model, item, { lastShelf = title }) {
-                                if (title == "Kanallar") play(item, rows) else open(item)
-                            }
-                        }
+                    Text(if (fieldFocused) "SONUÇLAR" else title,
+                        style = if (fieldFocused) LumenType.caption else LumenType.cardTitle,
+                        color = if (fieldFocused) LumenColors.textSecondary else LumenColors.textPrimary)
+                    // The first shelf keeps its LazyRow and focused slot when DPAD leaves the field.
+                    key(shelves.map { it.second }) {
+                        SearchPagingRow(model, rowShelves,
+                            if (!fieldFocused && title == "Kanallar") "channel-shelf-$title" else "search-shelf-$title",
+                            { lastShelf = it }, open, play,
+                            if (title == firstCatalogShelf) firstResultFocus else null,
+                            if (title == firstCatalogShelf) firstResultsState else rememberLazyListState())
                     }
                 }
             }
@@ -232,9 +229,6 @@ internal fun SearchScreen(
                     }
                 }
             }
-            if (shelves.any { it.second.size >= limit }) item {
-                LumenButton(onClick = { limit += 80 }, style = LumenButtonStyle.Secondary) { Text("Devamını göster") }
-            }
         }
     }
 }
@@ -246,6 +240,7 @@ private fun SearchField(
     requester: FocusRequester,
     onFocus: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    onDown: (() -> Unit)? = null,
 ) {
     Row(modifier.height(56.dp).background(LumenColors.surface3, RoundedCornerShape(8.dp))
         .padding(horizontal = 16.dp),
@@ -256,6 +251,12 @@ private fun SearchField(
             value = value,
             onValueChange = onValueChange,
             modifier = Modifier.weight(1f).fillMaxHeight().wrapContentHeight(Alignment.CenterVertically)
+                .onPreviewKeyEvent { event ->
+                    if (event.key == Key.DirectionDown && onDown != null) {
+                        if (event.type == KeyEventType.KeyDown) onDown()
+                        true
+                    } else false
+                }
                 .focusRequester(requester).onFocusChanged {
                     onFocus(it.isFocused)
                 }.testTag("search-input"),
@@ -274,27 +275,89 @@ private fun SearchField(
 }
 
 @Composable
-private fun SearchResultCard(model: LibraryModel, item: Item, focus: () -> Unit, click: () -> Unit) {
-    var restoreFocus by rememberSaveable(item.id) { mutableStateOf(false) }
-    val requester = remember { FocusRequester() }
+internal fun SearchPagingRow(
+    model: LibraryModel,
+    shelves: List<Pair<String, CatalogPages>>,
+    tag: String,
+    focus: (String) -> Unit,
+    open: (Item) -> Unit,
+    play: (Item, List<Item>) -> Unit,
+    firstResult: FocusRequester? = null,
+    state: LazyListState = rememberLazyListState(),
+) {
+    val counts = shelves.map { it.second.count }
+    fun slot(index: Int): Pair<Int, Int> {
+        var local = index
+        shelves.indices.forEach { shelf ->
+            if (local < counts[shelf]) return shelf to local
+            local -= counts[shelf]
+        }
+        return shelves.lastIndex to local
+    }
+    LaunchedEffect(state, shelves, counts) {
+        snapshotFlow { state.layoutInfo.visibleItemsInfo.map { it.index } }
+            .distinctUntilChanged().collect { indices ->
+                indices.groupBy { slot(it).first }.forEach { (shelf, visible) ->
+                    shelves[shelf].second.visible(slot(visible.last()).second)
+                }
+            }
+    }
+    LazyRow(Modifier.testTag(tag).focusRestorer().focusGroup(), state = state,
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        items(counts.sum(), key = { index ->
+            val (shelf, local) = slot(index)
+            "${shelves[shelf].first}:$local"
+        }) { index ->
+            val (shelf, local) = slot(index)
+            val (title, pages) = shelves[shelf]
+            val entry = pages[local]
+            val wrapper = when {
+                tag.startsWith("channel-shelf-") -> Modifier
+                title == "Kanallar" -> Modifier.testTag("channel-shelf-Kanallar")
+                shelves.size > 1 && shelf > 0 -> Modifier.testTag("search-shelf-$title")
+                else -> Modifier
+            }
+            Box(wrapper) {
+                SearchResultCard(model, entry, "$title:$local", if (index == 0) firstResult else null, {
+                    pages.focused(local)
+                    focus(title)
+                }) {
+                    entry?.let { if (title == "Kanallar") play(it, pages.loaded()) else open(it) }
+                }
+            }
+        }
+    }
+}
+
+/** The focus surface survives both page arrival and eviction. */
+@Composable
+private fun SearchResultCard(model: LibraryModel, item: Item?, slot: String,
+    entryFocus: FocusRequester?, focus: () -> Unit, click: () -> Unit) {
+    var restoreFocus by rememberSaveable(slot) { mutableStateOf(false) }
+    val ownRequester = remember { FocusRequester() }
+    val requester = entryFocus ?: ownRequester
     LaunchedEffect(Unit) {
         if (restoreFocus) { withFrameNanos { }; requester.requestFocus(); restoreFocus = false }
     }
     Column(Modifier.width(140.dp)) {
         // The resting slot is measured separately from the 1.06 focus transform.
-        Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f).testTag("search-artwork-${item.id}")) {
-            FocusCard({ restoreFocus = true; click() }, Modifier.fillMaxSize().focusRequester(requester)
-                .semantics { contentDescription = item.title }
+        Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f)
+            .then(if (item == null) Modifier else Modifier.testTag("search-artwork-${item.id}"))) {
+            FocusCard({ if (item != null) { restoreFocus = true; click() } }, Modifier.fillMaxSize().focusRequester(requester)
+                .testTag("search-slot-$slot")
+                .semantics { contentDescription = item?.title ?: "Yükleniyor" }
                 .onFocusChanged { if (it.isFocused) focus() }) {
-                if (item.kind == "LIVE") {
+                if (item == null) Box(Modifier.fillMaxSize().background(LumenColors.surface2))
+                else if (item.kind == "LIVE") {
                     val logo by produceState<String?>(null, item.id, item.logo) { value = model.repo.poster(item) }
                     ChannelLogo(model, item, logo, Modifier.fillMaxSize())
                 } else Poster(model, item, Modifier.fillMaxSize())
             }
         }
-        Text(item.title, Modifier.padding(top = 8.dp), style = LumenType.label,
+        Text(item?.title ?: " ", Modifier.padding(top = 8.dp), style = LumenType.label,
             maxLines = 2, overflow = TextOverflow.Ellipsis)
-        Text(item.year.ifBlank { item.category }, style = LumenType.meta,
+        Text(item?.let { it.year.ifBlank { it.category } } ?: " ", style = LumenType.meta,
             maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }

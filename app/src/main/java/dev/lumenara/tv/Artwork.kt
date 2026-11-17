@@ -174,7 +174,7 @@ internal class ArtworkInterceptor(private val disk: coil.disk.DiskCache,
 /** Enqueue at most one row beyond the viewport; dispose requests when the window changes. */
 @Composable
 internal fun PrefetchArtwork(model: LibraryModel, grid: LazyGridState, rows: List<Item>, columns: Int = 6,
-    channelSpan: Int = 1, paged: LivePages? = null) {
+    channelSpan: Int = 1, paged: WindowPages? = null) {
     val context = LocalContext.current
     val sources by model.sources.collectAsStateWithLifecycle()
     LaunchedEffect(grid, rows, sources, columns, channelSpan, paged) {

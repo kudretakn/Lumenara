@@ -143,6 +143,9 @@ interface LibraryDao {
     @RawQuery(observedEntities = [Item::class, Mark::class])
     fun catalogCount(query: SupportSQLiteQuery): Flow<Int>
 
+    @RawQuery(observedEntities = [Item::class, Mark::class])
+    fun catalogKinds(query: SupportSQLiteQuery): Flow<List<String>>
+
     @RawQuery(observedEntities = [Item::class])
     fun catalogCategoryCounts(query: SupportSQLiteQuery): Flow<List<LiveCategoryCount>>
 
@@ -408,6 +411,30 @@ interface LibraryDao {
         browseRows(source, kind, category, query, shelf, if (limit == Int.MAX_VALUE) -1 else limit,
             year, genre, language, minRating, hidden).map { rows -> rows.map(Item::displayVersion) }
 
+    fun browsePage(source: String, kind: String, category: String, query: String, shelf: String,
+        limit: Int, offset: Int, year: String = "", genre: String = "", language: String = "",
+        minRating: Double = 0.0, hidden: List<String> = emptyList()): Flow<List<Item>> {
+        val sql = browseQuery(CatalogFilter(source, kind, category, query, shelf, year, genre,
+            language, minRating, hidden), limit, offset)
+        val rows = if (shelf in listOf("favorite", "list", "resume")) markedCatalogRows(sql) else catalogRows(sql)
+        return rows.map { page -> page.map(Item::displayVersion) }
+    }
+
+    fun browseTotal(source: String, kind: String, category: String, query: String, shelf: String,
+        year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0,
+        hidden: List<String> = emptyList()): Flow<Int> = catalogCount(browseCountQuery(
+            CatalogFilter(source, kind, category, query, shelf, year, genre, language, minRating, hidden)))
+
+    fun browseKinds(source: String, kind: String, category: String, query: String, shelf: String,
+        year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0,
+        hidden: List<String> = emptyList()): Flow<List<String>> = catalogKinds(browseKindsQuery(
+            CatalogFilter(source, kind, category, query, shelf, year, genre, language, minRating, hidden)))
+
+    suspend fun browseIndex(source: String, kind: String, category: String, query: String, shelf: String,
+        id: String, year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0,
+        hidden: List<String> = emptyList()): Int? = livePosition(browseIndexQuery(
+            CatalogFilter(source, kind, category, query, shelf, year, genre, language, minRating, hidden), id))
+
     @Query("SELECT * FROM items WHERE id=:id")
     suspend fun item(id: String): Item?
 
@@ -445,7 +472,7 @@ internal interface RestoreDao {
             Member::class,
             RestorePending::class,
         ],
-    version = 10,
+    version = 11,
     exportSchema = true,
     autoMigrations =
         [
@@ -461,6 +488,38 @@ abstract class LibraryDb : RoomDatabase() {
     internal abstract fun restoreJournal(): RestoreDao
 
     companion object {
+        // Data-only migration: collapse cards immediately, including unrefreshed v7 rows.
+        // Keep every stream, mark, collection and episode ID for the detail version picker.
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val sources = db.query("SELECT id FROM sources").use { cursor ->
+                    buildList { while (cursor.moveToNext()) add(cursor.getString(0)) }
+                }
+                db.compileStatement("""UPDATE items SET versionKey=?,isRepresentative=?,
+                    displayTitle=?,displayYear=?,versionRank=? WHERE id=?""").use { update ->
+                    for (source in sources) for (kind in listOf("MOVIE", "SERIES")) {
+                        val rows = db.query("""SELECT id,source,title,kind,search,year,category
+                            FROM items WHERE source=? AND kind=?""", arrayOf(source, kind)).use { cursor ->
+                            buildList {
+                                while (cursor.moveToNext()) add(VersionCandidate(cursor.getString(0),
+                                    cursor.getString(1), cursor.getString(2), cursor.getString(3),
+                                    cursor.getString(4), cursor.getString(5), cursor.getString(6)).asItem())
+                            }
+                        }
+                        for (row in rows.versionAssignments()) {
+                            update.bindString(1, row.versionKey)
+                            update.bindLong(2, if (row.isRepresentative) 1L else 0L)
+                            update.bindString(3, row.displayTitle)
+                            update.bindString(4, row.displayYear)
+                            update.bindLong(5, row.versionRank.toLong())
+                            update.bindString(6, row.id)
+                            update.executeUpdateDelete()
+                        }
+                    }
+                }
+            }
+        }
+
         val MIGRATION_9_10 = object : Migration(9, 10) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("CREATE TABLE IF NOT EXISTS restore_pending (id INTEGER NOT NULL, snapshot TEXT NOT NULL, PRIMARY KEY(id))")
@@ -474,8 +533,7 @@ abstract class LibraryDb : RoomDatabase() {
             }
         }
 
-        // Do not run Kotlin normalization while opening a large v7 database. Defaults keep every
-        // legacy row visible (including marks); the next successful import atomically groups it.
+        // v8 kept legacy rows visible with defaults; v11 now backfills their grouping keys.
         val MIGRATION_7_8 = object : Migration(7, 8) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE items ADD COLUMN versionKey TEXT NOT NULL DEFAULT ''")

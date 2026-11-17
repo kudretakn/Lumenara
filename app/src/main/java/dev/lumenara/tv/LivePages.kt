@@ -4,28 +4,19 @@ import androidx.compose.runtime.*
 import dev.lumenara.data.Item
 import dev.lumenara.data.LiveCursor
 import dev.lumenara.data.LiveWindowCursor
-import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
 
 internal const val LIVE_GRID_COLUMNS = 4
 internal const val LIVE_PAGE_SIZE = LIVE_GRID_COLUMNS * 7
 
-/** Absolute lazy-list indices keep focus/scroll stable while old pages leave memory. */
+/** Live playback keeps its filter while sharing the catalog's bounded window policy. */
 @Stable
-internal class LivePages(val source: String, val category: String, val query: String, val shelf: String) {
-    var count by mutableIntStateOf(0)
-    var countLoaded by mutableStateOf(false)
-    var firstPageLoaded by mutableStateOf(false)
-    var anchor by mutableStateOf<Int?>(null)
-    var center by mutableIntStateOf(0)
-    val pages = mutableStateMapOf<Int, List<Item>>()
-    // One skinny boundary per visited page, rather than the preceding pages' Item objects.
+internal class LivePages(val source: String, val category: String, val query: String, val shelf: String) :
+    WindowPages(LIVE_PAGE_SIZE, LIVE_GRID_COLUMNS) {
     val boundaries = mutableMapOf<Int, LiveWindowCursor>()
-    operator fun get(index: Int): Item? = pages[index / LIVE_PAGE_SIZE]?.getOrNull(index % LIVE_PAGE_SIZE)
-    fun focused(index: Int) { center = index / LIVE_PAGE_SIZE }
-    fun loaded(): List<Item> = LiveChannelGroup(pages.toSortedMap().values.flatten(), source, category, query, shelf)
+    override fun loaded(): List<Item> = LiveChannelGroup(super.loaded(), source, category, query, shelf)
 }
-
 /** Keep the SQL filter when playback reaches the edge of its small in-memory window. */
 internal class LiveChannelGroup(private val rows: List<Item>, val source: String,
     val category: String = "", val query: String = "", val shelf: String = "") : AbstractList<Item>() {
@@ -45,53 +36,32 @@ internal suspend fun liveNeighbor(model: LibraryModel, item: Item, group: LiveCh
 @Composable
 internal fun rememberLivePages(model: LibraryModel, source: String, category: String = "",
     query: String = "", shelf: String = "", returnId: String? = null): LivePages {
-    val state = remember(source, category, query, shelf) { LivePages(source, category, query, shelf) }
-    LaunchedEffect(state) {
-        snapshotFlow { state.firstPageLoaded }.first { it }
-        // Let the visible cards draw before COUNT or neighbouring pages compete for Room/CPU.
-        withFrameNanos { }; withFrameNanos { }
-        model.repo.liveCount(source, category, query, shelf).collect {
-            state.count = it
-            state.countLoaded = true
-        }
+    val hidden by remember(model.repo) { model.repo.hidden }.collectAsState(initial = null)
+    val state = remember(source, category, query, shelf, hidden) { LivePages(source, category, query, shelf) }
+    val restored = remember { booleanArrayOf(false) }
+    val restore = remember(state) {
+        if (hidden != null && !restored[0]) { restored[0] = true; returnId } else null
     }
-    LaunchedEffect(state, returnId) {
-        val index = returnId?.let { model.repo.liveIndex(source, it, category, query, shelf) } ?: 0
-        state.center = index / LIVE_PAGE_SIZE
-        state.anchor = index
-    }
-    if (state.anchor != null) {
-        val lastPage = (state.count - 1).coerceAtLeast(0) / LIVE_PAGE_SIZE
-        val center = if (state.countLoaded) state.center.coerceIn(0, lastPage) else state.center
-        val firstPage = if (state.countLoaded) (center - 1).coerceAtLeast(0) else center
-        val endPage = if (state.countLoaded) (center + 1).coerceAtMost(lastPage) else center
-        LaunchedEffect(state, firstPage, endPage) {
-            val offset = firstPage * LIVE_PAGE_SIZE
-            val after = state.boundaries[firstPage]
+    if (hidden != null) rememberWindowPagesDriver(state,
+        page = { first, last ->
             var initial = true
-            // First open reads one page without COUNT. Later windows retain absolute indices
-            // and seek from a boundary; arbitrary focus restores still use the skinny offset.
             model.repo.liveWindow(source, category, query, shelf,
-                (endPage - firstPage + 1) * LIVE_PAGE_SIZE, offset, after).collect { window ->
-                val rows = window.rows
-                if (!initial) state.boundaries.clear()
-                state.boundaries.entries.removeAll { (_, boundary) ->
-                    boundary.revision != window.revision || boundary.hidden != window.hidden
-                }
-                initial = false
-                state.pages.keys.toList().filter { it !in firstPage..endPage }.forEach { state.pages.remove(it) }
-                for (page in firstPage..endPage) {
-                    val start = (page - firstPage) * LIVE_PAGE_SIZE
-                    val chunk = rows.drop(start).take(LIVE_PAGE_SIZE)
-                    state.pages[page] = chunk
-                    if (chunk.size == LIVE_PAGE_SIZE) chunk.last().let {
-                        state.boundaries[page + 1] = LiveWindowCursor(LiveCursor(it.title, it.id), window.revision, window.hidden)
+                (last - first + 1) * LIVE_PAGE_SIZE, first * LIVE_PAGE_SIZE, state.boundaries[first])
+                .map { window ->
+                    if (!initial) state.boundaries.clear()
+                    initial = false
+                    state.boundaries.entries.removeAll { (page, cursor) ->
+                        page !in first..(last + 1) || cursor.revision != window.revision || cursor.hidden != window.hidden
                     }
+                    for (page in first..last) {
+                        val item = window.rows.getOrNull((page - first + 1) * LIVE_PAGE_SIZE - 1)
+                        if (item != null) state.boundaries[page + 1] = LiveWindowCursor(
+                            LiveCursor(item.title, item.id), window.revision, window.hidden)
+                    }
+                    window.rows
                 }
-                if (!state.countLoaded) state.count = offset + rows.size
-                state.firstPageLoaded = true
-            }
-        }
-    }
+        },
+        total = { model.repo.liveCount(source, category, query, shelf) },
+        index = { restore?.let { model.repo.liveIndex(source, it, category, query, shelf) } ?: 0 })
     return state
 }

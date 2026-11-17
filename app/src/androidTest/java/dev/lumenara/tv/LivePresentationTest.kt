@@ -136,7 +136,7 @@ class LivePresentationTest {
                             Box(Modifier.fillMaxSize().background(Color.DarkGray)) {
                                 FullscreenOverlay(model, selected.value, rows, state,
                                     { item, _ -> selected.value = item }, { optionsOpened.intValue++ },
-                                    { 0L }, { 0L }, null)
+                                    0L, 0L, null)
                             }
                         }
                     }

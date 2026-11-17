@@ -3,6 +3,7 @@ plugins {
     id("com.google.dagger.hilt.android")
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("androidx.baselineprofile")
 }
 android {
     namespace = "dev.lumenara.tv"
@@ -11,8 +12,8 @@ android {
         applicationId = "dev.lumenara.tv"
         minSdk = 26
         targetSdk = 36
-        versionCode = 14
-        versionName = "0.5.3"
+        versionCode = 15
+        versionName = "0.5.4"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures { compose = true; buildConfig = true }
@@ -20,7 +21,15 @@ android {
     sourceSets.getByName("androidTest").assets.srcDir(rootProject.file("core/data/schemas"))
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
 }
+baselineProfile {
+    automaticGenerationDuringBuild = false
+    saveInSrc = true
+    mergeIntoMain = true
+    dexLayoutOptimization = true
+}
 dependencies {
+    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
+    baselineProfile(project(":baselineprofile"))
     implementation("com.google.dagger:hilt-android:2.59.2")
     ksp("com.google.dagger:hilt-compiler:2.59.2")
     implementation(project(":core:designsystem"))

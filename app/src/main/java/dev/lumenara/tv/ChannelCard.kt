@@ -51,7 +51,7 @@ internal fun liveProgrammes(
 @Composable
 internal fun ChannelCard(
     model: LibraryModel,
-    item: Item,
+    item: Item?,
     now: Long,
     play: () -> Unit,
     focus: (Item) -> Unit,
@@ -62,7 +62,10 @@ internal fun ChannelCard(
     categoryName: String? = null,
     programmes: List<dev.lumenara.data.Slot>? = null,
 ) {
-    var restoreFocus by rememberSaveable(item.id) { mutableStateOf(false) }
+    val row = item ?: Item("", "", "", "", "LIVE", "", "", "", 0, "")
+    var focused by remember { mutableStateOf(false) }
+    LaunchedEffect(item?.id, focused) { if (focused) item?.let(focus) }
+    var restoreFocus by rememberSaveable(row.id) { mutableStateOf(false) }
     val requester = remember { FocusRequester() }
     LaunchedEffect(Unit) {
         if (restoreFocus) {
@@ -71,26 +74,26 @@ internal fun ChannelCard(
             restoreFocus = false
         }
     }
-    val slots = programmes ?: liveProgrammes(model, item, now)
+    val slots = programmes ?: if (item == null) emptyList() else liveProgrammes(model, item, now)
     val current = slots.firstOrNull { now >= it.start && now < it.end }
-    val logo by produceState<String?>(null, item.id, item.logo) { value = model.repo.poster(item) }
+    val logo by produceState<String?>(null, row.id, row.logo) { value = item?.let { model.repo.poster(it) } }
     if (compact) {
         FocusCard(
-            onClick = { restoreFocus = true; play() },
+            onClick = { item?.let { focus(it); restoreFocus = true; play() } },
             onLongClick = operations?.let { action -> { restoreFocus = true; action() } },
             modifier = modifier.height(60.dp).focusRequester(requester)
-                .testTag("live-channel-${item.id}")
-                .semantics { contentDescription = item.title }
-                .onFocusChanged { if (it.isFocused) focus(item) },
+                .testTag("live-channel-${row.id}")
+                .semantics { contentDescription = row.title }
+                .onFocusChanged { focused = it.isFocused; if (it.isFocused) item?.let(focus) },
         ) {
             Box(Modifier.fillMaxSize()) {
                 Row(Modifier.fillMaxSize().padding(horizontal = Spacing.unit),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {
-                    ChannelLogo(model, item, logo, Modifier.size(40.dp), compact = true)
+                    ChannelLogo(model, row, logo, Modifier.size(40.dp), compact = true)
                     Column(Modifier.weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(channelCardName(item.title, categoryName), Modifier.weight(1f),
+                            Text(channelCardName(row.title, categoryName), Modifier.weight(1f),
                                 style = LumenType.label, color = LumenColors.textPrimary,
                                 maxLines = if (current != null) 1 else 2,
                                 overflow = TextOverflow.Ellipsis)
@@ -109,19 +112,19 @@ internal fun ChannelCard(
     }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
         FocusCard(
-            onClick = { restoreFocus = true; play() },
+            onClick = { item?.let { focus(it); restoreFocus = true; play() } },
             onLongClick = operations?.let { action -> { restoreFocus = true; action() } },
             modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f).focusRequester(requester)
-                .testTag("live-channel-${item.id}")
-                .semantics { contentDescription = item.title }
-                .onFocusChanged { if (it.isFocused) focus(item) },
+                .testTag("live-channel-${row.id}")
+                .semantics { contentDescription = row.title }
+                .onFocusChanged { focused = it.isFocused; if (it.isFocused) item?.let(focus) },
         ) {
-            ChannelLogo(model, item, logo, Modifier.fillMaxSize())
+            ChannelLogo(model, row, logo, Modifier.fillMaxSize())
         }
         Row(verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {
             if (number != null) Text(number.toString(), style = LumenType.meta)
-            Text(item.title, style = LumenType.cardTitle, color = LumenColors.textPrimary,
+            Text(row.title, style = LumenType.cardTitle, color = LumenColors.textPrimary,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(Spacing.iconText)) {

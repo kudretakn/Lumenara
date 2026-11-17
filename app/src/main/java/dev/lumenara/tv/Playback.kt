@@ -32,6 +32,7 @@ import dev.lumenara.player.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -367,7 +368,6 @@ internal fun Playback(
     var subtitleNotice by remember(item.id) { mutableStateOf("") }
     var channelQuery by remember { mutableStateOf("") }
     var category by remember { mutableStateOf("") }
-    var limit by remember { mutableIntStateOf(80) }
     val slots = remember { decoderSlots() }
     val scope = rememberCoroutineScope()
     var moveJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
@@ -474,6 +474,8 @@ internal fun Playback(
         changeGroup(rows); select(channel)
     } else null
     val retry = rememberLiveRetry(item.id)
+    val playerUi by rememberPlayerUiState(engine,
+        visible = panel || !fullscreen.guide && !sleepCountdown && fullscreen.bannerUntil > fullscreen.now)
     val subtitleSearch = rememberSubtitleSearchState(model, item, status = { subtitleNotice = it }) {
         subtitle = it
         panel = false
@@ -548,7 +550,7 @@ internal fun Playback(
         if (!panel && !sleepCountdown) FullscreenOverlay(model, item, group, fullscreen,
             { channel, rows -> changeGroup(rows); select(channel) },
             { panel = true },
-            { engine?.currentPosition ?: 0 }, { engine?.duration ?: 0 },
+            playerUi.position, playerUi.duration,
             if (item.kind == "EPISODE" && group.nextItem(item) != null)
                 ({ move(1) }) else null)
         numbers?.let { NumberEntry(it) }
@@ -559,19 +561,22 @@ internal fun Playback(
         }
         val optionsState = rememberLazyListState()
         LaunchedEffect(panel) { if (!panel) optionsState.scrollToItem(0) }
+        // Keep the channel window alive behind subtitle results. Recreating it on Back
+        // resets the list and disposes the subtitle row before focus can return to it.
+        val candidates = if (panel && live) rememberCatalogPages(model, item.source, "LIVE",
+            category = category, query = dev.lumenara.catalog.searchable(channelQuery),
+            pageSize = 80, columns = 1) else null
+        LaunchedEffect(candidates) {
+            if (candidates != null) optionsState.scrollToItem(0)
+        }
         if (panel && !subtitleSearch.open) {
-            val candidates by
-                remember(item.source, category, channelQuery, limit) {
-                        model.repo.browse(
-                            item.source,
-                            "LIVE",
-                            category,
-                            dev.lumenara.catalog.searchable(channelQuery),
-                            "",
-                            limit,
-                        )
-                    }
-                    .collectAsStateWithLifecycle(emptyList())
+            LaunchedEffect(candidates, optionsState) {
+                if (candidates != null) snapshotFlow {
+                    optionsState.layoutInfo.visibleItemsInfo.mapNotNull {
+                        (it.key as? String)?.removePrefix("player-channel-slot-")?.toIntOrNull()
+                    }.maxOrNull()
+                }.distinctUntilChanged().collect { index -> index?.let(candidates::visible) }
+            }
             val categories by
                 remember(item.source) { model.repo.categories("LIVE", item.source) }
                     .collectAsStateWithLifecycle(emptyList())
@@ -619,7 +624,7 @@ internal fun Playback(
                         select(version)
                     }
                 } }
-                item { Tracks(engine, model, item) }
+                item { Tracks(engine, playerUi.tracks, model, item) }
                 item { PlaybackSection("ALTYAZI") }
                 item { SubtitleSearch(subtitleSearch) }
                 item {
@@ -633,7 +638,7 @@ internal fun Playback(
                 if (item.introStartMs >= 0)
                     item {
                         engine?.let { p ->
-                            IntroSkip(item, { p.currentPosition }, { p.duration }) {
+                            IntroSkip(item, playerUi.position, playerUi.duration) {
                                 p.seekTo(item.introEndMs)
                                 panel = false
                             }
@@ -725,7 +730,7 @@ internal fun Playback(
                         }
                     if (hint.isNotEmpty()) Text(hint)
                     val e = engine
-                    if (e != null && e.isCurrentMediaItemLive && e.isCurrentMediaItemSeekable) {
+                    if (e != null && playerUi.isLive && playerUi.isSeekable) {
                         PlayerOption(
                             onClick = { e.seekTo((e.currentPosition - 30_000).coerceAtLeast(0)) }
                         ) {
@@ -752,26 +757,33 @@ internal fun Playback(
                             }
                         }
                     }
-                val list =
-                    if (live) candidates else group
-                items(list, key = { it.id }) { channel ->
-                    PlayerOption(
-                        onClick = {
-                            if (channel.id == item.id) panel = false
-                            else {
-                                changeGroup(list)
-                                select(channel)
-                            }
-                        }
-                    ) {
-                        Text(channel.title)
+                if (candidates != null) playerChannelItems(candidates) { channel, rows ->
+                    if (channel.id == item.id) panel = false
+                    else {
+                        changeGroup(rows)
+                        select(channel)
                     }
+                } else items(group, key = { it.id }) { channel ->
+                    PlayerOption(onClick = {
+                        if (channel.id == item.id) panel = false
+                        else { changeGroup(group); select(channel) }
+                    }) { Text(channel.title) }
                 }
-                if (live && candidates.size >= limit)
-                    item { PlayerOption(onClick = { limit += 80 }) { Text("Devamını göster") } }
             }
         }
         SubtitleResults(subtitleSearch, panel, focus)
+    }
+}
+
+/** Shared with options-list device tests; a placeholder keeps the same focusable row. */
+internal fun LazyListScope.playerChannelItems(pages: WindowPages, select: (Item, List<Item>) -> Unit) {
+    items(pages.count, key = { "player-channel-slot-$it" }) { index ->
+        val channel = pages[index]
+        PlayerOption(onClick = { channel?.let { select(it, pages.loaded()) } },
+            modifier = Modifier.testTag("player-channel-slot-$index")
+                .onFocusChanged { if (it.isFocused) pages.focused(index) }) {
+            Text(channel?.title ?: "Yükleniyor")
+        }
     }
 }
 
@@ -829,22 +841,11 @@ internal fun androidx.compose.foundation.layout.BoxScope.SleepTimerCard(
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
-private fun Tracks(player: ExoPlayer?, model: LibraryModel, item: Item) {
+private fun Tracks(player: ExoPlayer?, tracks: Tracks, model: LibraryModel, item: Item) {
     val scope = rememberCoroutineScope()
     var preferenceKey by remember(item.id) { mutableStateOf("") }
     LaunchedEffect(item.id) { preferenceKey = model.repo.preferenceKey(item) }
     if (player == null) return
-    var tracks by remember(player) { mutableStateOf(player.currentTracks) }
-    DisposableEffect(player) {
-        val listener =
-            object : Player.Listener {
-                override fun onTracksChanged(value: Tracks) {
-                    tracks = value
-                }
-            }
-        player.addListener(listener)
-        onDispose { player.removeListener(listener) }
-    }
     for (type in listOf(C.TRACK_TYPE_AUDIO, C.TRACK_TYPE_TEXT)) key(type) {
         val groups = tracks.groups.filter { it.type == type }
         val label = if (type == C.TRACK_TYPE_AUDIO) "Ses" else "Altyazı"

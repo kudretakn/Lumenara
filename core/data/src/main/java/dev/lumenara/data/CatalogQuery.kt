@@ -61,7 +61,8 @@ internal fun representativePredicate(
         ${if (sameCategory) "AND v.category=i.category" else ""} AND ${candidate.sql})))""", candidate.args)
 }
 
-internal fun browseQuery(filter: CatalogFilter, limit: Int): SimpleSQLiteQuery {
+private fun browseStatement(filter: CatalogFilter, ordered: Boolean = true, includeSort: Boolean = false,
+    projectionOnly: String? = null): CatalogPredicate {
     val eligible = filter.predicate("i")
     val representative = representativePredicate({ filter.predicate(it) }, filter.filtersVersions)
     // EQP: equality on kind/category -> index_items_kind_category_title (all sources), or
@@ -92,22 +93,55 @@ internal fun browseQuery(filter: CatalogFilter, limit: Int): SimpleSQLiteQuery {
         else -> "index_items_kind_isRepresentative_title"
     } else ""
     val args = eligible.args + representative.args
+    fun projection(row: String) = projectionOnly ?: if (!includeSort) "i.*" else "i.*," + when (filter.shelf) {
+        "resume" -> "m.updated"
+        "recent" -> row
+        "popular" -> "CAST(i.rating AS REAL)"
+        else -> "0"
+    } + " AS catalogSort"
     if (dedupLive && filter.kind.isEmpty()) {
         // Mixed search: group only the LIVE branch. Movie/series rows never enter a GROUP BY.
-        return SimpleSQLiteQuery("""SELECT i.* FROM (
+        return CatalogPredicate("""SELECT ${projection("i.catalogRow")} FROM (
             SELECT i.*,i.rowid AS catalogRow FROM items i
             WHERE ${eligible.sql} AND ${representative.sql} AND i.kind!='LIVE'
             UNION ALL
             SELECT i.*,i.rowid AS catalogRow FROM items i
             WHERE ${eligible.sql} AND ${representative.sql} AND i.kind='LIVE' $grouping
-            ) i ORDER BY ${order.replace("i.rowid", "i.catalogRow")}i.title,i.id LIMIT ?""",
-            (args + args + limit).toTypedArray())
+            ) i ${if (ordered) "ORDER BY ${order.replace("i.rowid", "i.catalogRow")}i.title,i.id" else ""}""",
+            args + args)
     }
-    return SimpleSQLiteQuery("""SELECT i.* FROM items i $index
+    return CatalogPredicate("""SELECT ${projection("i.rowid")} FROM items i $index
         ${if (filter.shelf == "resume") "LEFT JOIN marks m ON m.id=i.id" else ""}
         WHERE ${eligible.sql} AND ${representative.sql} $grouping
-        ORDER BY ${order}i.title,i.id LIMIT ?""",
-        (args + limit).toTypedArray())
+        ${if (ordered) "ORDER BY ${order}i.title,i.id" else ""}""", args)
+}
+
+/** The same indexed statement for a bounded page, without allocating preceding Item rows. */
+internal fun browseQuery(filter: CatalogFilter, limit: Int, offset: Int = 0): SimpleSQLiteQuery {
+    val statement = browseStatement(filter)
+    return SimpleSQLiteQuery("${statement.sql} LIMIT ? OFFSET ?",
+        (statement.args + limit + offset.coerceAtLeast(0)).toTypedArray())
+}
+
+internal fun browseCountQuery(filter: CatalogFilter): SimpleSQLiteQuery {
+    val statement = browseStatement(filter, ordered = false)
+    return SimpleSQLiteQuery("SELECT COUNT(*) FROM (${statement.sql})", statement.args.toTypedArray())
+}
+
+/** Only mixed poster/channel grids need this small span index; no artwork/Item is retained. */
+internal fun browseKindsQuery(filter: CatalogFilter): SimpleSQLiteQuery {
+    val statement = browseStatement(filter, projectionOnly = "i.kind")
+    return SimpleSQLiteQuery(statement.sql, statement.args.toTypedArray())
+}
+
+/** Resolve a saved focus without allocating a full catalog, preserving shelf tie order. */
+internal fun browseIndexQuery(filter: CatalogFilter, id: String): SimpleSQLiteQuery {
+    val statement = browseStatement(filter, ordered = false, includeSort = true)
+    val before = if (filter.shelf in listOf("resume", "recent", "popular"))
+        "(i.catalogSort>t.catalogSort OR (i.catalogSort=t.catalogSort AND (i.title,i.id)<(t.title,t.id)))"
+        else "(i.title,i.id)<(t.title,t.id)"
+    return SimpleSQLiteQuery("""SELECT (SELECT COUNT(*) FROM (${statement.sql}) i WHERE $before)
+        FROM (${statement.sql}) t WHERE t.id=? LIMIT 1""", (statement.args + statement.args + id).toTypedArray())
 }
 
 internal fun categoryCountsQuery(filter: CatalogFilter, categoriesOnly: Boolean = false): SimpleSQLiteQuery {

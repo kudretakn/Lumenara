@@ -41,9 +41,12 @@ data class Listing(
 fun canSkipIntro(start: Long, end: Long, position: Long, duration: Long) =
     start >= 0 && end > start && end < duration && position in start until end
 
+private val searchLocale = Locale.forLanguageTag("tr")
+private val searchMarks = Regex("\\p{M}+")
+
 fun searchable(value: String): String =
-    Normalizer.normalize(value.lowercase(Locale.forLanguageTag("tr")), Normalizer.Form.NFD)
-        .replace(Regex("\\p{M}+"), "")
+    Normalizer.normalize(value.lowercase(searchLocale), Normalizer.Form.NFD)
+        .replace(searchMarks, "")
         .replace('ı', 'i')
         .trim()
 

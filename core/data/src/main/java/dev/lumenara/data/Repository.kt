@@ -57,7 +57,8 @@ data class LiveWindow(val rows: List<Item>, val revision: Long, val hidden: List
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class Repository private constructor(private val context: Context) {
     private val db = Room.databaseBuilder(context, LibraryDb::class.java, "lumenara.db")
-        .addMigrations(LibraryDb.MIGRATION_7_8, LibraryDb.MIGRATION_8_9, LibraryDb.MIGRATION_9_10)
+        .addMigrations(LibraryDb.MIGRATION_7_8, LibraryDb.MIGRATION_8_9, LibraryDb.MIGRATION_9_10,
+            LibraryDb.MIGRATION_10_11)
         .build()
     val library = db.library()
     val guide = db.guide()
@@ -93,7 +94,7 @@ class Repository private constructor(private val context: Context) {
     } }
     private val catalogScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val catalog = CatalogStreams(library.categoryNames(), library::categoryCounts,
-        library::sourceCategoryCounts, preferences.showAdult, catalogScope)
+        library::sourceCategoryCounts, preferences.showAdult, catalogScope, StartupPerf::duration)
     val hidden: Flow<List<String>> = catalog.hidden
     private val seriesExpansionCache = SeriesExpansionCache(
         readStamp = { preferences.text("series_expanded_$it").first().toLongOrNull() ?: 0L },
@@ -103,6 +104,25 @@ class Repository private constructor(private val context: Context) {
     fun browse(source: String, kind: String, category: String, query: String, shelf: String, limit: Int,
                year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0) =
         hidden.flatMapLatest { library.browse(source, kind, category, query, shelf, limit, year, genre, language, minRating, it) }
+
+    fun browsePage(source: String, kind: String, category: String, query: String, shelf: String,
+        limit: Int, offset: Int, year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0) =
+        hidden.flatMapLatest { library.browsePage(source, kind, category, query, shelf, limit, offset,
+            year, genre, language, minRating, it) }
+
+    fun browseCount(source: String, kind: String, category: String, query: String, shelf: String,
+        year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0) =
+        hidden.flatMapLatest { library.browseTotal(source, kind, category, query, shelf,
+            year, genre, language, minRating, it) }
+
+    suspend fun browseIndex(source: String, kind: String, category: String, query: String, shelf: String,
+        id: String, year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0) =
+        library.browseIndex(source, kind, category, query, shelf, id, year, genre, language, minRating, hidden.first())
+
+    fun browseKinds(source: String, kind: String, category: String, query: String, shelf: String,
+        year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0) =
+        hidden.flatMapLatest { library.browseKinds(source, kind, category, query, shelf,
+            year, genre, language, minRating, it) }
 
     fun shelfCount(source: String, kind: String, shelf: String) =
         hidden.flatMapLatest { library.shelfCount(source, kind, shelf, it) }
@@ -231,7 +251,7 @@ class Repository private constructor(private val context: Context) {
             visibleRecentIds(ids, rows.associate { it.id to it.category }, showAdult).mapNotNull { byId[it] }
         }
     }
-    private val guideStore by lazy { GuideStore(guide, liveScope, hidden) }
+    private val guideStore by lazy { GuideStore(guide, liveScope, hidden, traceWork = StartupPerf::duration) }
     fun cardProgrammes(source: String, itemId: String): Flow<List<Slot>> = guideStore.cardProgrammes(source, itemId)
     fun nowAiring(source: String, now: Long, query: String = ""): Flow<List<AiringProgram>> = nowAiring(source, flowOf(now), query)
     fun nowAiring(source: String, now: Flow<Long>, query: String = ""): Flow<List<AiringProgram>> = guideStore.nowAiring(source, now, query)
@@ -282,15 +302,13 @@ class Repository private constructor(private val context: Context) {
         val base = production(item)
         val choices = versions(base)
         val preferred = preferences.text("version_${versionPreferenceIdentity(base)}").first()
-        val version = choices.firstOrNull { productionName(it.title, it.year).version.name == preferred }
-            ?: choices.firstOrNull { productionName(it.title, it.year).version == AudioVersion.DUBBED }
-            ?: choices.firstOrNull { it.id == base.id } ?: base
+        val version = choices.preferredVersion(preferred, base)
         return resolveVersion(item, version)
     }
 
     suspend fun chooseVersion(item: Item, version: Item): Item {
         val resolved = resolveVersion(item, version)
-        preferences.set("version_${versionPreferenceIdentity(item)}", productionName(version.title, version.year).version.name)
+        preferences.set("version_${versionPreferenceIdentity(item)}", "id:${version.id}")
         return resolved
     }
 

@@ -18,6 +18,9 @@ private val versionTags = Regex("(?iu)\\b(?:(?:tr|türkçe|turkce)\\s+)?dublaj\\
 private val productionYear = Regex("\\b(?:19|20)\\d{2}\\b")
 private val emptyDelimiters = Regex("""\(\s*\)|\[\s*\]""")
 private val whitespace = Regex("\\s+")
+// Only explicit provider/language prefixes are identity noise; a subtitle after ':' is a title.
+private val productionPrefix = Regex("""(?iu)^(?:\[\s*(?:TR|TUR|TÜRKÇE|TURKCE|VOD|IPTV)\s*]\s*|(?:TR|TUR|TÜRKÇE|TURKCE|VOD|IPTV)\s*[:|\-–]\s*)""")
+private val qualityTags = Regex("""(?iu)(?<![\p{L}\p{N}])(?:4K|UHD|FHD|HD|SD|2160p|1080p|720p|480p)(?![\p{L}\p{N}])""")
 
 fun productionName(title: String, year: String = ""): ProductionName {
     val folded = searchable(title)
@@ -27,7 +30,12 @@ fun productionName(title: String, year: String = ""): ProductionName {
         else -> AudioVersion.ORIGINAL
     }
     val resolvedYear = productionYear.find(year)?.value ?: productionYear.find(title)?.value.orEmpty()
-    var clean = versionTags.replace(title, "")
+    var clean = qualityTags.replace(versionTags.replace(title, ""), "")
+        .replace(emptyDelimiters, "").trim()
+    while (true) {
+        val prefix = productionPrefix.find(clean) ?: break
+        clean = clean.removeRange(prefix.range).trim()
+    }
     if (resolvedYear.isNotEmpty()) clean = productionYear.replace(clean) { if (it.value == resolvedYear) "" else it.value }
     clean = clean.replace(emptyDelimiters, "").replace(whitespace, " ")
         .trim(' ', '-', '·', '|', '/', ':', '.', '_', '(', ')', '[', ']')

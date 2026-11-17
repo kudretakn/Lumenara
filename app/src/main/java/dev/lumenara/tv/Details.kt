@@ -148,7 +148,7 @@ private fun DetailVersionPicker(model: LibraryModel, item: Item) {
     val scope = rememberCoroutineScope()
     LaunchedEffect(item.id) {
         try {
-            choices = model.repo.versions(item).distinctBy { productionName(it.title, it.year).version }
+            choices = model.repo.versions(item)
             chosen = model.repo.production(model.repo.selectedVersion(item)).id
         } catch (e: CancellationException) { throw e }
         catch (_: Exception) { model.notice.value = "Sürüm bilgisi alınamadı." }
@@ -163,7 +163,7 @@ private fun DetailVersionPicker(model: LibraryModel, item: Item) {
         LumenButton(onClick = { expanded = true }, style = LumenButtonStyle.Secondary,
             modifier = Modifier.testTag("version-picker").focusRequester(trigger)) {
             LumenIcon(LumenIcon.Audio, null)
-            Text(selected?.let { productionName(it.title, it.year).version.label } ?: "Dublaj")
+            Text(selected?.title ?: "Sürüm seç")
             LumenIcon(LumenIcon.ChevronDown, null)
         }
         if (expanded) {
@@ -192,7 +192,7 @@ private fun DetailVersionPicker(model: LibraryModel, item: Item) {
                             }, selected = version.id == chosen, enabled = !saving,
                                 modifier = Modifier.testTag("version-${name.name}")
                                     .then(if (index == 0) Modifier.focusRequester(first) else Modifier)) {
-                                Text(name.label, Modifier.weight(1f), style = LumenType.label)
+                                Text("${name.label} - ${version.title}", Modifier.weight(1f), style = LumenType.label)
                                 if (version.id == chosen) LumenIcon(LumenIcon.Check, null)
                             }
                         }

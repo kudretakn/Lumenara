@@ -84,6 +84,13 @@ const val GUIDE_PAGE_SQL = """SELECT * FROM programmes INDEXED BY index_programm
 
 @Dao
 interface GuideDao {
+    @Query("""SELECT id,title,tvgId,search,source,category FROM items
+        WHERE id IN (:ids) AND kind='LIVE' AND (:source='' OR source=:source)""")
+    fun cardChannels(source: String, ids: List<String>): Flow<List<GuideChannel>>
+
+    @RawQuery(observedEntities = [Item::class, Feed::class, Slot::class, GuideName::class, Mapping::class])
+    fun cardTargets(query: androidx.sqlite.db.SupportSQLiteQuery): Flow<List<CardGuideTarget>>
+
     @Query("SELECT id,title,tvgId,search,source,category FROM items WHERE kind='LIVE' AND category NOT IN (:hidden) AND (:source='' OR source=:source)")
     fun searchChannels(source: String, hidden: List<String> = emptyList()): Flow<List<GuideChannel>>
 
