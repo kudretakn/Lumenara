@@ -32,6 +32,15 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
+internal fun liveZapDirection(keyCode: Int, live: Boolean): Int? {
+    if (!live) return null
+    return when (keyCode) {
+        KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_PAGE_UP -> -1
+        KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN, KeyEvent.KEYCODE_PAGE_DOWN -> 1
+        else -> null
+    }
+}
+
 /** Shared remote contract and real-time deadlines for both playback engines. */
 @Stable
 internal class FullscreenState {
@@ -75,13 +84,12 @@ internal class FullscreenState {
         if (finished && code != KeyEvent.KEYCODE_MENU &&
             !(key.action == KeyEvent.ACTION_UP && key.eventTime - key.downTime >= 500)) return false
         val ok = code in listOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER)
+        val zapDirection = liveZapDirection(code, live)
         if (!ok && code !in listOf(KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_DPAD_LEFT,
-                KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN)) return false
-        if (!live && code in listOf(KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN)) return false
+                KeyEvent.KEYCODE_DPAD_RIGHT) && zapDirection == null) return false
         if (key.action == KeyEvent.ACTION_UP) when {
             code == KeyEvent.KEYCODE_MENU || ok && key.eventTime - key.downTime >= 500 -> options()
-            live && code == KeyEvent.KEYCODE_DPAD_UP -> move(-1)
-            live && code == KeyEvent.KEYCODE_DPAD_DOWN -> move(1)
+            zapDirection != null -> move(zapDirection)
             live && (code == KeyEvent.KEYCODE_DPAD_LEFT || ok && bannerUntil > System.currentTimeMillis()) -> openGuide()
             live && ok -> showBanner()
             !live && code == KeyEvent.KEYCODE_DPAD_LEFT -> { seek(-10_000); showBanner() }

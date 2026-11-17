@@ -78,7 +78,7 @@ internal fun Video(
         model.prefs.text("color", "Beyaz")
     }
         .collectAsStateWithLifecycle("Beyaz")
-    LaunchedEffect(item.id, item.encryptedUrl, attempt, subtitle) {
+    LaunchedEffect(item.id, item.encryptedUrl, attempt, subtitle, preview, multi) {
         withContext(Dispatchers.Main.immediate) {
             error = ""
             playbackActive = false
@@ -131,6 +131,13 @@ internal fun Video(
                 currentReady(engine)
                 var recorded = false
                 var formats = ""
+                var reconnectRequested = false
+                var progress = LiveProgress()
+                fun reconnect() {
+                    if (reconnectRequested) return
+                    reconnectRequested = true
+                    if (!retry.failed()) error = "Canlı yayın kesildi. Yeniden deneyin."
+                }
                 val mediaListener = object : Player.Listener {
                         override fun onRenderedFirstFrame() {
                             if (!preview && !multi) Perf.since("channel", "channel_first_frame_media3")
@@ -184,14 +191,19 @@ internal fun Video(
 
                         override fun onIsPlayingChanged(isPlaying: Boolean) {
                             playbackActive = isPlaying
-                            if (isPlaying) { retry.playing(); error = "" }
+                            if (isPlaying && !reconnectRequested) { retry.playing(); error = "" }
                             if (isPlaying && !preview && !recorded) {
                                 recorded = true
                                 model.started(item)
                             }
                         }
 
+                        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                            if (!playWhenReady) progress = LiveProgress()
+                        }
+
                         override fun onPlayerError(cause: PlaybackException) {
+                            if (reconnectRequested) return
                             model.diagnostic("Media3 ${cause.errorCode}")
                             when {
                                 cause.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW -> {
@@ -210,8 +222,12 @@ internal fun Video(
 
                         override fun onPlaybackStateChanged(state: Int) {
                             if (state == Player.STATE_ENDED) {
-                                model.progress(item, engine.duration, engine.duration)
-                                currentEnded()
+                                if (liveShouldReconnect(item.kind, LivePlaybackSignal.END_REACHED,
+                                        paused = !engine.playWhenReady, preview = preview, multi = multi)) reconnect()
+                                if (item.kind != "LIVE") {
+                                    model.progress(item, engine.duration, engine.duration)
+                                    currentEnded()
+                                }
                             }
                         }
                     }
@@ -222,6 +238,18 @@ internal fun Video(
                 engine.setMediaItem(media.build(), if (item.kind == "LIVE") 0 else start)
                 engine.prepare()
                 engine.playWhenReady = true
+                if (item.kind == "LIVE" && !preview && !multi) {
+                    wallClockTicks(500).collect {
+                        val now = android.os.SystemClock.elapsedRealtime()
+                        val playing = engine.playWhenReady && (engine.isPlaying ||
+                            engine.playbackState == Player.STATE_BUFFERING)
+                        progress = progress.sample(engine.currentPosition, now,
+                            active = playing && !reconnectRequested)
+                        if (liveShouldReconnect(item.kind, paused = !engine.playWhenReady,
+                                playing = playing, positionAdvanced = progress.positionAdvanced,
+                                unchangedForMs = progress.unchangedForMs(now))) reconnect()
+                    }
+                }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -237,7 +265,7 @@ internal fun Video(
             }
         }
     }
-    DisposableEffect(item.id, item.encryptedUrl, attempt, subtitle) {
+    DisposableEffect(item.id, item.encryptedUrl, attempt, subtitle, preview, multi) {
         onDispose {
             player?.let { engine ->
                 resume = if (engine.playbackState == Player.STATE_ENDED && engine.duration > 0)

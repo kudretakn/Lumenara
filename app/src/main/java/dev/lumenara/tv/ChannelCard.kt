@@ -59,6 +59,7 @@ internal fun ChannelCard(
     number: Int? = null,
     operations: (() -> Unit)? = null,
     compact: Boolean = false,
+    categoryName: String? = null,
 ) {
     var restoreFocus by rememberSaveable(item.id) { mutableStateOf(false) }
     val requester = remember { FocusRequester() }
@@ -85,12 +86,16 @@ internal fun ChannelCard(
                 Row(Modifier.fillMaxSize().padding(horizontal = Spacing.unit),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {
-                    ChannelLogo(model, item, logo, Modifier.size(40.dp))
+                    ChannelLogo(model, item, logo, Modifier.size(40.dp), compact = true)
                     Column(Modifier.weight(1f)) {
-                        Text(listOfNotNull(number?.toString(), item.title).joinToString(" · "),
-                            style = LumenType.label, color = LumenColors.textPrimary,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(current?.title.orEmpty(), style = LumenType.meta,
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(channelCardName(item.title, categoryName), Modifier.weight(1f),
+                                style = LumenType.label, color = LumenColors.textPrimary,
+                                maxLines = if (current != null) 1 else 2,
+                                overflow = TextOverflow.Ellipsis)
+                            if (number != null) Text(number.toString(), style = LumenType.meta)
+                        }
+                        if (current != null) Text(current.title, style = LumenType.meta,
                             maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
@@ -170,7 +175,8 @@ private val channelTones = listOf(
 )
 
 @Composable
-internal fun ChannelLogo(model: LibraryModel, item: Item, logo: String?, modifier: Modifier = Modifier) {
+internal fun ChannelLogo(model: LibraryModel, item: Item, logo: String?, modifier: Modifier = Modifier,
+    compact: Boolean = false) {
     val context = LocalContext.current
     val sources by model.sources.collectAsStateWithLifecycle()
     val permitted = sources?.firstOrNull { it.id == item.source }?.allowHttp == true
@@ -185,9 +191,10 @@ internal fun ChannelLogo(model: LibraryModel, item: Item, logo: String?, modifie
     val tone = channelTones[Math.floorMod(item.title.hashCode(), channelTones.size)]
     Box(modifier.onSizeChanged { measured = it }.clip(RoundedCornerShape(Radii.channelLogo))
         .background(if (loaded) LumenColors.surface3 else tone), contentAlignment = Alignment.Center) {
-        if (!loaded) Text(item.title.trim().split(Regex("\\s+")).take(2).joinToString(" "),
+        if (!loaded) Text(if (compact) channelCardInitials(item.title)
+            else item.title.trim().split(Regex("\\s+")).take(2).joinToString(" "),
             Modifier.fillMaxWidth(.85f), style = LumenType.label,
-            color = LumenColors.textPrimary, maxLines = 2,
+            color = LumenColors.textPrimary, maxLines = if (compact) 1 else 2,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center, overflow = TextOverflow.Ellipsis)
         AsyncImage(request, contentDescription = null, modifier = Modifier.fillMaxSize(.7f),
             contentScale = ContentScale.Fit, onSuccess = { loaded = true }, onError = { loaded = false })

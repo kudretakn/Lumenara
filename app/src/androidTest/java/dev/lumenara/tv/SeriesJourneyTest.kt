@@ -156,7 +156,7 @@ class SeriesJourneyTest {
                 waitFor(row and isFocused())
                 // Measure the 16:9 artwork slot, not the focused Surface clipped by its parent.
                 val bounds = screen.onNodeWithTag("episode-artwork-${first.id}").fetchSemanticsNode().boundsInRoot
-                assertEquals("Bölüm kartı genişliği", 140f, bounds.width / density, 1f)
+                assertEquals("Bölüm kartı genişliği", 180f, bounds.width / density, 1f)
                 assertEquals("Bölüm görseli 16:9 kalmalı", 16f / 9f, bounds.width / bounds.height, .02f)
                 capture("season")
                 screen.ok()
