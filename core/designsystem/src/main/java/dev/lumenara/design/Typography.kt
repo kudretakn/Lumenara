@@ -3,17 +3,19 @@ package dev.lumenara.design
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontLoadingStrategy
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Typography
 
 object LumenType {
-    // The supplied Inter assets are OpenType, so retain their real .otf format.
+    // Resource fonts otherwise block the first text measure on Main. Each Inter face
+    // is about 600 KB: let Compose load requested weights off Main, using fallback meanwhile.
     val inter = FontFamily(
-        Font(R.font.inter_regular, FontWeight.Normal),
-        Font(R.font.inter_medium, FontWeight.Medium),
-        Font(R.font.inter_semibold, FontWeight.SemiBold),
-        Font(R.font.inter_bold, FontWeight.Bold),
+        Font(R.font.inter_regular, FontWeight.Normal, loadingStrategy = FontLoadingStrategy.Async),
+        Font(R.font.inter_medium, FontWeight.Medium, loadingStrategy = FontLoadingStrategy.Async),
+        Font(R.font.inter_semibold, FontWeight.SemiBold, loadingStrategy = FontLoadingStrategy.Async),
+        Font(R.font.inter_bold, FontWeight.Bold, loadingStrategy = FontLoadingStrategy.Async),
     )
 
     private fun style(size: Int, weight: FontWeight) = TextStyle(

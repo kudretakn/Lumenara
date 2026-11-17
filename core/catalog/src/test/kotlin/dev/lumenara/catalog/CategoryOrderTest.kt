@@ -4,6 +4,12 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CategoryOrderTest {
+    @Test fun batchOrderMatchesComparatorAndReadsEachCategoryOnce() {
+        val names = listOf("TR | XXX", "Spor", "For Adults", "TR: Spor", "Haber", "Çocuk", "[TR] Belgesel")
+        var reads = 0
+        assertEquals(names.sortedWith(categoryOrder), names.sortedByCategory { reads++; it })
+        assertEquals(names.size, reads)
+    }
     @Test fun trPrefixIgnoresLeadingSymbolsButRequiresAWordBoundary() {
         val tr = listOf("TR | Ulusal", "TR: Spor", "[TR] Belgesel", "TR-Haber", "  (TR) Film")
         val other = listOf("Trabzonspor", "Travel", "Haber", "Spor", "Astral", "1 TR Haber")

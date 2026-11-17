@@ -13,11 +13,14 @@ internal class CatalogStreams(
     private val sourceCounts: (String, List<String>) -> Flow<List<KindCategoryCount>>,
     showAdult: Flow<Boolean>,
     private val scope: CoroutineScope,
+    private val traceWork: (String, Long) -> Unit = { _, _ -> },
 ) {
     // A null initial value means "not loaded". Emitting an empty list here would briefly expose
     // adult rows and run Hub counts twice before the real hidden list arrives.
     val hidden: Flow<List<String>> = combine(showAdult, categories) { show, names ->
-        if (show) emptyList() else names.filter(::isAdultCategory)
+        val start = System.nanoTime()
+        try { if (show) emptyList() else names.filter(::isAdultCategory) }
+        finally { traceWork("startup_default_work_hidden_categories", (System.nanoTime() - start) / 1_000_000) }
     }.distinctUntilChanged().stateIn(scope, SharingStarted.Lazily, null).filterNotNull()
 
     private val sharedCounts = mutableMapOf<Pair<String, String>, Flow<List<LiveCategoryCount>>>()

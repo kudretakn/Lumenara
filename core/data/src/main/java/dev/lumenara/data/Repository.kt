@@ -94,7 +94,7 @@ class Repository private constructor(private val context: Context) {
     } }
     private val catalogScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val catalog = CatalogStreams(library.categoryNames(), library::categoryCounts,
-        library::sourceCategoryCounts, preferences.showAdult, catalogScope)
+        library::sourceCategoryCounts, preferences.showAdult, catalogScope, StartupPerf::duration)
     val hidden: Flow<List<String>> = catalog.hidden
     private val seriesExpansionCache = SeriesExpansionCache(
         readStamp = { preferences.text("series_expanded_$it").first().toLongOrNull() ?: 0L },
@@ -251,7 +251,7 @@ class Repository private constructor(private val context: Context) {
             visibleRecentIds(ids, rows.associate { it.id to it.category }, showAdult).mapNotNull { byId[it] }
         }
     }
-    private val guideStore by lazy { GuideStore(guide, liveScope, hidden) }
+    private val guideStore by lazy { GuideStore(guide, liveScope, hidden, traceWork = StartupPerf::duration) }
     fun cardProgrammes(source: String, itemId: String): Flow<List<Slot>> = guideStore.cardProgrammes(source, itemId)
     fun nowAiring(source: String, now: Long, query: String = ""): Flow<List<AiringProgram>> = nowAiring(source, flowOf(now), query)
     fun nowAiring(source: String, now: Flow<Long>, query: String = ""): Flow<List<AiringProgram>> = guideStore.nowAiring(source, now, query)

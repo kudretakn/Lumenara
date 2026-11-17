@@ -18,8 +18,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Text
 import dev.lumenara.catalog.searchable
+import dev.lumenara.catalog.sortedByCategory
 import dev.lumenara.data.LiveCategoryCount
 import dev.lumenara.design.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 private const val CATEGORY_COLUMNS = 4
 
@@ -27,9 +30,11 @@ internal data class CategoryEntry(val id: String, val name: String, val count: I
 
 internal fun providerCategories(groups: List<LiveCategoryCount>): List<CategoryEntry> {
     return groups.filter { it.category.isNotEmpty() }
-        .sortedWith { a, b -> dev.lumenara.catalog.categoryOrder.compare(a.category, b.category) }
         .map { CategoryEntry("provider:${it.category}", it.category, it.count) }
 }
+
+private data class PreparedCategories(val input: List<CategoryEntry>, val rows: List<CategoryEntry>,
+    val names: Map<String, String>)
 
 private fun categoryIcon(id: String): LumenIcon? = when (id) {
     "all" -> LumenIcon.List
@@ -54,8 +59,24 @@ internal fun CategoryGrid(title: String, entries: List<CategoryEntry>?, choose: 
     var positioned by remember { mutableStateOf(false) }
     var requestPending by remember { mutableStateOf(true) }
     val restoreId = remember { last }
-    val rows = remember(entries, query) {
-        entries.orEmpty().filter { searchable(it.name).contains(searchable(query)) }
+    val prepared by produceState<PreparedCategories?>(null, entries) {
+        value = entries?.let { input -> withContext(Dispatchers.Default) {
+            val start = android.os.SystemClock.elapsedRealtime()
+            try {
+                val (provider, special) = input.partition { it.id.startsWith("provider:") }
+                val ordered = special + provider.sortedByCategory { it.name }
+                PreparedCategories(input, ordered, ordered.associate { it.id to searchable(it.name) })
+            } finally {
+                Perf.duration("startup_default_work_category_order", android.os.SystemClock.elapsedRealtime() - start)
+            }
+        } }
+    }
+    val ready = entries != null && prepared?.input == entries
+    val rows = remember(prepared, ready, query) {
+        val page = prepared?.takeIf { ready }
+        val needle = searchable(query)
+        if (needle.isEmpty()) page?.rows.orEmpty()
+        else page?.rows.orEmpty().filter { needle in page?.names?.get(it.id).orEmpty() }
     }
     val target = rows.indexOfFirst { it.id == restoreId }.coerceAtLeast(0)
     BackHandler(searching) { searching = false; query = ""; restoreSearch = true }
@@ -63,7 +84,7 @@ internal fun CategoryGrid(title: String, entries: List<CategoryEntry>?, choose: 
         if (searching) searchField.requestFocus()
         else if (restoreSearch) { searchButton.requestFocus(); restoreSearch = false }
     }
-    LaunchedEffect(entries) {
+    LaunchedEffect(rows) {
         if (!positioned && rows.isNotEmpty()) {
             grid.scrollToItem(target)
             positioned = true
@@ -108,11 +129,11 @@ internal fun CategoryGrid(title: String, entries: List<CategoryEntry>?, choose: 
             contentPadding = PaddingValues(top = Spacing.unit, bottom = Spacing.shelfGap),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            if (entries == null) items(CATEGORY_COLUMNS * 6, key = { "loading-$it" }) {
+            if (!ready) items(CATEGORY_COLUMNS * 6, key = { "loading-$it" }) {
                 Box(Modifier.fillMaxWidth().height(60.dp)
                     .background(LumenColors.surface2, RoundedCornerShape(Radii.card)).testTag("list-loading"))
             }
-            if (entries != null && entries.isNotEmpty() && rows.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
+            if (ready && entries.orEmpty().isNotEmpty() && rows.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
                 Text("Eşleşen kategori yok.", style = LumenType.body, color = LumenColors.textSecondary)
             }
             itemsIndexed(rows, key = { _, it -> it.id }) { index, entry ->
