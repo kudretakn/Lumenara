@@ -21,3 +21,15 @@ val categoryOrder: Comparator<String> = Comparator { a, b ->
         else -> turkishCategories.get().compare(a, b)
     }
 }
+
+/** Compute sort keys once per category, instead of normalizing inside comparisons. */
+fun <T> Iterable<T>.sortedByCategory(name: (T) -> String): List<T> {
+    val collator = turkishCategories.get()
+    data class Ranked<T>(val row: T, val adult: Boolean, val tr: Boolean,
+        val key: java.text.CollationKey)
+    return map { row ->
+        val title = name(row)
+        Ranked(row, isAdultCategory(title), isTrCategory(title), collator.getCollationKey(title))
+    }.sortedWith(compareBy<Ranked<T>> { it.adult }.thenByDescending { it.tr }.thenBy { it.key })
+        .map { it.row }
+}

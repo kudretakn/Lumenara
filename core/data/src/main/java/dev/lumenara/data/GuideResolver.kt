@@ -42,7 +42,9 @@ class GuideResolver(
                     resolved.getOrPut(mapping.feed to mapping.channel) { ArrayList() }.add(item.id)
                 continue
             }
-            val name = searchable(item.title)
+            // Most provider channels have an exact tvgId. Normalize only when a feed
+            // actually needs the name fallback, and reuse it across that item's feeds.
+            val name by lazy(LazyThreadSafetyMode.NONE) { searchable(item.title) }
             for (feed in feedsBySource[item.source].orEmpty()) {
                 val channel = if (item.tvgId.isNotEmpty() && (feed to item.tvgId) in pairs) item.tvgId
                     else uniqueNames[feed to name] ?: continue
@@ -86,7 +88,7 @@ class GuideResolver(
             if (slot.start > now || slot.end <= now) continue
             for (id in itemIds(slot)) {
                 val item = channelsById.getValue(id)
-                if (normalized !in item.search && normalized !in searchable(item.title)) continue
+                if (normalized.isNotEmpty() && normalized !in item.search && normalized !in searchable(item.title)) continue
                 airing.putIfAbsent(id, AiringProgram(id, slot.end, slot.title))
             }
         }
