@@ -1,14 +1,14 @@
 # Durum
 
-Son güncelleme: 17 Kasım 2026 · yerel (Windows) oturum, PR #26 (0.5.2)
+Son güncelleme: 17 Kasım 2026 · yerel (Windows) oturum, PR `release/0.5.3`
 
 > **Başlangıç:** `git fetch --all --prune && git switch main && git pull`, sonra bu dosyayı ve `CLAUDE.md`'yi oku.
 > **Çalışma düzeni:** sen ekip liderisin. İşi böl, her işi ayrı bir alt ajana ver: kod ve görsel için Codex (`gpt-6-luna` basit, `gpt-6.1-sol` orta/zor, `gpt-6-astra` çok zor), inceleme/log analizi/araştırma için Claude alt ajanları (haiku/sonnet/opus). Kendin kod yazma (yalnız birleştirme çakışması ve tek satırlık mekanik düzeltme). Kullanıcıyla Türkçe, kısa konuş; commit ve PR metinleri İngilizce.
 
 ## Şu an
-- **Açık PR #26 → v0.5.2** (dal `release/0.5.1`; adı eski, sürüm 0.5.2): canlı yayın yeniden bağlanma (sağlayıcı akışı kapatınca ya da 8 sn donunca; bekçi konum bir kez ilerledikten sonra kurulur), CH+/− ve PAGE tuşları, geniş kartlar (kategori/kanal 4 sütun, kanal adı + numara + şu an yayında satırı; raf 150, devam 180, arama 140, bölüm 180 dp). Yerelde app test/lint/2 APK ve emülatörde 72/72 cihaz testi geçti. CI yeşilse merge → `v0.5.2` → TV'ye ADB ile kur → TR canlı kanalda 1 dk izle, `adb logcat -s LumenaraPerf LumenaraVlc` ile yeniden bağlanmayı doğrula.
-- **Son yayınlanan sürüm v0.5.1** (17 Kasım, PR #24, güncelleyici düzeltmesi).
-- **Kullanıcının TV'sinde v0.5.0 kurulu** (ADB ile). 0.5.1'i kurmak için: uygulamada Ayarlar → Uygulama güncellemeleri → "Kaydet ve sürüm kontrolü yap" → Güncelle. Kullanıcının IP'sinde GitHub kimliksiz API sınırı doluydu (`api.github.com/rate_limit` → `remaining: 0`); saat başı yenilenir, o zaman 0.5.0'ın güncelleyicisi de çalışabilir. Çalışmazsa ADB: `gh release download v0.5.1 -R kudretakn/Lumenara-releases -p "*.apk"`, `adb connect 192.168.1.14:5555`, `adb install -r Lumenara-0.5.1.apk` (verileri silme, uninstall yok).
+- **Açık PR `release/0.5.3` → v0.5.3:** açılış hızı (Hub sayımları/arka plan işlerini beklemiyor, Room ana thread dışında, açılış aşaması Perf işaretleri), "Tüm kanallar" ilk sayfa indeksli `LIMIT 28`, LibVLC ilk Hub karesinden sonra ısınıyor + `VlcInput` iptal yarışı düzeltildi (yalnız `call.cancel()`, temizlik pump thread'inde), detay sayfası odağı, Windows altyazı önbelleği dosya adı (`:` yok). CI yeşilse merge → `v0.5.3` → TV'ye ADB ile kur → soğuk açılış ve "Tüm kanallar" `LumenaraPerf` ile yeniden ölç (0.5.0: 5,4 sn ve 7,7 sn; 0.5.2: 5,9 sn).
+- **Son yayınlanan sürüm v0.5.2** (17 Kasım, PR #26): canlı yayın yeniden bağlanma, CH+/− tuşları, geniş kartlar. **TV'de v0.5.2 kurulu** (ADB, 17 Kasım 12:28). TR canlı kanal 90 sn kesintisiz oynadı (2–2,8 Mbps, ilk kare 1,85 sn); sağlayıcı akışı kesmediği için yeniden bağlanma sahada henüz tetiklenmedi.
+- v0.5.1 (PR #24): güncelleyici GitHub istek sınırı düzeltmesi.
 - 0.5.1 ile gelenler: sürüm kontrolü istek sınırında "GitHub istek sınırına ulaşıldı, N dakika sonra tekrar deneyin" der; API yanıt vermezse web sayfasından (redirect + expanded_assets) sürümü ve SHA-256 özetini bulur, özet yoksa kurmaz; ETag önbelleği; açılıştaki otomatik kontrol saatte en çok bir kez; kontrol ve indirme hataları ayrı mesaj.
 
 ## Sıradaki işler (kullanıcı "başla" demeden başlama)
@@ -16,7 +16,7 @@ Son güncelleme: 17 Kasım 2026 · yerel (Windows) oturum, PR #26 (0.5.2)
 1. (17 Kasım'da yapıldı; sonuçlar aşağıda "TV ölçümleri"nde. Remux testi kullanıcı isteğiyle atlandı. Yeni işler: soğuk açılış 5,4 sn ve "Tüm kanallar" 7,7 sn hızlandırılmalı.) **TV'de ölçüm (yalnız ev ağındaki bilgisayardan yapılabilir):** `adb shell dumpsys meminfo dev.lumenara.tv` (ana ekran, Canlı TV kategorisi, kanal oynarken) ve 1 dk `adb logcat -s LumenaraPerf`. Amaç 0.4.2'deki hız ve bellek işlerinin gerçek etkisini görmek. Ayrıca 4K yayın ve remux dosya denemesi (takılma var mı), sessiz kanalların sesi (0.4.0'daki VLC'ye otomatik geçiş).
 2. **U3:** ebeveyn kilidi (PIN) ve kanal sıralama (`docs/USABILITY.md`). Şema şu an 10; değişiklik 10→11 olur, `MigrationTest` güncellenir. +18 filtresi PIN'siz geldi, PIN ile birleştirilebilir.
 3. ROADMAP: izleme kaydını taşıma (sağlayıcı adresi/şifresi değişince), TMDB alternatif başlık, altyazı eşitleme.
-4. Küçük: Windows'ta iki `SubtitleApiTest` (`subdlHandlesNestedResultsArchivesAndUtf8Cache`, `cacheNormalizesWindows1254AndReplacesThePreviousFormat`) 17 Kasım'da yerelde hâlâ düşüyor; düzeltilmeli. Altyazı arama ekranında oynatıcının arkasında kitaplık görünmesi büyük olasılıkla D5 ile çözüldü; doğrula.
+4. Küçük: (0.5.3'te düzeldi: Windows `SubtitleApiTest`, önbellek dosya adındaki `:`). Altyazı arama ekranında oynatıcının arkasında kitaplık görünmesi büyük olasılıkla D5 ile çözüldü; doğrula.
 5. Depo temizliği: GitHub'da birleşmiş ~40 uzak dal duruyor (design/*, perf*/*, mem/*, feat/f-*, fix/*); kullanıcıya sorup sil. Windows'taki `lumenara-wt\*` klasörleri silinebilir.
 
 ## TV ölçümleri (17 Kasım 2026, Mi Box 4, v0.5.0, Wi-Fi)
