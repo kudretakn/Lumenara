@@ -1,5 +1,12 @@
 # Lumenara sürüm kaydı
 
+## 0.5.1 · 17 Kasım 2026
+
+- Canlı yayın donma düzeltmesi: sağlayıcı akışı kapattığında ya da görüntü 8 saniye ilerlemediğinde oynatıcı kendiliğinden yeniden bağlanıyor ("Yeniden bağlanıyor" rozeti). Önceden görüntü donup kalıyordu.
+- Kumandanın kanal +/− (ve sayfa yukarı/aşağı) tuşları tam ekran canlı yayında kanal değiştiriyor.
+- Daha geniş kartlar, okunur adlar: kategori ve kanal ızgaraları 4 sütun (yükseklik aynı); kanal adı ayrı satırda, numara yanında; şu an yayındaki program altında.
+- Ana ekran kanal rafı 150 dp, "Kaldığın yerden devam et" 180 dp, arama 140 dp, bölüm kartları 180 dp; başlıklar iki satıra kadar. Devam kartında arka plan görseli yoksa afiş gösteriliyor.
+
 ## 0.5.0 · 16 Kasım 2026
 
 - Yeni tasarım ("Quiet Cinema"): koyu nötr zemin, tek altın vurgu, Inter yazı tipi, 8 dp ızgara, cam efekti ve bulanıklık yok.

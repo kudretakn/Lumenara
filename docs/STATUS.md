@@ -1,16 +1,22 @@
 # Durum
 
-Son güncelleme: 16 Kasım 2026 01:10 · yerel (Windows) oturum kapandı
+Son güncelleme: 17 Kasım 2026 · yerel (Windows) oturum
 
 > **Sonraki oturum için devir notu.** Başlangıç: `git fetch --all --prune && git switch main && git pull`.
-> - **v0.5.0 yayınlandı** (PR #22 merge `1d1bb86`) ve kullanıcının TV'sine ADB ile kuruldu (16 Kasım 01:05). Kullanıcıdan TV'deki görünüm hakkında geri bildirim al.
-> - Açık PR: `chore/local-device-tests`. İçinde `scripts/local-device-tests.ps1` ve CLAUDE.md'deki "cihaz testleri önce yerelde" kuralı var (kullanıcı kararı). CI yeşilse merge et. Betik emülatörde yarım bir çalıştırmayla denendi, tam tur tamamlanmadı; ilk kullanımda sonucu doğrula.
-> - Çalışma düzeni: sen ekip liderisin. İşleri Codex alt ajanlarına dağıt; kendin kod yazma (yalnız birleştirme çakışması ve mekanik düzeltme).
-> - Kullanıcı istekleri (16 Kasım):
->   - "Kartlar çok büyük, daha çok şey sığsın" → 0.5.0'da yapıldı (ızgaralar 6/6/8 sütun, kartlar küçüldü).
->   - Genel ölçek ayarı İSTENMİYOR.
->   - Devamında daha fazla sıklık isteyebilir.
-> - Yerel worktree'ler `C:\Users\Kudret\Documents\projeler\lumenara-wt\*`. Hepsi birleşti; silinebilir.
+> - **Açık PR: `release/0.5.1`** (canlı yayın yeniden bağlanma + CH+/− tuşları + geniş kartlar). Yerelde: app test/lint/2 APK geçti, emülatörde 72/72 cihaz testi geçti. CI'daki tüm işler yeşilse merge → `v0.5.1` etiketi → TV'ye ADB ile kur → canlı TR kanalında 1 dk izle ve `adb logcat -s LumenaraPerf LumenaraVlc` ile yeniden bağlanmanın çalıştığını doğrula.
+> - Çalışma düzeni: sen ekip liderisin. İşleri Codex alt ajanlarına dağıt; kendin kod yazma (yalnız birleştirme çakışması ve mekanik düzeltme). Windows'ta Codex CLI: `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe` (`~\.codex\.sandbox-bin\codex.exe` bozuk: code-mode-host bulunamıyor).
+> - Kullanıcı istekleri: 16 Kasım "kartlar küçük olsun" (0.5.0) → 17 Kasım "isimler okunmuyor, kartlar yatayda büyüsün" (0.5.1). Genel ölçek ayarı İSTENMİYOR.
+> - Yerel worktree'ler `C:\Users\Kudret\Documents\projeler\lumenara-wt\*`. 0.5.1 dalları dahil hepsi `release/0.5.1`'e birleşti; silmek için kullanıcı onayı bekleniyor.
+
+## TV ölçümleri (17 Kasım 2026, Mi Box 4, v0.5.0, Wi-Fi)
+- Bellek (PSS): Hub boşta 72 MB, 10.645 kanallı ızgara 90 MB, canlı (VLC) 87 MB, 4K film 109 MB. Sorun yok.
+- Soğuk açılış `startup_hub_first_draw` **5,4 sn** (iki ölçüm; Android `TotalTime` 1,1 sn) → iyileştirilmeli.
+- "Tüm kanallar" (10.645) `category_grid_first_draw` **7,7 sn**, 4 sn iskelet; 95 filmlik kategori 1,2 sn → iyileştirilmeli.
+- 4K film (TR ➾ 4K Filmler, 47 Ronin): 3840×2160 Amlogic donanım kodlayıcı, VLC, ilk kare 6,0 sn, ortalama 7 Mbps (5,7–8,8), takılma yok; kare hızı eşleme 23,976 Hz'e geçti. CPU uygulama %22, kodlayıcı %10.
+- Canlı TR (DA VINCI FHD): ilk kare 1,0–1,7 sn (VLC, 1080p H.264); ~11 sn sonra sağlayıcı akışı kapatıyor (`Decoder is draining` → `Stopped`) ve görüntü donuyordu → 0.5.1'de düzeltildi.
+- Bir kanalda VLC hazırlığı 21 sn sürdü ve `fd://` açılamadı hatası verdi (AF kanalı, tekrarlanmadı).
+- Film detay sayfasında adb `DPAD_CENTER` işlenmedi (`Unhandled key`, odakta öğe yok); kumandayla çalıştı. Takip et.
+- Remux testi kullanıcı isteğiyle atlandı.
 
 ## Biten (0.5.0)
 - **PR #22 — Tasarım 0.5.0** (dal `design/0.5`, merge edildi). İçerik:
@@ -100,7 +106,7 @@ Devam yöntemi:
 - Sunucu diski dar (~6 GB boş): her derlemeden sonra build klasörlerini sil.
 
 ## Sıradaki
-0. **İlk iş — kart genişliği (kullanıcı geri bildirimi, 16 Kasım 2026, 0.5.0'ı TV'de gördükten sonra):** "Kartlar yatayda biraz büyüsün; bu sefer de isimler okunmuyor, alan çok küçük olmuş, yazılara yer kalmamış." Kullanıcı başlama demeden başlama.
+0. (0.5.1'de yapıldı, PR `release/0.5.1`) **Kart genişliği (kullanıcı geri bildirimi, 16 Kasım 2026, 0.5.0'ı TV'de gördükten sonra):** "Kartlar yatayda biraz büyüsün; bu sefer de isimler okunmuyor, alan çok küçük olmuş, yazılara yer kalmamış." Kullanıcı başlama demeden başlama.
    - Hedef: kartları yatayda genişlet ki kategori, kanal ve içerik adları okunabilsin. Dikeydeki sıklık (ekrana sığan satır sayısı) korunsun; yalnız sütun sayısı biraz düşebilir.
    - Kontrol edilecek yerler: kategori ızgarası (6 sütun, 60 dp), kompakt kanal kartı (6 sütun, logo 40 dp + "numara · ad"), afiş ızgarası (8 sütun, ad yalnız odakta), Hub raf kartları (110 dp), arama sonuçları (110 dp), bölüm kartları (140 dp).
    - Öneri: kategori ve kanal 6 → 4–5 sütun ya da kanal adı için 2 satır; raf ve arama kartları ~150 dp. Önce TV'den ya da CI'dan ekran görüntüsüyle hangi adların kesildiğini ölç, sonra karar ver.
