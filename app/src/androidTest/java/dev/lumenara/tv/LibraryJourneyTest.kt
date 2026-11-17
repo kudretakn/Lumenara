@@ -175,7 +175,9 @@ class LibraryJourneyTest {
                 }
                 val category = screen.onNodeWithTag("category-Son izlenenler").fetchSemanticsNode().boundsInRoot
                 val categoryGrid = screen.onNodeWithTag("category-grid").fetchSemanticsNode().boundsInRoot
-                assertEquals("Kategori kartı genişliği", (categoryGrid.width / density - 5 * 10f) / 6,
+                val categoryColumns = 4
+                assertEquals("Kategori kartı genişliği",
+                    (categoryGrid.width / density - (categoryColumns - 1) * 10f) / categoryColumns,
                     category.width / density, 1f)
                 assertEquals("Kategori kartı yüksekliği", 60f, category.height / density, 1f)
                 screen.onNodeWithTag("category-search")
