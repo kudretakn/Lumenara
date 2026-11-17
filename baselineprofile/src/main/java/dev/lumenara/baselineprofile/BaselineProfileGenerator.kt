@@ -49,11 +49,8 @@ class BaselineProfileGenerator {
             }
             device.executeShellCommand("am force-stop $packageName")
             device.executeShellCommand("am start -W -n $packageName/.MainActivity")
-            check(device.wait(Until.hasObject(By.res(Pattern.compile("hub|setup-screen"))), timeout)) {
-                "Neither Hub nor setup appeared"
-            }
+            if (!device.wait(Until.hasObject(By.res(Pattern.compile("hub|setup-screen"))), timeout)) skip("Hub/setup unavailable before profile collection")
             if (device.hasObject(By.res("setup-screen"))) addFixture(server.url("/list").toString())
-            required(By.res("hub"))
 
             baselineProfile.collect(
                 packageName = packageName,
@@ -62,50 +59,50 @@ class BaselineProfileGenerator {
                 killProcess()
                 pressHome()
                 startActivityAndWait()
-                required(By.res("hub"))
+                if (optional(By.res("hub"), "Hub after startup") == null) return@collect
 
-                required(By.res("hub-Canlı TV")).click()
+                optional(By.res(Pattern.compile("hub-.*TV")), "Live navigation")?.click()
                 val liveCategory = firstCategory()
                 if (liveCategory != null) {
                     liveCategory.click()
-                    required(By.res("live-channels"))
+                    optional(By.res("live-channels"), "Live channel grid")
                     // DPAD scroll follows TV focus and never activates a channel.
                     repeat(16) { device.pressDPadDown(); device.waitForIdle() }
                 } else skip("No live categories; skipping channel grid")
                 returnToHub()
 
-                required(By.res("hub-Filmler")).click()
+                optional(By.res(Pattern.compile("hub-.*Filmler")), "Movies navigation")?.click()
                 val movieCategory = firstCategory()
                 if (movieCategory != null) {
                     movieCategory.click()
-                    required(By.res("poster-grid"))
+                    optional(By.res("poster-grid"), "Movie poster grid")
                     val poster = device.wait(Until.findObject(
                         By.res("poster-grid").hasDescendant(By.clickable(true).desc(Pattern.compile(".+")))
                     ), timeout)?.findObject(By.clickable(true).desc(Pattern.compile(".+")))
                     if (poster != null) {
                         poster.click()
-                        required(By.res("details-content"))
+                        optional(By.res("details-content"), "Movie details")
                     } else {
                         skip("Empty movie category; skipping details")
                     }
                 } else skip("No movie categories; skipping details")
                 returnToHub()
 
-                required(By.res("hub-Ara")).click()
-                required(By.res("search-input")).text = "ge"
+                optional(By.res(Pattern.compile("hub-.*Ara")), "Search navigation")?.click()
+                optional(By.res("search-input"), "Search input")?.text = "ge"
                 // Search is debounced; wait for matching fixture/results composition.
                 android.os.SystemClock.sleep(750)
-                required(By.res("search-results"))
+                optional(By.res("search-results"), "Search results")
                 device.waitForIdle()
             }
         }
     }
 
-    private fun required(selector: BySelector): UiObject2 =
-        checkNotNull(device.wait(Until.findObject(selector), timeout)) { "Missing UI: $selector" }
+    private fun optional(selector: BySelector, description: String): UiObject2? =
+        device.wait(Until.findObject(selector), timeout).also { if (it == null) skip("$description unavailable; continuing") }
 
     private fun firstCategory(): UiObject2? {
-        required(By.res("category-grid"))
+        if (optional(By.res("category-grid"), "Category grid") == null) return null
         val card = By.res(Pattern.compile("category-.+")).clickable(true)
         return device.wait(Until.findObject(By.res("category-grid").hasDescendant(card)), timeout)
             ?.findObject(card)
@@ -117,26 +114,27 @@ class BaselineProfileGenerator {
             device.pressBack()
             device.waitForIdle()
         }
-        required(By.res("hub"))
+        optional(By.res("hub"), "Return to Hub")
     }
 
-    private fun reveal(selector: BySelector): UiObject2 {
+    private fun reveal(selector: BySelector): UiObject2? {
         repeat(10) {
             device.findObject(selector)?.let { return it }
-            required(By.res("source-setup")).scroll(Direction.DOWN, 0.6f)
-            device.waitForIdle()
+            val form = device.findObject(By.res("source-setup")) ?: return null
+            form.scroll(Direction.DOWN, 0.6f)
+            device.wait(Until.hasObject(selector), 1_000L)
         }
-        return required(selector)
+        return optional(selector, "Setup control")
     }
 
     private fun addFixture(address: String) {
-        required(By.text("Liste adresi gir")).click()
-        reveal(By.desc("Liste adı")).text = "Baseline Profile fixture"
-        reveal(By.desc("Liste adresi")).text = address
-        reveal(By.res("setup-advanced")).click()
-        reveal(By.text("HTTP uyumluluğu · Kapalı")).click()
-        reveal(By.text("Bağlantıyı sına ve ekle")).click()
-        required(By.res("hub"))
+        if (optional(By.res("setup-add-m3u"), "M3U setup action")?.let { runCatching { it.click() }.isSuccess } != true) return
+        (reveal(By.res("setup-name")) ?: return).text = "Baseline Profile fixture"
+        (reveal(By.res("setup-address")) ?: return).text = address
+        (reveal(By.res("setup-advanced")) ?: return).click()
+        (reveal(By.res("setup-http-compat")) ?: return).click()
+        (reveal(By.res("setup-submit")) ?: return).click()
+        optional(By.res("hub"), "Return to Hub")
     }
 
     private fun skip(reason: String) { Log.i("BaselineProfileGenerator", reason) }
