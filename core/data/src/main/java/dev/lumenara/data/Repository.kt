@@ -94,6 +94,47 @@ class Repository private constructor(private val context: Context) {
         StartupPerf.measure("startup_room_recovery") { restoreTransaction.recover() }
     } }
     private val catalogScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val checkedVersions = LinkedHashMap<String, Item>()
+    private val versionRepairs by lazy {
+        kotlinx.coroutines.channels.Channel<String>(kotlinx.coroutines.channels.Channel.UNLIMITED).also { queue ->
+            catalogScope.launch(Dispatchers.IO) {
+                val refresher = VersionRefresher(library::versionSeeds,
+                    related = { library.relatedVersions(relatedVersionsQuery(it)) },
+                    cached = metadata::cachedMatch,
+                    persist = { matches, assignments ->
+                        matches.chunked(128).forEach { library.assignTmdb(it) }
+                        assignments.chunked(128).forEach { library.assignVersions(it) }
+                    })
+                for (first in queue) {
+                    // Coalesce a visible page and simultaneous metadata completions into one repair.
+                    delay(75)
+                    val ids = linkedSetOf(first)
+                    while (ids.size < 64) ids += queue.tryReceive().getOrNull() ?: break
+                    try {
+                        lock.withLock { db.withTransaction { refresher.refresh(ids.toList()) } }
+                    } catch (error: kotlinx.coroutines.CancellationException) {
+                        throw error
+                    } catch (_: Exception) {
+                        synchronized(checkedVersions) { ids.forEach { checkedVersions.remove(it) } }
+                        android.util.Log.w("LumenaraPerf", "version_group_repair_failed")
+                    }
+                }
+            }
+        }
+    }
+
+    // Demand-driven repair of old keys/cache-only IDs; no catalog work in the constructor/Hub.
+    private fun queueVersionRepair(rows: List<Item>) {
+        val ids = synchronized(checkedVersions) {
+            rows.filter { it.kind in listOf("MOVIE", "SERIES") && checkedVersions[it.id] != it }
+                .map { row ->
+                    checkedVersions[row.id] = row
+                    while (checkedVersions.size > 512) checkedVersions.remove(checkedVersions.keys.first())
+                    row.id
+                }
+        }
+        ids.forEach { versionRepairs.trySend(it) }
+    }
     private val catalog = CatalogStreams(library.categoryNames(), library::categoryCounts,
         library::sourceCategoryCounts, preferences.showAdult, catalogScope, StartupPerf::duration)
     val hidden: Flow<List<String>> = catalog.hidden
@@ -105,11 +146,13 @@ class Repository private constructor(private val context: Context) {
     fun browse(source: String, kind: String, category: String, query: String, shelf: String, limit: Int,
                year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0) =
         hidden.flatMapLatest { library.browse(source, kind, category, query, shelf, limit, year, genre, language, minRating, it) }
+            .onEach(::queueVersionRepair)
 
     fun browsePage(source: String, kind: String, category: String, query: String, shelf: String,
         limit: Int, offset: Int, year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0) =
         hidden.flatMapLatest { library.browsePage(source, kind, category, query, shelf, limit, offset,
             year, genre, language, minRating, it) }
+            .onEach(::queueVersionRepair)
 
     fun browseCount(source: String, kind: String, category: String, query: String, shelf: String,
         year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0) =
@@ -341,10 +384,16 @@ class Repository private constructor(private val context: Context) {
             if (spec.user.isNotBlank()) {
                 try {
                     query = Xtream(spec).subtitleInfo(address(base), base.kind, name.title, name.year)
-                    if (query.tmdb.isNotBlank() && base.tmdbId() != query.tmdb) {
-                        db.withTransaction {
-                            library.save(listOf(base.copy(search = base.search.replace(Regex(" \\[tmdb:[0-9]+\\]"), "") + " [tmdb:${query.tmdb}]")))
-                        }
+                    if (query.tmdb.toLongOrNull()?.let { it > 0 } == true) {
+                        lock.withLock { db.withTransaction {
+                            val current = library.item(base.id)
+                            if (current != null) {
+                                val matched = current.withTmdbMatch(TmdbMatch(query.tmdb, query.year), authoritative = true)
+                                if (matched.search != current.search || matched.year != current.year)
+                                    library.assignTmdb(listOf(TmdbAssignment(current.id, matched.search, matched.year)))
+                            }
+                        } }
+                        versionRepairs.trySend(base.id)
                     }
                 }
                 catch (e: kotlinx.coroutines.CancellationException) { throw e }
@@ -356,7 +405,8 @@ class Repository private constructor(private val context: Context) {
     }
 
     suspend fun details(item: Item) =
-        metadata.details(item).also {
+        metadata.details(withContext(Dispatchers.IO) { library.item(item.id) ?: item }).also {
+            if (item.kind in listOf("MOVIE", "SERIES")) versionRepairs.trySend(item.id)
             if (it.collection.isNotBlank())
                 db.withTransaction {
                     if (library.exists(item.id)) library.collection(Member(item.id, it.collection))
@@ -672,7 +722,16 @@ class Repository private constructor(private val context: Context) {
                 library.save(source)
                 staged.read { batch ->
                     job.ensureActive()
-                    library.writeBatch(batch.map { it.copy(versionKey = it.id, displayTitle = it.title, displayYear = it.year) })
+                    // Keep late metadata matches on unchanged streams, even if Android evicted
+                    // their JSON cache before this provider refresh.
+                    val previous = library.importedVersionSeeds(batch.map { it.id }).associateBy { it.id }
+                    library.writeBatch(batch.map { row ->
+                        val old = previous[row.id]
+                        val retained = if (row.tmdbId().isEmpty() && old != null &&
+                            searchable(productionName(row.title, row.year).title) == searchable(productionName(old.title, old.year).title))
+                            row.withTmdbMatch(TmdbMatch(old.tmdbId(), old.year)) else row
+                        retained.copy(versionKey = row.id, displayTitle = row.title, displayYear = row.year)
+                    })
                 }
                 val preferenceReferences = preferences.carryReferences(old)
                 val excluded = context.getSharedPreferences("watch_next_state", Context.MODE_PRIVATE)

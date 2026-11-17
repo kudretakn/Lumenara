@@ -5,6 +5,24 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AudioSubtitlesTest {
+    @Test fun brokenProviderBracketsNeverLeakIntoTheTitle() {
+        for (suffix in listOf("(2017", "[2017", "2017)", "2017]", "(2017]", "[4K", "4K)", "(2017) [4K")) {
+            val name = productionName("Bıçak Sırtı $suffix")
+            assertEquals(suffix, "Bıçak Sırtı", name.title)
+            if (suffix.contains("2017")) assertEquals(suffix, "2017", name.year)
+        }
+        assertEquals("Film (Yönetmen Kurgusu)", productionName("Film (Yönetmen Kurgusu) 4K").title)
+        assertEquals("Film Yönetmen Kurgusu", productionName("Film (Yönetmen Kurgusu [4K").title)
+        assertEquals("1917", productionName("1917").title)
+        assertEquals("", productionName("1917").year)
+        assertEquals("2001: Bir Uzay Destanı", productionName("2001: Bir Uzay Destanı").title)
+        assertEquals("Bıçak Sırtı 2049", productionName("Bıçak Sırtı 2049 (2017)").title)
+        assertEquals("2017", productionName("Bıçak Sırtı 2049 (2017)").year)
+        assertEquals("Bıçak Sırtı 2049", productionName("Bıçak Sırtı 2049 (2017").title)
+        assertEquals("Bıçak Sırtı 2049", productionName("Bıçak Sırtı 2049").title)
+        assertEquals("", productionName("[4K").title)
+    }
+
     @Test fun turkishProviderPrefixesAndQualityTagsDoNotChangeTheTitle() {
         val titles = listOf("TR: Avatar (2009)", "Avatar 4K", "Avatar [Altyazılı]",
             "[TR] Avatar [2160p]", "TR | Avatar - FHD Türkçe Dublaj", "[4K] TR: Avatar")

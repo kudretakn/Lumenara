@@ -12,6 +12,26 @@ internal fun interface TmdbTransport {
 
 internal data class TmdbCached(val data: JSONObject, val savedAt: Long)
 
+internal fun tmdbCacheIdentity(type: String, title: String, year: String, knownId: String): String {
+    val folded = searchable(title).replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim().replace(Regex("\\s+"), " ")
+    return "$type|$folded|$year|$knownId"
+}
+
+internal fun cachedTmdbMatch(item: Item, data: JSONObject): TmdbMatch? {
+    val id = data.optLong("id").takeIf { it > 0 }?.toString() ?: return null
+    if (data.optBoolean("_miss")) return null
+    val knownId = item.tmdbId()
+    if (knownId.isNotEmpty() && knownId != id) return null
+    val name = productionName(item.title, item.year)
+    val type = if (item.kind == "MOVIE") "movie" else "tv"
+    if (data.has("_identity")) {
+        val identity = data.optString("_identity")
+        if (identity.substringBefore('|') != type || knownId.isEmpty() &&
+            identity != tmdbCacheIdentity(type, name.title, name.year, knownId)) return null
+    }
+    return TmdbMatch(id, data.optString("release_date").ifEmpty { data.optString("first_air_date") }.take(4))
+}
+
 /** Uses the existing metadata files; misses are deliberately shorter lived than details. */
 internal class TmdbMatcher(
     private val transport: TmdbTransport,
@@ -25,9 +45,13 @@ internal class TmdbMatcher(
         knownId: String = ""): JSONObject? {
         require(type == "movie" || type == "tv")
         val name = productionName(episodeSuffix.replace(title, ""), year)
-        val identity = "$type|${normalized(name.title)}|${name.year}|$knownId"
+        val identity = tmdbCacheIdentity(type, name.title, name.year, knownId)
         val previous = read(key)?.takeIf {
-            !it.data.has("_identity") || it.data.optString("_identity") == identity
+            !it.data.has("_identity") || it.data.optString("_identity") == identity ||
+                // Persisting a cache-only ID/year must not turn the next open into a cache miss.
+                knownId.toLongOrNull()?.takeIf { id -> id > 0 }?.let { id ->
+                    it.data.optLong("id") == id && it.data.optString("_identity").substringBefore('|') == type
+                } == true
         }
         val missed = previous?.data?.optBoolean("_miss") == true
         val ttl = if (missed) 86400000L else 7L * 86400000
