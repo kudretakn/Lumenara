@@ -1,5 +1,12 @@
 # Lumenara sürüm kaydı
 
+## 0.5.1 · 17 Kasım 2026
+
+- Uygulama içi güncelleme kontrolü GitHub'ın istek sınırına (saatte 60 istek) takılınca artık "GitHub istek sınırına ulaşıldı, N dakika sonra tekrar deneyin" diyor; "Sağlayıcı HTTP 403" mesajı kalktı.
+- GitHub API yanıt vermezse sürüm GitHub'ın web sayfasından bulunuyor; SHA-256 doğrulama özeti alınamazsa hiçbir şey kurulmuyor.
+- Son kontrol sonucu önbellekte tutuluyor (ETag); açılıştaki otomatik kontrol saatte en fazla bir kez yapılıyor.
+- Hata mesajları sürüm denetimi ile APK indirmeyi ayırıyor.
+
 ## 0.5.0 · 16 Kasım 2026
 
 - Yeni tasarım ("Quiet Cinema"): koyu nötr zemin, tek altın vurgu, Inter yazı tipi, 8 dp ızgara, cam efekti ve bulanıklık yok.

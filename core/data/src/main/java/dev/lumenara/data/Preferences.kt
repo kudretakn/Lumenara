@@ -45,6 +45,30 @@ class Preferences internal constructor(
     internal suspend fun setFetchState(key: String, state: FetchState) =
         setSecret("refresh_$key", state.encode())
 
+    internal suspend fun updateState(repository: String): UpdateState =
+        UpdateState.decode(text("update_$repository").first())
+
+    // Claim before networking, including failed attempts, so restarts cannot hammer GitHub.
+    internal suspend fun beginUpdateCheck(repository: String, automatic: Boolean, now: Long): Boolean {
+        var claimed = false
+        store.edit {
+            val key = stringPreferencesKey("update_$repository")
+            val previous = UpdateState.decode(it[key].orEmpty())
+            if (!automatic || previous.checkedAt == 0L || now < previous.checkedAt || now - previous.checkedAt >= 3_600_000L) {
+                it[key] = previous.copy(checkedAt = now).encode()
+                claimed = true
+            }
+        }
+        return claimed
+    }
+
+    internal suspend fun setUpdateRelease(repository: String, tag: String, etag: String, release: String) {
+        store.edit {
+            val key = stringPreferencesKey("update_$repository")
+            it[key] = UpdateState.decode(it[key].orEmpty()).copy(tag = tag, etag = etag, release = release).encode()
+        }
+    }
+
     fun text(key: String, fallback: String = "") =
         store.data.map { it[stringPreferencesKey(key)] ?: fallback }
 
@@ -53,7 +77,8 @@ class Preferences internal constructor(
     }
 
     // These describe local cache contents, which are not part of the backup.
-    private fun cacheSetting(name: String) = name.startsWith("secret_refresh_") || name.startsWith("series_expanded_")
+    private fun cacheSetting(name: String) = name.startsWith("secret_refresh_") ||
+        name.startsWith("series_expanded_") || name.startsWith("update_")
 
     internal suspend fun backupSettings(): List<BackupSetting> = withContext(Dispatchers.IO) {
         rawSettings().filterNot { cacheSetting(it.name) }.map {

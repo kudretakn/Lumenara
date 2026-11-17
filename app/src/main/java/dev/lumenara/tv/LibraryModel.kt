@@ -70,7 +70,7 @@ constructor(val repo: Repository, val prefs: Preferences) : androidx.lifecycle.V
             val repository = prefs.text("github").first()
             if (repository.isNotEmpty()) {
                 try {
-                    checkUpdate(repository)
+                    checkUpdate(repository, automatic = true)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Exception) {}
@@ -78,8 +78,9 @@ constructor(val repo: Repository, val prefs: Preferences) : androidx.lifecycle.V
         }
     }
 
-    suspend fun checkUpdate(repository: String) {
-        update.value = if (repository.isEmpty()) null else Updates.check(repository, BuildConfig.VERSION_NAME)
+    suspend fun checkUpdate(repository: String, automatic: Boolean = false) {
+        update.value = if (repository.isEmpty()) null else
+            Updates.check(repository, BuildConfig.VERSION_NAME, prefs, automatic)
     }
 
     fun diagnostic(code: String) {
