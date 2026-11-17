@@ -219,7 +219,8 @@ private fun LiveChannelGrid(model: LibraryModel, title: String, result: List<Ite
                     },
                         Modifier.fillMaxWidth()
                             .then(if (index == target) Modifier.focusRequester(focus) else Modifier),
-                        number = numbers[item.id], operations = { open(item) }, compact = true)
+                        number = numbers[item.id], operations = { open(item) }, compact = true,
+                        categoryName = title)
                 }
                 if (paged == null && count >= limit) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
                     FocusCard(more, Modifier.fillMaxWidth()) {

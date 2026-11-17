@@ -7,7 +7,7 @@ import dev.lumenara.data.LiveWindowCursor
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 
-internal const val LIVE_GRID_COLUMNS = 6
+internal const val LIVE_GRID_COLUMNS = 4
 internal const val LIVE_PAGE_SIZE = LIVE_GRID_COLUMNS * 14
 
 /** Absolute lazy-list indices keep focus/scroll stable while old pages leave memory. */
