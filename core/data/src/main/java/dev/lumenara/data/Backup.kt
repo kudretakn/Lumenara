@@ -217,7 +217,9 @@ internal class BackupStore(
         val mappings = db.guide().backupMappings()
         val settings = preferences.backupSettings()
         val recent = settings.firstOrNull { it.name == "recent_live" }?.value?.lines().orEmpty()
-        val ids = (marks.map { it.id } + mappings.map { it.item } + recent).distinct()
+        val delays = settings.filter { it.name.startsWith("subtitle_delay_") }
+            .mapNotNull { it.name.removePrefix("subtitle_delay_").substringAfter('|', "").takeIf(String::isNotBlank) }
+        val ids = (marks.map { it.id } + mappings.map { it.item } + recent + delays).distinct()
         val items = ids.mapNotNull { library.item(it) }.map { item ->
             BackupItem(item.id, item.source, vault.decrypt(item.encryptedUrl),
                 library.item(item.parent)?.let { vault.decrypt(it.encryptedUrl) }.orEmpty())

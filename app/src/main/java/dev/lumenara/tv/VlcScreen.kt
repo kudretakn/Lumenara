@@ -52,7 +52,11 @@ internal fun VlcScreen(
     sleepTimerVersion: Int,
     onSleepTimerChanged: () -> Unit,
     episodeEnded: () -> Unit,
+    delayMs: Long,
+    delayReady: Boolean,
+    changeSubtitleDelay: (Long) -> Unit,
 ) {
+    val currentDelayMs by rememberUpdatedState(delayMs)
     val sleepCountdown = sleepTimerVersion.let { sleepTimer.showCountdown() }
     val life by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
     var panel by remember { mutableStateOf(false) }
@@ -90,6 +94,7 @@ internal fun VlcScreen(
     // key from null to view, cancelling playback that may already have started.
     val layout = remember(context) { VLCVideoLayout(context) }
     var player by remember { mutableStateOf<MediaPlayer?>(null) }
+    var receivedSubtitleDelayUs by remember(player) { mutableLongStateOf(0L) }
     var frameRate by remember(item.id, retry.generation) { mutableStateOf<Float?>(null) }
     LaunchedEffect(player, item.id, retry.generation) {
         val p = player ?: return@LaunchedEffect
@@ -111,7 +116,6 @@ internal fun VlcScreen(
         attachSubtitle(it)
         panel = false
     }
-    var delayMs by remember(item.id) { mutableLongStateOf(0) }
     var preferenceKey by remember(item.id) { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     var audioTracks by remember(item.id) { mutableStateOf(emptyList<MediaPlayer.TrackDescription>()) }
@@ -119,7 +123,6 @@ internal fun VlcScreen(
     var languages by remember(item.id) { mutableStateOf(emptyMap<Int, String>()) }
     LaunchedEffect(item.id) {
         preferenceKey = model.repo.preferenceKey(item)
-        delayMs = model.prefs.text("delay_$preferenceKey", "0").first().toLongOrNull() ?: 0
     }
     var nativePlaying by remember(item.id) { mutableStateOf(false) }
     var mediaGeneration by remember { mutableIntStateOf(0) }
@@ -297,7 +300,8 @@ internal fun VlcScreen(
                 }
             }
             activeSubtitle = attached != null && slaveTrack != null && p.spuTrack == slaveTrack
-            if (nativePlaying && p.spuDelay != delayMs * 1000) p.setSpuDelay(delayMs * 1000)
+            if (nativePlaying && p.spuDelay != currentDelayMs * 1000) p.setSpuDelay(currentDelayMs * 1000)
+            receivedSubtitleDelayUs = p.spuDelay
         }
     }
     LaunchedEffect(subtitleSearch.open, layout, panel, fullscreen.guide, fullscreen.finished, player, retry.generation, retry.reconnecting, sleepCountdown) {
@@ -508,6 +512,7 @@ internal fun VlcScreen(
             .focusRequester(focus)
             .testTag("vlc-player")
             .semantics {
+                this[SubtitleEngineDelayUs] = receivedSubtitleDelayUs
                 contentDescription = "Tam ekran oynatıcı"
                 if (activeSubtitle) stateDescription = "İndirilen altyazı etkin"
             }
@@ -672,17 +677,9 @@ internal fun VlcScreen(
                         }
                     }
                     item {
-                        Text("Altyazı gecikmesi · $delayMs ms")
-                        Column {
-                            for (step in listOf(-500L, 500L)) PlayerOption(
-                                onClick = {
-                                    delayMs = (delayMs + step).coerceIn(-60_000, 60_000)
-                                    scope.launch { model.prefs.set("delay_$preferenceKey", delayMs.toString()) }
-                                    p.setSpuDelay(delayMs * 1000)
-                                }
-                            ) {
-                                Text(if (step < 0) "−0,5 sn" else "+0,5 sn")
-                            }
+                        SubtitleDelayControls(delayMs, delayReady) { value ->
+                            p.setSpuDelay(value * 1000)
+                            changeSubtitleDelay(value)
                         }
                     }
                 }

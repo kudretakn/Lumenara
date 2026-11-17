@@ -51,7 +51,7 @@ internal fun Video(
     subtitle: MediaItem.SubtitleConfiguration? = null,
     failure: (Boolean) -> Unit = {},
     liveRetry: LiveRetry? = null,
-    subtitleDelayUs: java.util.concurrent.atomic.AtomicLong = java.util.concurrent.atomic.AtomicLong(),
+    subtitleDelayUs: java.util.concurrent.atomic.AtomicLong? = null,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val owner = LocalLifecycleOwner.current
@@ -71,6 +71,8 @@ internal fun Video(
     var configuration by remember { mutableStateOf<Triple<Boolean, Boolean, String>?>(null) }
     val allowedHttp = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
     val allowedSubtitle = remember { java.util.concurrent.atomic.AtomicReference<android.net.Uri?>(null) }
+    val stableSubtitleDelay = subtitleDelayUs ?: remember { java.util.concurrent.atomic.AtomicLong() }
+    val shiftedSubtitles = remember(stableSubtitleDelay) { SubtitleShiftOutput(stableSubtitleDelay) }
     var resume by remember(item.id) { mutableLongStateOf(initial) }
     var frameRate by remember(item.id, attempt) { mutableStateOf<Float?>(null) }
     var videoOutput by remember { mutableStateOf<PlayerView?>(null) }
@@ -110,7 +112,7 @@ internal fun Video(
                         profile,
                         subtitle?.uri,
                         automaticRetries = item.kind != "LIVE",
-                        subtitleDelayUs = subtitleDelayUs,
+                        subtitleShiftOutput = shiftedSubtitles.takeUnless { preview || multi },
                         live = item.kind == "LIVE",
                         multi = multi,
                         httpAllowed = { allowedHttp.get() },
@@ -293,7 +295,20 @@ internal fun Video(
             }
         }
     }
+    var appliedSubtitleDelayUs by remember(item.id) { mutableLongStateOf(0L) }
+    LaunchedEffect(player, shiftedSubtitles) {
+        val engine = player ?: return@LaunchedEffect
+        if (preview || multi) return@LaunchedEffect
+        val period = androidx.media3.common.Timeline.Period()
+        wallClockTicks(50).collect {
+            val windowOffsetUs = if (engine.currentTimeline.isEmpty) 0L else
+                engine.currentTimeline.getPeriod(engine.currentPeriodIndex, period).positionInWindowUs
+            shiftedSubtitles.render(engine.currentPosition * 1000 - windowOffsetUs)
+            appliedSubtitleDelayUs = shiftedSubtitles.appliedDelayUs
+        }
+    }
     Box(modifier.background(androidx.compose.ui.graphics.Color.Black).semantics {
+        this[SubtitleEngineDelayUs] = appliedSubtitleDelayUs
         if (preview) stateDescription = if (playbackActive) "Oynatılıyor" else "Yükleniyor"
         else if (subtitleText.isNotBlank()) stateDescription = "Altyazı · $subtitleText"
     }) {
@@ -412,11 +427,18 @@ internal fun Playback(
     var delayMs by remember(item.id) { mutableLongStateOf(0) }
     val subtitleDelay = remember { java.util.concurrent.atomic.AtomicLong() }
     LaunchedEffect(item.id) {
-        preferenceKey = model.repo.preferenceKey(item)
-        delayMs = model.prefs.text("delay_$preferenceKey", "0").first().toLongOrNull() ?: 0
+        subtitleDelay.set(0L)
+        val key = model.repo.preferenceKey(item)
+        delayMs = model.prefs.subtitleDelay(item)
         subtitleDelay.set(delayMs * 1000)
+        preferenceKey = key
         val cached = withContext(Dispatchers.IO) { model.repo.subtitles.cache.find(preferenceKey) }
         if (cached != null && model.prefs.playbackChoice("text", preferenceKey) != "off") subtitle = subtitleConfiguration(cached)
+    }
+    fun changeSubtitleDelay(value: Long) {
+        delayMs = value
+        subtitleDelay.set(value * 1000)
+        scope.launch { model.prefs.setSubtitleDelay(item, value) }
     }
     fun move(delta: Int) {
         if (item.kind == "LIVE" && group is LiveChannelGroup) {
@@ -467,6 +489,9 @@ internal fun Playback(
             sleepTimerVersion = sleepTimerVersion,
             onSleepTimerChanged = { sleepTimerVersion++ },
             episodeEnded = ::episodeEnded,
+            delayMs = delayMs,
+            delayReady = preferenceKey.isNotEmpty(),
+            changeSubtitleDelay = ::changeSubtitleDelay,
         )
         return
     }
@@ -625,12 +650,7 @@ internal fun Playback(
                 item { PlaybackSection("ALTYAZI") }
                 item { SubtitleSearch(subtitleSearch) }
                 item {
-                    Text("Altyazı kaydırma · ${delayMs / 1000.0} sn")
-                    Column { for (step in listOf(-500L, 500L)) PlayerOption(onClick = {
-                        delayMs = (delayMs + step).coerceIn(-60_000, 60_000)
-                        subtitleDelay.set(delayMs * 1000)
-                        scope.launch { model.prefs.set("delay_$preferenceKey", delayMs.toString()) }
-                    }) { Text(if (step < 0) "−0,5 sn" else "+0,5 sn") } }
+                    SubtitleDelayControls(delayMs, preferenceKey.isNotEmpty(), ::changeSubtitleDelay)
                 }
                 if (item.introStartMs >= 0)
                     item {
