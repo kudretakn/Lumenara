@@ -25,9 +25,12 @@ class LivePagesTest {
     @Test fun distantReturnLoadsOnlyNearbyPagesAndRestoresFocus() {
         val repo = Repository.get(InstrumentationRegistry.getInstrumentation().targetContext)
         val source = "live-pages-${System.nanoTime()}"
-        val anchorPage = 240 / LIVE_PAGE_SIZE
-        val endPage = 320 / LIVE_PAGE_SIZE
-        val rows = (0 until 321).map { index ->
+        val anchorIndex = 3 * LIVE_PAGE_SIZE
+        val endIndex = anchorIndex + LIVE_PAGE_SIZE
+        val previousIndex = anchorIndex - LIVE_PAGE_SIZE
+        val anchorPage = anchorIndex / LIVE_PAGE_SIZE
+        val endPage = endIndex / LIVE_PAGE_SIZE
+        val rows = (0..endIndex).map { index ->
             val title = "Channel %03d".format(java.util.Locale.ROOT, index)
             Item("$source-$index", source, title, "Haber", "LIVE", "", "", title.lowercase(), 1, "")
         }
@@ -40,32 +43,32 @@ class LivePagesTest {
             screen.runOnUiThread {
                 val model = ViewModelProvider(screen.activity)[LibraryModel::class.java]
                 screen.activity.setContent {
-                    val state = rememberLivePages(model, source, returnId = rows[240].id)
+                    val state = rememberLivePages(model, source, returnId = rows[anchorIndex].id)
                     SideEffect { pages = state }
                 }
             }
-            screen.waitUntil(10_000) { pages?.get(240)?.id == rows[240].id }
+            screen.waitUntil(10_000) { pages?.get(anchorIndex)?.id == rows[anchorIndex].id }
             screen.runOnIdle {
-                assertEquals(240, pages?.anchor)
+                assertEquals(anchorIndex, pages?.anchor)
                 assertTrue(checkNotNull(pages).pages.keys.all { it in (anchorPage - 1)..(anchorPage + 1) })
                 assertTrue(checkNotNull(pages).pages.values.sumOf { it.size } <= 3 * LIVE_PAGE_SIZE)
-                checkNotNull(pages).focused(320)
+                checkNotNull(pages).focused(endIndex)
             }
             screen.waitUntil(10_000) {
-                pages?.get(320)?.id == rows[320].id &&
+                pages?.get(endIndex)?.id == rows[endIndex].id &&
                     pages?.pages?.keys?.all { it in (endPage - 1)..endPage } == true
             }
             // A prefix rename invalidates saved keysets. Absolute list indices must be
             // recomputed even when the current window began with a cached cursor.
             runBlocking { repo.library.save(listOf(rows[0].copy(title = "Z renamed"))) }
-            screen.waitUntil(10_000) { pages?.get(240)?.id == rows[241].id }
+            screen.waitUntil(10_000) { pages?.get(anchorIndex)?.id == rows[anchorIndex + 1].id }
             runBlocking { repo.library.save(listOf(rows[0])) }
-            screen.waitUntil(10_000) { pages?.get(240)?.id == rows[240].id }
+            screen.waitUntil(10_000) { pages?.get(anchorIndex)?.id == rows[anchorIndex].id }
             screen.runOnIdle {
-                checkNotNull(pages).focused(240)
+                checkNotNull(pages).focused(anchorIndex)
             }
             screen.waitUntil(10_000) {
-                pages?.get(160)?.id == rows[160].id &&
+                pages?.get(previousIndex)?.id == rows[previousIndex].id &&
                     pages?.pages?.keys?.all { it in (anchorPage - 1)..(anchorPage + 1) } == true
             }
             screen.runOnIdle {
@@ -78,12 +81,12 @@ class LivePagesTest {
                 val model = ViewModelProvider(screen.activity)[LibraryModel::class.java]
                 screen.activity.setContent {
                     LumenaraTheme {
-                        LiveScreen(model, source, {}, { _, _ -> }, returnToChannel = rows[240].id)
+                        LiveScreen(model, source, {}, { _, _ -> }, returnToChannel = rows[anchorIndex].id)
                     }
                 }
             }
             screen.waitUntil(10_000) {
-                screen.onAllNodes(hasTestTag("live-channel-${rows[240].id}") and isFocused())
+                screen.onAllNodes(hasTestTag("live-channel-${rows[anchorIndex].id}") and isFocused())
                     .fetchSemanticsNodes().isNotEmpty()
             }
             screen.runOnUiThread {
@@ -101,12 +104,12 @@ class LivePagesTest {
             screen.waitUntil(10_000) {
                 screen.onAllNodes(hasText(rows[0].title)).fetchSemanticsNodes().isNotEmpty()
             }
-            screen.onNode(hasScrollToIndexAction()).performScrollToIndex(240)
+            screen.onNode(hasScrollToIndexAction()).performScrollToIndex(anchorIndex)
             screen.waitUntil(10_000) {
-                screen.onAllNodes(hasText(rows[240].title)).fetchSemanticsNodes().isNotEmpty()
+                screen.onAllNodes(hasText(rows[anchorIndex].title)).fetchSemanticsNodes().isNotEmpty()
             }
             // TV Material surfaces handle remote OK, not injected touch clicks.
-            screen.onNode(hasText(rows[240].title) and hasClickAction())
+            screen.onNode(hasText(rows[anchorIndex].title) and hasClickAction())
                 .performSemanticsAction(SemanticsActions.RequestFocus)
                 .assertIsFocused()
             screen.ok()
@@ -115,7 +118,7 @@ class LivePagesTest {
                 .assertIsFocused()
             screen.ok()
             screen.waitUntil(10_000) {
-                screen.onAllNodes(hasText(rows[240].title) and isFocused())
+                screen.onAllNodes(hasText(rows[anchorIndex].title) and isFocused())
                     .fetchSemanticsNodes().isNotEmpty()
             }
         } finally {

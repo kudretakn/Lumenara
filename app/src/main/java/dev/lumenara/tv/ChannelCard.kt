@@ -87,10 +87,17 @@ internal fun ChannelCard(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {
                     ChannelLogo(model, item, logo, Modifier.size(40.dp), compact = true)
-                    Text(channelCardName(item.title, categoryName), Modifier.weight(1f),
-                        style = LumenType.label, color = LumenColors.textPrimary,
-                        maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    if (number != null) Text(number.toString(), style = LumenType.meta)
+                    Column(Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(channelCardName(item.title, categoryName), Modifier.weight(1f),
+                                style = LumenType.label, color = LumenColors.textPrimary,
+                                maxLines = if (current != null) 1 else 2,
+                                overflow = TextOverflow.Ellipsis)
+                            if (number != null) Text(number.toString(), style = LumenType.meta)
+                        }
+                        if (current != null) Text(current.title, style = LumenType.meta,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
                 }
                 if (current != null) ProgressLine(
                     (now - current.start).toFloat() / (current.end - current.start).coerceAtLeast(1),

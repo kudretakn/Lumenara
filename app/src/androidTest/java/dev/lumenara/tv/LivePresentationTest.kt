@@ -70,13 +70,20 @@ class LivePresentationTest {
             }
             screen.openCategory("Spor")
             await(hasTestTag("live-channel-${rows[0].id}") and isFocused())
-            await(hasText("Süper Lig: Galatasaray – Fenerbahçe"))
+            // Compact cards show the channel name and number as separate text nodes.
+            await(hasTestTag("live-channel-${rows[0].id}") and hasText(rows[0].title) and hasText("1"))
+            screen.onNode(hasText("Süper Lig: Galatasaray – Fenerbahçe") and
+                hasAnyAncestor(hasTestTag("live-channel-${rows[0].id}")), useUnmergedTree = true)
+                .assertIsDisplayed()
+            screen.onNode(hasText(rows[1].title) and
+                hasAnyAncestor(hasTestTag("live-channel-${rows[1].id}")), useUnmergedTree = true)
+                .assertIsDisplayed()
             val second = screen.onNodeWithTag("live-channel-${rows[1].id}")
-            val before = screen.onNodeWithText(rows[1].title, substring = true).fetchSemanticsNode().boundsInRoot
+            val before = second.fetchSemanticsNode().boundsInRoot
             second.performSemanticsAction(SemanticsActions.RequestFocus)
             second.assertIsFocused()
-            val after = screen.onNodeWithText(rows[1].title, substring = true).fetchSemanticsNode().boundsInRoot
-            // Compact grid (0.5.0): the whole 60 dp card scales around its centre, nothing shifts.
+            val after = second.fetchSemanticsNode().boundsInRoot
+            // The whole 60 dp card scales around its centre, nothing shifts.
             assertEquals("Focus must not move the card", before.center.x, after.center.x, 1f)
             assertEquals("Focus must not move the card", before.center.y, after.center.y, 1f)
             val density = screen.activity.resources.displayMetrics.density
