@@ -29,13 +29,9 @@ private constructor(
     /** Unblock native reads without invalidating an fd VLC may still be opening. */
     fun cancel() {
         if (!cancelled.compareAndSet(false, true)) return
-        // Releasing an OkHttp response may perform socket I/O. Callers can be on
-        // the main thread, so dispatch the release when needed.
-        if (Looper.myLooper() == Looper.getMainLooper()) {
-            thread(name = "lumenara-vlc-close", isDaemon = true) { release() }
-        } else {
-            release()
-        }
+        // Only cancel the call here. The reading thread owns response/source cleanup;
+        // closing an OkHttp body concurrently with read() races inside Okio.
+        release()
     }
 
     /** The owner must retain this descriptor until the native player has been released. */
@@ -68,22 +64,16 @@ private constructor(
                     throw IOException("Yayın erişimi reddedildi.")
                 }
                 val pipe = ParcelFileDescriptor.createPipe()
-                thread(name = "lumenara-ts", isDaemon = true) {
-                    response.use {
-                        ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]).use { out ->
-                            try {
-                                it.body?.byteStream()?.copyTo(out)
-                            } catch (e: IOException) {
-                                if (!call.isCanceled()) android.util.Log.w("LumenaraVlc",
-                                    "TS input read failed: ${e.javaClass.simpleName}")
-                            }
-                        }
-                    }
-                }
-                return VlcInput(pipe[0], demux) {
-                    call.cancel()
-                    response.close()
-                }
+                val pump = VlcInputPump(
+                    source = response.body!!.byteStream(),
+                    response = response,
+                    output = ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]),
+                    cancelCall = { call.cancel() },
+                    onFailure = { e -> android.util.Log.w("LumenaraVlc",
+                        "TS input read failed: ${e.javaClass.simpleName}") },
+                )
+                thread(name = "lumenara-ts", isDaemon = true) { pump.run() }
+                return VlcInput(pipe[0], demux) { pump.cancel() }
             }
 
             val length =
