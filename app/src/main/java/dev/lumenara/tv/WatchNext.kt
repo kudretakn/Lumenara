@@ -113,6 +113,7 @@ internal class WatchNext private constructor(private val context: Context) {
     internal suspend fun sync() = withContext(Dispatchers.IO) {
         mutex.withLock {
             val resolver = context.contentResolver
+            val redirects = repo.library.redirects().associate { it.oldId to it.newId }
             data class Published(val row: Long, val id: String, val browsable: Boolean)
             val published = mutableListOf<Published>()
             // Query all columns: provider owns browsable and it must never be overwritten by us.
@@ -126,10 +127,10 @@ internal class WatchNext private constructor(private val context: Context) {
                 val owner = it.getColumnIndexOrThrow("package_name")
                 while (it.moveToNext()) {
                     if (it.getString(owner) == context.packageName && !it.isNull(id))
-                        published += Published(it.getLong(row), it.getString(id), it.getInt(browse) != 0)
+                        published += Published(it.getLong(row), redirects[it.getString(id)] ?: it.getString(id), it.getInt(browse) != 0)
                 }
             }
-            val blocked = excluded() + published.filterNot { it.browsable }.map { it.id }
+            val blocked = excluded().map { redirects[it] ?: it }.toSet() + published.filterNot { it.browsable }.map { it.id }
             // Persist before deletion so disabled cards remain excluded after toggles/restarts.
             if (blocked != excluded()) state.edit().putStringSet("excluded", blocked).commit()
             val desired = if (prefs.text("watch_next", "Açık").first() == "Açık") entries(blocked)
@@ -139,6 +140,9 @@ internal class WatchNext private constructor(private val context: Context) {
                 resolver.delete(TvContractCompat.buildWatchNextProgramUri(it.row), null, null)
             }
             val existing = published.filter { it.browsable && it.id in desiredIds }.associateBy { it.id }
+            published.filter { it.browsable && it.id in desiredIds && existing[it.id]?.row != it.row }.forEach {
+                resolver.delete(TvContractCompat.buildWatchNextProgramUri(it.row), null, null)
+            }
             desired.forEach { entry ->
                 val program = program(entry)
                 val values = program.toContentValues()

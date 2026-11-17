@@ -58,7 +58,7 @@ data class LiveWindow(val rows: List<Item>, val revision: Long, val hidden: List
 class Repository private constructor(private val context: Context) {
     private val db = Room.databaseBuilder(context, LibraryDb::class.java, "lumenara.db")
         .addMigrations(LibraryDb.MIGRATION_7_8, LibraryDb.MIGRATION_8_9, LibraryDb.MIGRATION_9_10,
-            LibraryDb.MIGRATION_10_11)
+            LibraryDb.MIGRATION_10_11, LibraryDb.MIGRATION_11_12)
         .build()
     val library = db.library()
     val guide = db.guide()
@@ -441,6 +441,32 @@ class Repository private constructor(private val context: Context) {
             }
         }
 
+    suspend fun sourceSpec(id: String): SourceSpec = withContext(Dispatchers.IO) {
+        SourceSpec.decode(vault.decrypt(checkNotNull(library.source(id)).endpoint))
+    }
+
+    private suspend fun carryRows(source: String, xtream: Boolean): List<CarryRow> {
+        val rows = library.carryRows(source, legacy = xtream)
+        if (!xtream) return rows
+        val parents = rows.filter { it.kind == "SERIES" }.associate { row -> row.id to row.providerId.ifEmpty {
+            legacyProviderId(vault.decrypt(row.legacyUrl), row.kind)
+        } }
+        return rows.map { row ->
+            if (row.providerId.isNotEmpty() || row.legacyUrl.isEmpty()) row.copy(legacyUrl = "")
+            else row.copy(providerId = legacyProviderId(vault.decrypt(row.legacyUrl), row.kind,
+                parents[row.parent].orEmpty()), legacyUrl = "")
+        }
+    }
+
+    suspend fun editSource(id: String, name: String, spec: SourceSpec) = withContext(Dispatchers.IO) {
+        require(name.isNotBlank()) { "Kaynak adını girin." }
+        lock.withLock {
+            val old = library.source(id) ?: throw SourceFailure("Kaynak bulunamadı.")
+            import(old.copy(name = name.trim(), endpoint = vault.encrypt(spec.encode()), allowHttp = spec.allowHttp), spec,
+                force = sourceSpec(id) != spec)
+        }
+    }
+
     suspend fun remove(id: String) = lock.withLock {
         library.deleteSource(id)
     }
@@ -498,10 +524,12 @@ class Repository private constructor(private val context: Context) {
         }
     }
 
-    private suspend fun import(source: Source, spec: SourceSpec, updatePreferences: Boolean = true) {
+    private suspend fun import(source: Source, spec: SourceSpec, updatePreferences: Boolean = true, force: Boolean = false) {
         val token = maxOf(System.currentTimeMillis(), source.refreshed + 1)
         val key = "source_${source.id}"
-        val previous = if (source.refreshed > 0) preferences.fetchState(key) else FetchState()
+        val identity = contentKey("catalog", spec.encode())
+        val previous = if (source.refreshed > 0 && !force &&
+            preferences.text("catalog_identity_${source.id}").first() == identity) preferences.fetchState(key) else FetchState()
         val xtream = if (spec.user.isNotEmpty()) Xtream(spec) else null
         var downloaded: Download? = null
         var snapshot: Xtream.Snapshot? = null
@@ -516,9 +544,9 @@ class Repository private constructor(private val context: Context) {
             val catalog = snapshot
             val state = catalog?.state ?: body?.state
             val changed = if (body != null) body.importIfChanged {
-                importChanged(source, spec, token, xtream, catalog, body)
+                importChanged(source, spec, token, xtream, catalog, body, updatePreferences)
             } else if (catalog?.unchanged != true) {
-                importChanged(source, spec, token, xtream, catalog, body)
+                importChanged(source, spec, token, xtream, catalog, body, updatePreferences)
                 true
             } else false
             if (!changed) {
@@ -529,6 +557,7 @@ class Repository private constructor(private val context: Context) {
             if (updatePreferences) {
                 if (providerLimit > 0) preferences.set("provider_${source.id}", providerLimit.toString())
                 if (state != null) preferences.setFetchState(key, state)
+                preferences.set("catalog_identity_${source.id}", identity)
             }
         } finally {
             snapshot?.close()
@@ -537,16 +566,24 @@ class Repository private constructor(private val context: Context) {
     }
 
     private suspend fun importChanged(source: Source, spec: SourceSpec, token: Long,
-        xtream: Xtream?, snapshot: Xtream.Snapshot?, downloaded: Download?) {
+        xtream: Xtream?, snapshot: Xtream.Snapshot?, downloaded: Download?, carryPreferences: Boolean) {
         val staged = CatalogStage(context.cacheDir, source.id, token)
         val job = currentCoroutineContext()
+        val old = carryRows(source.id, spec.user.isNotEmpty())
+        val incoming = ArrayList<CarryRow>()
+        val series = ArrayList<Item>()
         try {
             staged.write { append ->
+                fun stage(row: Item) {
+                    append(row)
+                    incoming += row.carryRow()
+                    if (row.kind == "SERIES") series += row
+                }
                 val grouper = SeriesGrouper()
                 fun accept(row: Listing) {
                     job.ensureActive()
-                    if (spec.user.isNotEmpty()) append(item(source.id, token, row))
-                    else grouper.accept(row) { append(item(source.id, token, it)) }
+                    if (spec.user.isNotEmpty()) stage(item(source.id, token, row))
+                    else grouper.accept(row) { stage(item(source.id, token, it)) }
                 }
                 when {
                     spec.user.isNotEmpty() -> checkNotNull(xtream).read(snapshot, ::accept)
@@ -569,18 +606,49 @@ class Repository private constructor(private val context: Context) {
                             )
                         }
                 }
+                // Xtream episodes are lazy. Rebuild only already-expanded series whose locator
+                // changed, before pruning their old parents. A failed fetch leaves the old catalog intact.
+                if (xtream != null) {
+                    val expanded = old.filter { it.kind == "EPISODE" }.map { it.parent }.toSet()
+                    val matches = matchCarryOver(old.filter { it.kind == "SERIES" }, incoming.filter { it.kind == "SERIES" }).ids
+                    val parents = series.associateBy { it.id }
+                    for ((from, to) in matches) if (from in expanded) {
+                        val parent = parents.getValue(to)
+                        xtream.episodes(vault.decrypt(parent.encryptedUrl), parent.title).distinctBy { it.url }.forEach {
+                            job.ensureActive()
+                            stage(item(source.id, token, it).copy(parent = parent.id))
+                        }
+                    }
+                }
             }
-            db.withTransaction {
+            val incomingIds = incoming.map { it.id }.toSet()
+            val refreshedParents = incoming.filter { it.kind == "EPISODE" }.map { it.parent }.toSet()
+            val matches = matchCarryOver(old.filterNot {
+                it.kind == "EPISODE" && it.parent in incomingIds && it.parent !in refreshedParents
+            }, incoming)
+            val commit: suspend () -> Unit = {
                 library.save(source)
                 staged.read { batch ->
                     job.ensureActive()
                     library.writeBatch(batch.map { it.copy(versionKey = it.id, displayTitle = it.title, displayYear = it.year) })
                 }
+                val preferenceReferences = preferences.carryReferences(old)
+                val excluded = context.getSharedPreferences("watch_next_state", Context.MODE_PRIVATE)
+                    .getStringSet("excluded", emptySet()).orEmpty().toSet()
+                carryRoomState(db, matches.ids, preferenceReferences + excluded)
+                // An unresolved user record is kept for a future/manual retry, never guessed or
+                // erased by cascading catalog pruning. Preserve episode parents along with it.
+                val protected = (library.carryProtectedIds(source.id) + preferenceReferences)
+                    .filter { it !in matches.ids && it !in incomingIds }.toMutableSet()
+                old.filter { it.id in protected && it.parent.isNotBlank() }.forEach { protected += it.parent }
+                protected.removeAll(incomingIds)
+                protected.toList().chunked(900).forEach { library.retainCarryRows(it, token) }
                 if (spec.user.isEmpty()) library.prunePlaylist(source.id, token)
                 else library.prune(source.id, token)
                 library.orphans(source.id)
+                protected.toList().chunked(900).forEach { library.isolateCarryRows(it, token - 1) }
                 for (kind in listOf("MOVIE", "SERIES")) {
-                    val rows = library.versionCandidates(source.id, kind).map(VersionCandidate::asItem)
+                    val rows = library.versionCandidates(source.id, kind, generation = token).map(VersionCandidate::asItem)
                     // Resolve across the complete source, not each 128-row staging batch: matching
                     // translated titles and a missing TMDB ID may occur in distant batches.
                     library.assignVersions(rows.versionAssignments())
@@ -594,9 +662,17 @@ class Repository private constructor(private val context: Context) {
                         }
                     }
                 }
+                if (carryPreferences && matches.ids.isNotEmpty()) {
+                    val current = library.carryRows(source.id)
+                    val subtitleKeys = preferences.carryItems(matches.ids, carryPreferenceIdentities(old, current, matches.ids))
+                    subtitles.cache.carryKeys(subtitleKeys)
+                }
                 job.ensureActive()
                 library.save(source.copy(refreshed = token, count = library.count(source.id)))
             }
+            if (carryPreferences && matches.ids.isNotEmpty()) restoreTransaction.run { commit() }
+            else db.withTransaction { commit() }
+            android.util.Log.i("LumenaraPerf", "history_carry_over matched=${matches.ids.size} ambiguous=${matches.ambiguous} unmatched=${matches.unmatched}")
         } finally {
             staged.close()
         }
@@ -633,6 +709,9 @@ class Repository private constructor(private val context: Context) {
             introEndMs = entry.introEndMs,
             backdrop =
                 entry.backdrop.takeIf { it.startsWith("https://") }?.let(vault::encrypt).orEmpty(),
+            providerId = entry.providerId,
+            tvgName = entry.tvgName,
+            tvgGroup = entry.tvgGroup,
         ).let { it.copy(versionKey = it.id, displayTitle = it.title, displayYear = it.year) }
 
     suspend fun replay(channel: Item, slot: Slot): Item =

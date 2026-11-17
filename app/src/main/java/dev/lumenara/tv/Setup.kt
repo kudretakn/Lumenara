@@ -70,12 +70,14 @@ internal fun Setup(model: LibraryModel, sources: List<Source>, openRestore: () -
     var pass by remember { mutableStateOf("") }
     var http by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf("") }
+    var editing by remember { mutableStateOf<String?>(null) }
     val busy by model.busy.collectAsState()
     val notice by model.notice.collectAsState()
     val first = remember { FocusRequester() }
     LaunchedEffect(method) { withFrameNanos { }; first.requestFocus() }
     BackHandler(method != null) { method = null }
     fun choose(type: String) {
+        editing = null
         method = type
         address = ""
         pass = ""
@@ -195,8 +197,10 @@ internal fun Setup(model: LibraryModel, sources: List<Source>, openRestore: () -
                                     if (method == "Xtream") user else "",
                                     if (method == "Xtream") pass else "",
                                 )
-                            model.job("Kaynak eklendi.") {
-                                model.repo.add(name, spec)
+                            model.job(if (editing == null) "Kaynak eklendi." else "Kaynak güncellendi.") {
+                                val id = editing
+                                if (id == null) model.repo.add(name, spec) else model.repo.editSource(id, name, spec)
+                                editing = null
                                 pass = ""
                                 address = ""
                                 name = ""
@@ -204,7 +208,7 @@ internal fun Setup(model: LibraryModel, sources: List<Source>, openRestore: () -
                             }
                         },
                     ) {
-                        Text(if (busy) "Kaynak işleniyor…" else "Bağlantıyı sına ve ekle")
+                        Text(if (busy) "Kaynak işleniyor…" else if (editing == null) "Bağlantıyı sına ve ekle" else "Bağlantıyı sına ve kaydet")
                     }
                 }
             }
@@ -216,7 +220,7 @@ internal fun Setup(model: LibraryModel, sources: List<Source>, openRestore: () -
             }
             if (notice.isNotEmpty()) item {
                 Row(horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {
-                    val success = notice == "Kaynak eklendi."
+                    val success = notice in listOf("Kaynak eklendi.", "Kaynak güncellendi.")
                     LumenIcon(if (success) LumenIcon.Check else LumenIcon.Info, null,
                         tint = if (success) LumenColors.success else LumenColors.error)
                     Text(notice, style = LumenType.meta)
@@ -254,6 +258,19 @@ internal fun Setup(model: LibraryModel, sources: List<Source>, openRestore: () -
                         Text("Bağlantı sınırı · $configuredLimit (kullanılabilir $limit)")
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        LumenButton(style = LumenButtonStyle.Secondary, enabled = !busy,
+                            modifier = Modifier.testTag("source-edit-${source.id}"), onClick = {
+                                model.job("") {
+                                    val spec = model.repo.sourceSpec(source.id)
+                                    editing = source.id
+                                    method = if (spec.user.isNotEmpty()) "Xtream" else if (spec.address.startsWith("content://")) "Dosya" else "M3U"
+                                    name = source.name
+                                    address = spec.address
+                                    user = spec.user
+                                    pass = spec.password
+                                    http = spec.allowHttp
+                                }
+                            }) { Text("Düzenle") }
                         LumenButton(
                             style = LumenButtonStyle.Secondary,
                             enabled = !busy,

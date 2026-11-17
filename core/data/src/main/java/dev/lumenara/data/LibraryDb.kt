@@ -70,6 +70,9 @@ data class Item(
     @ColumnInfo(defaultValue = "''") val displayYear: String = "",
     // Preferred order within a group permits a filtered/hidden representative to fall back in SQL.
     @ColumnInfo(defaultValue = "0") val versionRank: Int = 0,
+    @ColumnInfo(defaultValue = "''") val providerId: String = "",
+    @ColumnInfo(defaultValue = "''") val tvgName: String = "",
+    @ColumnInfo(defaultValue = "''") val tvgGroup: String = "",
 )
 
 @Entity(
@@ -131,6 +134,44 @@ data class VersionCandidate(
 
 @Dao
 interface LibraryDao {
+    @Query("""SELECT id,source,title,category,kind,tvgId,year,parent,providerId,tvgName,tvgGroup,versionKey,
+        CASE WHEN :legacy=1 AND providerId='' THEN encryptedUrl ELSE '' END AS legacyUrl FROM items WHERE source=:source""")
+    suspend fun carryRows(source: String, legacy: Boolean = false): List<CarryRow>
+
+    @Query("SELECT * FROM item_redirects")
+    suspend fun redirects(): List<ItemRedirect>
+
+    @Query("SELECT newId FROM item_redirects WHERE oldId=:id")
+    suspend fun redirectedId(id: String): String?
+
+    @Upsert suspend fun redirect(row: ItemRedirect)
+    @Upsert suspend fun saveRedirects(rows: List<ItemRedirect>)
+    @Query("DELETE FROM item_redirects WHERE oldId=newId") suspend fun deleteSelfRedirects()
+
+    @Query("UPDATE item_redirects SET newId=:newId WHERE newId=:oldId")
+    suspend fun redirectTarget(oldId: String, newId: String)
+
+    @Query("SELECT * FROM collections WHERE id=:id")
+    suspend fun member(id: String): Member?
+
+    @Query("SELECT * FROM collections") suspend fun carryMembers(): List<Member>
+
+    @Query("DELETE FROM marks WHERE id=:id") suspend fun deleteMark(id: String)
+    @Query("DELETE FROM collections WHERE id=:id") suspend fun deleteMember(id: String)
+    @Query("DELETE FROM mappings WHERE item=:id") suspend fun deleteMapping(id: String)
+
+    @Query("""SELECT i.id FROM items i WHERE i.source=:source AND (
+        EXISTS(SELECT 1 FROM marks m WHERE m.id=i.id AND (m.favorite=1 OR m.listed=1 OR m.position>0 OR m.updated>0))
+        OR EXISTS(SELECT 1 FROM collections c WHERE c.id=i.id)
+        OR EXISTS(SELECT 1 FROM mappings m WHERE m.item=i.id))""")
+    suspend fun carryProtectedIds(source: String): List<String>
+
+    @Query("UPDATE items SET generation=:generation WHERE id IN (:ids)")
+    suspend fun retainCarryRows(ids: List<String>, generation: Long)
+
+    @Query("""UPDATE items SET generation=:generation,versionKey=id,isRepresentative=1,
+        displayTitle=title,displayYear=year,versionRank=0 WHERE id IN (:ids)""")
+    suspend fun isolateCarryRows(ids: List<String>, generation: Long)
     @RawQuery(observedEntities = [Item::class])
     fun catalogRows(query: SupportSQLiteQuery): Flow<List<Item>>
 
@@ -438,8 +479,9 @@ interface LibraryDao {
     @Query("SELECT * FROM items WHERE id=:id")
     suspend fun item(id: String): Item?
 
-    @Query("SELECT id, source, title, kind, search, year, category FROM items WHERE source=:source AND kind=:kind AND category NOT IN (:hidden)")
-    suspend fun versionCandidates(source: String, kind: String, hidden: List<String> = emptyList()): List<VersionCandidate>
+    @Query("""SELECT id, source, title, kind, search, year, category FROM items WHERE source=:source
+        AND kind=:kind AND category NOT IN (:hidden) AND (:generation<0 OR generation=:generation)""")
+    suspend fun versionCandidates(source: String, kind: String, hidden: List<String> = emptyList(), generation: Long = -1): List<VersionCandidate>
 
     @Query("SELECT * FROM items WHERE versionKey=:key ORDER BY versionRank")
     suspend fun versionRows(key: String): List<Item>
@@ -459,6 +501,11 @@ internal interface RestoreDao {
     @Query("DELETE FROM restore_pending") suspend fun clear()
 }
 
+// Durable aliases also let the TV provider reconcile its external rows after a process restart.
+@Entity(tableName = "item_redirects", indices = [Index("newId")], foreignKeys = [ForeignKey(
+    entity = Item::class, parentColumns = ["id"], childColumns = ["newId"], onDelete = ForeignKey.CASCADE)])
+data class ItemRedirect(@PrimaryKey val oldId: String, val newId: String)
+
 @Database(
     entities =
         [
@@ -471,8 +518,9 @@ internal interface RestoreDao {
             Mapping::class,
             Member::class,
             RestorePending::class,
+            ItemRedirect::class,
         ],
-    version = 11,
+    version = 12,
     exportSchema = true,
     autoMigrations =
         [
@@ -488,6 +536,16 @@ abstract class LibraryDb : RoomDatabase() {
     internal abstract fun restoreJournal(): RestoreDao
 
     companion object {
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE items ADD COLUMN providerId TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE items ADD COLUMN tvgName TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE items ADD COLUMN tvgGroup TEXT NOT NULL DEFAULT ''")
+                db.execSQL("""CREATE TABLE IF NOT EXISTS item_redirects (oldId TEXT NOT NULL,
+                    newId TEXT NOT NULL, PRIMARY KEY(oldId), FOREIGN KEY(newId) REFERENCES items(id) ON UPDATE NO ACTION ON DELETE CASCADE)""")
+                db.execSQL("CREATE INDEX index_item_redirects_newId ON item_redirects(newId)")
+            }
+        }
         // Data-only migration: collapse cards immediately, including unrefreshed v7 rows.
         // Keep every stream, mark, collection and episode ID for the detail version picker.
         val MIGRATION_10_11 = object : Migration(10, 11) {

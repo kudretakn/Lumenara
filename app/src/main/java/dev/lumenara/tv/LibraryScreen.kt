@@ -120,7 +120,7 @@ internal fun LibraryScreen(model: LibraryModel = viewModel(), onFirstDraw: () ->
         val target = watchNextRequest ?: return@LaunchedEffect
         playJob?.cancel()
         try {
-            val row = model.repo.library.item(target.itemId)
+            val row = model.repo.library.item(model.repo.library.redirectedId(target.itemId) ?: target.itemId)
             val hidden = model.repo.hidden.first()
             if (row != null && row.kind in listOf("MOVIE", "EPISODE") && row.category !in hidden) {
                 val chosen = model.repo.selectedVersion(row)

@@ -16,11 +16,12 @@ import org.json.JSONObject
 
 internal data class BackupSetting(val name: String, val type: String, val value: String)
 internal fun isBackupSetting(name: String) = !name.startsWith("secret_refresh_") &&
-    !name.startsWith("series_expanded_") && !name.startsWith("update_")
+    !name.startsWith("series_expanded_") && !name.startsWith("catalog_identity_") && !name.startsWith("update_")
 internal data class BackupSource(val id: String, val name: String, val spec: SourceSpec)
 internal data class BackupFeed(val id: String, val source: String, val address: String)
 // Only identities needed for user state are exported, never catalog metadata.
-internal data class BackupItem(val id: String, val source: String, val address: String, val parentAddress: String)
+internal data class BackupItem(val id: String, val source: String, val address: String, val parentAddress: String,
+    val providerId: String = "", val tvgName: String = "", val tvgGroup: String = "")
 internal data class BackupData(
     val settings: List<BackupSetting>,
     val sources: List<BackupSource>,
@@ -29,6 +30,7 @@ internal data class BackupData(
     val marks: List<Mark>,
     val mappings: List<Mapping>,
     val tmdbToken: String = "",
+    val redirects: List<ItemRedirect> = emptyList(),
 )
 
 class BackupPreview internal constructor(internal val data: BackupData) {
@@ -113,11 +115,13 @@ internal object BackupCodec {
         .put("settings", rows(data.settings.filter { isBackupSetting(it.name) }) { JSONObject().put("name", it.name).put("type", it.type).put("value", it.value) })
         .put("sources", rows(data.sources) { JSONObject().put("id", it.id).put("name", it.name).put("spec", JSONObject(it.spec.encode())) })
         .put("feeds", rows(data.feeds) { JSONObject().put("id", it.id).put("source", it.source).put("address", it.address) })
-        .put("items", rows(data.items) { JSONObject().put("id", it.id).put("source", it.source).put("address", it.address).put("parent", it.parentAddress) })
+        .put("items", rows(data.items) { JSONObject().put("id", it.id).put("source", it.source).put("address", it.address).put("parent", it.parentAddress)
+            .put("providerId", it.providerId).put("tvgName", it.tvgName).put("tvgGroup", it.tvgGroup) })
         .put("marks", rows(data.marks) { JSONObject().put("id", it.id).put("favorite", it.favorite).put("listed", it.listed)
             .put("position", it.position).put("duration", it.duration).put("updated", it.updated) })
         .put("mappings", rows(data.mappings) { JSONObject().put("item", it.item).put("feed", it.feed).put("channel", it.channel) })
         .put("tmdb", data.tmdbToken)
+        .put("redirects", rows(data.redirects) { JSONObject().put("oldId", it.oldId).put("newId", it.newId) })
 
     private fun <T> read(json: JSONObject, name: String, decode: (JSONObject) -> T): List<T> {
         val rows = json.getJSONArray(name)
@@ -140,7 +144,10 @@ internal object BackupCodec {
             require(spec.get("http") is Boolean)
         }
         table("feeds") { strings(it, "id", "source", "address") }
-        table("items") { strings(it, "id", "source", "address", "parent") }
+        table("items") {
+            strings(it, "id", "source", "address", "parent")
+            for (field in listOf("providerId", "tvgName", "tvgGroup")) if (it.has(field)) strings(it, field)
+        }
         table("marks") {
             strings(it, "id")
             require(it.get("favorite") is Boolean && it.get("listed") is Boolean)
@@ -148,15 +155,18 @@ internal object BackupCodec {
                 require(it.get(name) is Int || it.get(name) is Long)
         }
         table("mappings") { strings(it, "item", "feed", "channel") }
+        if (json.has("redirects")) table("redirects") { strings(it, "oldId", "newId") }
         val data = BackupData(
             read(json, "settings") { BackupSetting(it.getString("name"), it.getString("type"), it.getString("value")) },
             read(json, "sources") { BackupSource(it.getString("id"), it.getString("name"), SourceSpec.decode(it.getJSONObject("spec").toString())) },
             read(json, "feeds") { BackupFeed(it.getString("id"), it.getString("source"), it.getString("address")) },
-            read(json, "items") { BackupItem(it.getString("id"), it.getString("source"), it.getString("address"), it.getString("parent")) },
+            read(json, "items") { BackupItem(it.getString("id"), it.getString("source"), it.getString("address"), it.getString("parent"),
+                it.optString("providerId"), it.optString("tvgName"), it.optString("tvgGroup")) },
             read(json, "marks") { Mark(it.getString("id"), it.getBoolean("favorite"), it.getBoolean("listed"),
                 it.getLong("position"), it.getLong("duration"), it.getLong("updated")) },
             read(json, "mappings") { Mapping(it.getString("item"), it.getString("feed"), it.getString("channel")) },
             json.getString("tmdb"),
+            if (json.has("redirects")) read(json, "redirects") { ItemRedirect(it.getString("oldId"), it.getString("newId")) } else emptyList(),
         )
         validate(data)
         return data.copy(settings = data.settings.filter { isBackupSetting(it.name) })
@@ -164,7 +174,7 @@ internal object BackupCodec {
 
     internal fun validate(data: BackupData) {
         require(listOf(data.settings.size, data.sources.size, data.feeds.size, data.items.size,
-            data.marks.size, data.mappings.size).all { it <= 100_000 })
+            data.marks.size, data.mappings.size, data.redirects.size).all { it <= 100_000 })
         fun unique(ids: List<String>) = ids.all { it.isNotBlank() } && ids.distinct().size == ids.size
         require(unique(data.sources.map { it.id }) && unique(data.feeds.map { it.id }) && unique(data.items.map { it.id }))
         require(unique(data.settings.map { it.name }) && unique(data.marks.map { it.id }) && unique(data.mappings.map { it.item }))
@@ -175,6 +185,7 @@ internal object BackupCodec {
         require(data.items.all { it.address.isNotBlank() && it.source in sourceIds && it.id == contentKey(it.source, it.address) })
         require(data.feeds.all { it.address.isNotBlank() && it.source in sourceIds && it.id == contentKey(it.source, it.address) })
         require(data.marks.all { it.id in items && it.position >= 0 && it.duration >= 0 && it.updated >= 0 })
+        require(unique(data.redirects.map { it.oldId }) && data.redirects.all { it.newId in items && it.oldId != it.newId })
         require(data.mappings.all { it.channel.isNotBlank() && items[it.item]?.source == feeds[it.feed]?.source && it.item in items && it.feed in feeds })
         data.settings.forEach { validateSetting(it) }
         val recent = data.settings.firstOrNull { it.name == "recent_live" }?.value.orEmpty()
@@ -217,10 +228,13 @@ internal class BackupStore(
         val mappings = db.guide().backupMappings()
         val settings = preferences.backupSettings()
         val recent = settings.firstOrNull { it.name == "recent_live" }?.value?.lines().orEmpty()
-        val ids = (marks.map { it.id } + mappings.map { it.item } + recent).distinct()
+        val redirects = library.redirects()
+        val selected = settings.filter { it.name.startsWith("version_") && it.value.startsWith("id:") }.map { it.value.removePrefix("id:") }
+        val ids = (marks.map { it.id } + mappings.map { it.item } + recent + selected + redirects.map { it.newId }).distinct()
         val items = ids.mapNotNull { library.item(it) }.map { item ->
             BackupItem(item.id, item.source, vault.decrypt(item.encryptedUrl),
-                library.item(item.parent)?.let { vault.decrypt(it.encryptedUrl) }.orEmpty())
+                library.item(item.parent)?.let { vault.decrypt(it.encryptedUrl) }.orEmpty(),
+                item.providerId, item.tvgName, item.tvgGroup)
         }
         val validItems = items.map { it.id }.toSet()
         val validSettings = settings.map {
@@ -230,7 +244,7 @@ internal class BackupStore(
             BackupSource(it.id, it.name, SourceSpec.decode(vault.decrypt(it.endpoint)))
         }, sources.flatMap { db.guide().feeds(it.id) }.map {
             BackupFeed(it.id, it.source, vault.decrypt(it.encryptedAddress))
-        }, items, marks, mappings, metadata.backupToken())
+        }, items, marks, mappings, metadata.backupToken(), redirects)
     }
 
     suspend fun restore(data: BackupData): BackupRestoreResult {
@@ -265,7 +279,12 @@ internal class BackupStore(
             for (id in parents) library.item(id)?.let { expand(it) }
             for (saved in data.items) {
                 val id = contentKey(sourceIds.getValue(saved.source), saved.address)
-                if (library.exists(id)) itemIds[saved.id] = id else skipped++
+                val restored = library.item(id)
+                if (restored != null) {
+                    itemIds[saved.id] = id
+                    library.save(listOf(restored.copy(providerId = restored.providerId.ifEmpty { saved.providerId },
+                        tvgName = restored.tvgName.ifEmpty { saved.tvgName }, tvgGroup = restored.tvgGroup.ifEmpty { saved.tvgGroup })))
+                } else skipped++
             }
             for (saved in data.feeds) {
                 val source = sourceIds.getValue(saved.source)
@@ -274,6 +293,12 @@ internal class BackupStore(
                 db.guide().put(Feed(id, source, vault.encrypt(saved.address)))
             }
             for (saved in data.marks) itemIds[saved.id]?.let { library.save(saved.copy(id = it)) }
+            for (saved in data.redirects) itemIds[saved.newId]?.let { target ->
+                if (!library.exists(saved.oldId)) {
+                    library.redirectTarget(saved.oldId, target)
+                    library.redirect(ItemRedirect(saved.oldId, target))
+                }
+            }
             for (saved in data.mappings) itemIds[saved.item]?.let {
                 db.guide().map(saved.copy(item = it, feed = feedIds.getValue(saved.feed)))
             }
