@@ -265,7 +265,7 @@ interface LibraryDao {
             if (source.isNotEmpty()) rows else rows.groupBy { it.source }.toSortedMap().values.flatten()
         }
 
-    @Query("""SELECT * FROM items WHERE id IN (:ids) AND kind='LIVE'
+    @Query("""SELECT * FROM items INDEXED BY sqlite_autoindex_items_1 WHERE id IN (:ids) AND kind='LIVE'
         AND category NOT IN (:hidden) AND (:source='' OR source=:source)""")
     fun liveByIds(source: String, ids: List<String>, hidden: List<String> = emptyList()): Flow<List<Item>>
 
@@ -380,38 +380,41 @@ interface LibraryDao {
         SELECT i.id,i.parent,i.kind,i.category FROM marks m CROSS JOIN items i ON i.id=m.id WHERE m.position>0
         ), parents AS (SELECT DISTINCT parent FROM watched WHERE kind='EPISODE'), names AS (
         SELECT category FROM watched
-        UNION SELECT i.category FROM parents p JOIN items i ON i.id=p.parent
-        UNION SELECT ep.category FROM parents p CROSS JOIN items ep ON ep.parent=p.parent
+        UNION SELECT i.category FROM parents p CROSS JOIN items i ON i.id=p.parent
+        UNION SELECT ep.category FROM parents p CROSS JOIN items ep INDEXED BY index_items_parent ON ep.parent=p.parent
         ) SELECT category FROM names n WHERE EXISTS(
             SELECT 1 FROM items i INDEXED BY index_items_kind_category_title
             WHERE i.kind IN ('LIVE','MOVIE','SERIES') AND i.category=n.category)""")
     fun continueWatchingCategories(): Flow<List<String>>
 
-    // Aggregate only marked rows, then choose a representative among eligible history cards.
-    // Do not expand history to every version: an unplayed/completed sibling must not replace
-    // the version the user can actually resume. parent resolves the remaining-episode probe.
+    // HubHistoryQuery's bounded ID selection, with legacy cards isolated until their
+    // resumable backfill batch commits. Observing the state also refreshes phase changes.
     @Query("""WITH history AS (
         SELECT CASE WHEN ep.kind='EPISODE' THEN ep.parent ELSE ep.id END AS cardId, MAX(m.updated) AS activity
         FROM marks m CROSS JOIN items ep ON ep.id=m.id WHERE ep.category NOT IN (:hidden) AND m.position>0 AND
             (ep.kind='EPISODE' OR ep.kind='MOVIE' AND (m.duration<=0 OR m.position<m.duration*0.95))
         GROUP BY cardId
         ), candidates AS (
-        SELECT i.*,history.activity,
-            CASE WHEN COALESCE(i.versionKey,'')='' OR EXISTS(SELECT 1 FROM version_backfill_state b WHERE b.id=1
-                AND (b.phase IN ('normalize','resolve') OR (b.phase='apply' AND i.id>b.cursor)))
-                THEN i.id ELSE i.versionKey END AS cardKey
-        FROM history JOIN items i ON i.id=history.cardId
+        SELECT i.id,CASE WHEN COALESCE(i.versionKey,'')='' OR EXISTS(
+            SELECT 1 FROM version_backfill_state b WHERE b.id=1
+            AND (b.phase IN ('normalize','resolve') OR (b.phase='apply' AND i.id>b.cursor)))
+            THEN i.id ELSE i.versionKey END AS cardKey,
+            i.versionRank,i.isRepresentative,i.versionKey!='' AS hasVersion,MAX(h.activity) AS activity
+        FROM history h CROSS JOIN items i ON i.id=h.cardId
         WHERE i.category NOT IN (:hidden) AND (:source='' OR i.source=:source) AND i.kind IN ('MOVIE','SERIES')
-        AND (i.kind!='SERIES' OR EXISTS(SELECT 1 FROM items ep LEFT JOIN marks m ON m.id=ep.id
-            WHERE ep.category NOT IN (:hidden) AND ep.parent=i.id AND (m.id IS NULL OR m.duration<=0 OR m.position<m.duration*0.90)))
+        AND (i.kind!='SERIES' OR EXISTS(SELECT 1 FROM items ep INDEXED BY index_items_parent
+            LEFT JOIN marks m ON m.id=ep.id WHERE ep.parent=i.id AND ep.category NOT IN (:hidden)
+            AND (m.id IS NULL OR m.duration<=0 OR m.position<m.duration*0.90)))
+        GROUP BY i.id
         ), activity AS (
-        SELECT cardKey, MAX(activity) AS lastActivity
+        SELECT cardKey,MAX(activity) AS lastActivity,MIN(versionRank) AS bestRank
         FROM candidates GROUP BY cardKey
-        ) SELECT items.* FROM candidates i JOIN items ON items.id=i.id JOIN activity a
-        ON a.cardKey=i.cardKey
-        WHERE i.cardKey=i.id OR i.isRepresentative=1 OR (i.versionKey!='' AND NOT EXISTS(
-            SELECT 1 FROM candidates v WHERE v.cardKey=i.cardKey AND v.versionRank<i.versionRank))
-        ORDER BY a.lastActivity DESC,i.id LIMIT 24""")
+        ), selected AS (
+        SELECT c.id,a.lastActivity FROM activity a CROSS JOIN candidates c ON c.cardKey=a.cardKey
+        WHERE c.cardKey=c.id OR c.isRepresentative=1 OR (c.hasVersion AND c.versionRank=a.bestRank)
+        ORDER BY a.lastActivity DESC,c.id LIMIT 24
+        ) SELECT items.* FROM selected CROSS JOIN items ON items.id=selected.id
+        ORDER BY selected.lastActivity DESC,items.id""")
     fun continueWatchingRows(source: String, hidden: List<String> = emptyList()): Flow<List<Item>>
 
     fun continueWatching(source: String, hidden: List<String> = emptyList()): Flow<List<Item>> =

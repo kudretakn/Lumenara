@@ -239,19 +239,24 @@ class Repository private constructor(private val context: Context) {
     suspend fun episodeSnapshot(id: String) = library.episodeSnapshot(id, hidden.first())
     // Visibility for history needs only marked cards, their parents and those parents' episodes.
     // Do not make the Hub wait for names/counts over the complete provider catalog.
-    private val historyHidden = combine(preferences.showAdult, library.continueWatchingCategories()) { show, names ->
+    private val historyHidden = combine(preferences.showAdult, library.continueWatchingCategories()
+        .traceFirstResult("startup_hub_history_visibility_ready")) { show, names ->
         if (show) emptyList() else names.filter(::isAdultCategory)
     }.distinctUntilChanged()
     fun continueWatching(source: String) =
-        historyHidden.flatMapLatest { library.continueWatching(source, it) }
-    fun recentLive(source: String) = preferences.recentLive.flatMapLatest { ids ->
+        historyHidden.flatMapLatest { library.continueWatching(source, it)
+            .traceFirstResult("startup_hub_resume_query_ready") }.flowOn(Dispatchers.Default)
+    fun recentLive(source: String) = preferences.recentLive.flatMapLatest { saved ->
+        val ids = saved.distinct().take(20)
+        if (ids.isEmpty()) return@flatMapLatest flowOf(emptyList<Item>())
         // Twenty primary-key probes need no full-catalog category-name query. Apply the same
         // visibility rule to these bounded rows, preserving DataStore's recency order.
-        combine(library.liveByIds(source, ids), preferences.showAdult) { rows, showAdult ->
+        combine(library.liveByIds(source, ids).traceFirstResult("startup_hub_recent_query_ready"),
+            preferences.showAdult) { rows, showAdult ->
             val byId = rows.associateBy { it.id }
             visibleRecentIds(ids, rows.associate { it.id to it.category }, showAdult).mapNotNull { byId[it] }
         }
-    }
+    }.flowOn(Dispatchers.Default)
     private val guideStore by lazy { GuideStore(guide, liveScope, hidden, traceWork = StartupPerf::duration) }
     fun cardProgrammes(source: String, itemId: String): Flow<List<Slot>> = guideStore.cardProgrammes(source, itemId)
     fun nowAiring(source: String, now: Long, query: String = ""): Flow<List<AiringProgram>> = nowAiring(source, flowOf(now), query)

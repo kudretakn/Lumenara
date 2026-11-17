@@ -1,6 +1,7 @@
 package dev.lumenara.tv
 
 import androidx.room.Room
+import androidx.sqlite.db.SimpleSQLiteQuery
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.lumenara.catalog.isAdultCategory
 import dev.lumenara.data.*
@@ -8,11 +9,80 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
+import java.util.concurrent.Executor
+import java.util.concurrent.atomic.AtomicReference
 
 class HubHistoryQueryTest {
     private fun item(id: String, kind: String = "MOVIE", category: String = "Film",
                      parent: String = "", source: String = "a") =
         Item(id, source, id, category, kind, "", "", id, 0, "", parent = parent)
+
+    @Test fun historyQueriesOnlyProbeItemsByPrimaryKeyOrParent() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val captured = AtomicReference<Pair<String, List<Any?>>>()
+        val db = Room.inMemoryDatabaseBuilder(context, LibraryDb::class.java)
+            .setQueryCallback({ sql, args ->
+                if (sql.trimStart().startsWith("WITH history AS") ||
+                    sql.trimStart().startsWith("WITH watched AS") ||
+                    sql.contains("SELECT * FROM items INDEXED BY sqlite_autoindex_items_1"))
+                    captured.set(sql to args.toList())
+            }, Executor { it.run() }).build()
+        try {
+            val dao = db.library()
+            dao.save(Source("a", "A", "", false, 0, 0))
+            dao.save((0 until 3000).map { item("unwatched-$it") } + listOf(
+                item("live", "LIVE"), item("series", "SERIES"),
+                item("ep", "EPISODE", parent = "series"), item("movie"),
+            ))
+            val now = System.currentTimeMillis()
+            dao.save(Mark("ep", position = 10, duration = 100, updated = now))
+            dao.save(Mark("movie", position = 10, duration = 100, updated = now - 1))
+            fun plan(): String {
+                val (sql, args) = captured.get()
+                val result = db.openHelper.readableDatabase.query(
+                    SimpleSQLiteQuery("EXPLAIN QUERY PLAN $sql", args.toTypedArray())
+                ).use { cursor ->
+                    buildList { while (cursor.moveToNext()) add(cursor.getString(3)) }.joinToString("\n")
+                }
+                // Scans of marks and the narrow CTEs are fine. No scan of a persisted Item
+                // table/alias, even on Android 9's pre-materialization-hint SQLite planner.
+                assertFalse(result, Regex("\\bSCAN (?:TABLE )?(?:items|ep|i)(?:\\s|$)")
+                    .containsMatchIn(result))
+                assertTrue(result, result.contains("sqlite_autoindex_items_1"))
+                return result
+            }
+            for (source in listOf("", "a")) for (hidden in listOf(emptyList(), listOf("XXX"))) {
+                assertEquals(listOf("live"), dao.liveByIds(source, listOf("live", "missing"), hidden)
+                    .first().map { it.id })
+                plan()
+                assertEquals(listOf("series", "movie"), dao.continueWatching(source, hidden).first().map { it.id })
+                assertTrue(plan().contains("index_items_parent"))
+            }
+            dao.continueWatchingCategories().first()
+            assertTrue(plan().contains("index_items_parent"))
+        } finally { db.close() }
+    }
+
+    @Test fun historyKeepsBestResumableVersionAndOrdersByLatestSiblingActivity() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val db = Room.inMemoryDatabaseBuilder(context, LibraryDb::class.java).build()
+        try {
+            val dao = db.library()
+            dao.save(Source("a", "A", "", false, 0, 0))
+            dao.save(listOf(
+                item("best").copy(versionKey = "group", versionRank = 0),
+                item("alternate").copy(versionKey = "group", versionRank = 1, isRepresentative = false),
+                item("other"),
+            ))
+            val now = System.currentTimeMillis()
+            dao.save(Mark("best", position = 10, duration = 100, updated = now - 2))
+            dao.save(Mark("alternate", position = 20, duration = 100, updated = now))
+            dao.save(Mark("other", position = 10, duration = 100, updated = now - 1))
+            assertEquals(listOf("best", "other"), dao.continueWatching("a").first().map { it.id })
+            dao.save(Mark("best", position = 100, duration = 100, updated = now + 1))
+            assertEquals(listOf("alternate", "other"), dao.continueWatching("a").first().map { it.id })
+        } finally { db.close() }
+    }
 
     @Test fun historyVisibilityMatchesCatalogVisibilityWithoutReadingUnwatchedCategories() = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext

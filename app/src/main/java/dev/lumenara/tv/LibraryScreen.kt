@@ -26,17 +26,28 @@ import kotlinx.coroutines.flow.first
 internal fun LibraryScreen(model: LibraryModel = viewModel(), onFirstDraw: () -> Unit = {}) {
     val sources by model.sources.collectAsStateWithLifecycle()
     val startInSetup by model.startInSetup.collectAsStateWithLifecycle()
-    if (sources == null || startInSetup == null) {
-        MigrationLoadingScreen()
+    val launchPending = sources == null || startInSetup == null
+    var slowLaunch by remember(model) { mutableStateOf(false) }
+    LaunchedEffect(model, launchPending) {
+        if (launchPending) {
+            kotlinx.coroutines.delay(500)
+            slowLaunch = true
+        } else slowLaunch = false
+    }
+    // Submit a cheap skeleton immediately; explain a slow migration without touching
+    // the lazy repository or composing the navigation graph before its IO snapshot.
+    if (launchPending) {
+        if (slowLaunch) MigrationLoadingScreen()
+        else Column(Modifier.fillMaxSize().background(LumenColors.bg)
+            .padding(horizontal = Spacing.screenHorizontal, vertical = Spacing.screenVertical),
+            verticalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
+            LumenaraLogo(showName = true)
+            LoadingCard(Modifier.fillMaxWidth().height(100.dp))
+        }
         return
     }
     val available = checkNotNull(sources)
     val initialSetup = checkNotNull(startInSetup)
-    LaunchedEffect(model) {
-        // Frame callbacks run before drawing. The second callback follows a submitted frame.
-        withFrameNanos { }; withFrameNanos { }
-        Perf.since("startup_screen", "startup_screen_first_draw")
-    }
     LaunchedEffect(model) {
         model.awaitFirstDraw()
         onFirstDraw()
