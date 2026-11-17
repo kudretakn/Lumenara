@@ -6,6 +6,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.platform.app.InstrumentationRegistry
@@ -22,9 +23,17 @@ import org.junit.Test
 class DenseGridTest {
     @get:Rule val screen = createAndroidComposeRule<MainActivity>()
 
+    private fun assertTwoLineName(tag: String, name: String) {
+        val layouts = mutableListOf<TextLayoutResult>()
+        screen.onNode(hasText(name) and hasAnyAncestor(hasTestTag(tag)), useUnmergedTree = true)
+            .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        assertEquals(2, layouts.single().lineCount)
+        assertTrue(layouts.single().isLineEllipsized(1))
+    }
+
     private fun assertSixRows(gridTag: String, tags: List<String>) {
         screen.waitUntil(10_000) {
-            screen.onAllNodesWithTag(tags[35]).fetchSemanticsNodes().isNotEmpty()
+            screen.onAllNodesWithTag(tags[23]).fetchSemanticsNodes().isNotEmpty()
         }
         // Measure resting cards; the focused card deliberately scales to 1.06.
         screen.onAllNodes(isFocusable() and hasClickAction() and
@@ -33,24 +42,27 @@ class DenseGridTest {
         screen.waitForIdle()
         val viewport = screen.onNodeWithTag(gridTag).fetchSemanticsNode().boundsInRoot
         val density = screen.activity.resources.displayMetrics.density
-        val cards = tags.take(36).map {
+        val cards = tags.take(24).map {
             screen.onNodeWithTag(it).assertIsDisplayed().fetchSemanticsNode().boundsInRoot
         }
         cards.forEach {
             assertEquals(60f, it.height / density, 1f)
+            assertEquals((viewport.width / density - 30f) / 4f, it.width / density, 1f)
             assertTrue(it.top >= viewport.top && it.bottom <= viewport.bottom)
         }
-        cards.chunked(6).forEach { row ->
+        cards.chunked(4).forEach { row ->
             row.forEach { assertEquals(row.first().top, it.top, density) }
             row.zipWithNext().forEach { (left, right) ->
                 assertEquals(10f, (right.left - left.right) / density, 1f)
             }
         }
-        assertEquals(10f, (cards[6].top - cards[0].bottom) / density, 1f)
+        assertEquals(10f, (cards[4].top - cards[0].bottom) / density, 1f)
     }
 
-    @Test fun categoriesFitSixColumnsAndSixRowsInsideSafeArea() {
-        val entries = List(42) { CategoryEntry("$it", "Kategori $it", it + 1) }
+    @Test fun categoriesFitFourColumnsAndSixRowsInsideSafeArea() {
+        val entries = List(42) {
+            CategoryEntry("$it", if (it == 0) "TR ➾ Komedi - Romantik - Aile ve Çocuk Kanalları" else "Kategori $it", it + 1)
+        }
         screen.runOnUiThread {
             screen.activity.setContent {
                 LumenaraTheme {
@@ -62,13 +74,17 @@ class DenseGridTest {
             }
         }
         assertSixRows("category-grid", entries.map { "category-${it.name}" })
+        assertTwoLineName("category-${entries.first().name}", entries.first().name)
+        screen.onNode(hasText("1") and hasAnyAncestor(hasTestTag("category-${entries.first().name}")),
+            useUnmergedTree = true).assertIsDisplayed()
     }
 
-    @Test fun channelsFitSixColumnsAndSixRowsInsideSafeArea() {
+    @Test fun channelsFitFourColumnsAndSixRowsInsideSafeArea() {
         val repo = Repository.get(InstrumentationRegistry.getInstrumentation().targetContext)
         val source = "dense-grid-${System.nanoTime()}"
         val rows = List(42) { index ->
-            val title = "Kanal %03d".format(java.util.Locale.ROOT, index)
+            val title = if (index == 0) "AF: Çok Uzun Kanal Adı Spor Sinema ve Belgesel Yayınları"
+                else "Kanal %03d".format(java.util.Locale.ROOT, index)
             Item("$source-$index", source, title, "Test", "LIVE", "", "", title.lowercase(), 1, "")
         }
         try {
@@ -88,6 +104,12 @@ class DenseGridTest {
                 }
             }
             assertSixRows("live-channels", rows.map { "live-channel-${it.id}" })
+            val firstTag = "live-channel-${rows.first().id}"
+            assertTwoLineName(firstTag, rows.first().title)
+            screen.onNode(hasText("1") and hasAnyAncestor(hasTestTag(firstTag)),
+                useUnmergedTree = true).assertIsDisplayed()
+            screen.onNode(hasText("1 · ${rows.first().title}") and hasAnyAncestor(hasTestTag(firstTag)),
+                useUnmergedTree = true).assertDoesNotExist()
         } finally {
             screen.runOnUiThread { screen.activity.setContent {} }
             runBlocking { repo.remove(source) }

@@ -21,7 +21,7 @@ import dev.lumenara.catalog.searchable
 import dev.lumenara.data.LiveCategoryCount
 import dev.lumenara.design.*
 
-private const val CATEGORY_COLUMNS = 6
+private const val CATEGORY_COLUMNS = 4
 
 internal data class CategoryEntry(val id: String, val name: String, val count: Int, val countKnown: Boolean = true)
 
@@ -130,15 +130,12 @@ internal fun CategoryGrid(title: String, entries: List<CategoryEntry>?, choose: 
                     .semantics { contentDescription = if (entry.countKnown) "${entry.name} · ${entry.count}" else entry.name }
                     .then(if (index == target) Modifier.focusRequester(focus) else Modifier)
                     .onFocusChanged { if (it.isFocused) last = entry.id }) {
-                    Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = Spacing.unit),
-                        verticalArrangement = Arrangement.Center,
-                        horizontalAlignment = Alignment.Start) {
-                        Row(verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {
-                            categoryIcon(entry.id)?.let { LumenIcon(it, null, size = 20.dp) }
-                            Text(entry.name, style = LumenType.cardTitle, color = LumenColors.textPrimary,
-                                maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
+                    Row(Modifier.fillMaxSize().padding(horizontal = Spacing.unit, vertical = Spacing.iconText),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+                        categoryIcon(entry.id)?.let { LumenIcon(it, null, size = 20.dp) }
+                        Text(entry.name, Modifier.weight(1f), style = LumenType.cardTitle,
+                            color = LumenColors.textPrimary, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         if (entry.countKnown) Text(entry.count.toString(), style = LumenType.meta)
                     }
                 }
