@@ -31,6 +31,18 @@ class TmdbMatcherTest {
             matcher.details("fake-token", "item", type, title, year, id)
     }
 
+    @Test fun persistingAResolvedIdAndYearReusesThePositiveCache() {
+        val f = Fixture()
+        f.fake.answer = { path, _ -> if (path == "movie/1") row(1, "Film") else results(row(1, "Film")) }
+        assertEquals(1L, f.lookup("Film")?.getLong("id"))
+        val calls = f.fake.calls.size
+        assertEquals(1L, f.lookup("Film", year.toString(), id = "1")?.getLong("id"))
+        assertEquals(calls, f.fake.calls.size)
+        // Media kinds still have separate identities even when numeric IDs overlap.
+        f.lookup("Film", year.toString(), type = "tv", id = "1")
+        assertTrue(f.fake.calls.size > calls)
+    }
+
     @Test fun turkishAlternativeTitleSurvivesProviderNoise() {
         val f = Fixture()
         f.fake.answer = { path, _ -> when (path) {

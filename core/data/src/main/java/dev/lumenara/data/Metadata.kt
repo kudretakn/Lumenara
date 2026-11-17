@@ -36,6 +36,13 @@ internal class Metadata(private val context: Context, private val vault: Vault) 
     private var lastRequestAt = 0L
     private var retryAt = 0L
     private fun cacheFile(key: String) = File(context.cacheDir, "tmdb/${key.replace(':', '_')}.json")
+
+    /** Cache-only lookup for visible/affected rows; never starts a network/catalog scan. */
+    internal fun cachedMatch(item: Item): TmdbMatch? = runCatching {
+        val file = cacheFile(item.id)
+        if (!file.isFile) return@runCatching null
+        cachedTmdbMatch(item, JSONObject(file.readText()))
+    }.getOrNull()
     private val matcher = TmdbMatcher(TmdbTransport(::fetch), read = { key ->
         val file = cacheFile(key)
         if (file.isFile) runCatching { TmdbCached(JSONObject(file.readText()), file.lastModified()) }

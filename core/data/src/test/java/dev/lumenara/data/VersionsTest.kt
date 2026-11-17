@@ -4,6 +4,36 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class VersionsTest {
+    @Test fun sameTmdbIdOverridesProviderTitlesAndMissingOrConflictingYears() {
+        val assigned = listOf(item("first", "TR: Avatar (2009)", year = "2009", tmdb = "00019995"),
+            item("second", "Completely different provider title [4K", year = "", tmdb = "19995"),
+            item("third", "Avatar HD", year = "2010", tmdb = "19995"),
+            item("sequel", "Avatar: Suyun Yolu", year = "2022", tmdb = "76600"),
+            item("source", "Avatar", tmdb = "19995", source = "other"),
+            item("series", "Avatar", tmdb = "19995", kind = "SERIES")).versionAssignments()
+        val avatar = assigned.filter { it.id in listOf("first", "second", "third") }
+        assertEquals(listOf("provider|MOVIE|tmdb:19995"), avatar.map { it.versionKey }.distinct())
+        assertEquals(1, avatar.count { it.isRepresentative })
+        assertEquals(4, assigned.map { it.versionKey }.distinct().size)
+    }
+
+    @Test fun undatedRepresentativeInheritsTheUniqueYearInBothDisplayPaths() {
+        val rows = listOf(item("a", "Avatar 4K", year = ""), item("b", "Avatar (2009)", year = ""))
+        assertEquals(1, rows.versionAssignments().map { it.versionKey }.distinct().size)
+        assertEquals("2009", rows.mergeVersions().single().year)
+        assertTrue(rows.versionAssignments().all { it.displayYear == "2009" })
+    }
+
+    @Test fun numericSequelTitlesKeepTheirNumberAndUseTheReleaseAnnotationAsYear() {
+        val assigned = listOf(item("dated", "Bıçak Sırtı 2049 (2017)", year = ""),
+            item("undated", "Bıçak Sırtı 2049 [4K", year = ""),
+            item("original", "Bıçak Sırtı (1982)", year = "")).versionAssignments()
+        val sequel = assigned.filter { it.id != "original" }
+        assertEquals(1, sequel.map { it.versionKey }.distinct().size)
+        assertTrue(sequel.all { it.displayTitle == "Bıçak Sırtı 2049" && it.displayYear == "2017" })
+        assertNotEquals(sequel.first().versionKey, assigned.single { it.id == "original" }.versionKey)
+    }
+
     @Test fun avatarRenditionsWithAnOptionalYearShareOneCardAndKeepTheSequelSeparate() {
         val rows = listOf(item("tr", "TR: Avatar (2009)", year = ""),
             item("4k", "Avatar 4K", year = ""), item("sub", "Avatar [Altyazılı]", year = ""),

@@ -334,6 +334,19 @@ interface LibraryDao {
     @androidx.room.Update(entity = Item::class)
     suspend fun assignVersions(rows: List<VersionAssignment>)
 
+    @androidx.room.Update(entity = Item::class)
+    suspend fun assignTmdb(rows: List<TmdbAssignment>)
+
+    @Query("SELECT * FROM items WHERE id IN (:ids) AND kind IN ('MOVIE','SERIES')")
+    suspend fun versionSeeds(ids: List<String>): List<Item>
+
+    // CatalogStage.read has a synchronous callback, already inside the IO import transaction.
+    @Query("SELECT * FROM items WHERE id IN (:ids) AND kind IN ('MOVIE','SERIES')")
+    fun importedVersionSeeds(ids: List<String>): List<Item>
+
+    @RawQuery
+    suspend fun relatedVersions(query: SupportSQLiteQuery): List<Item>
+
     @Query("SELECT EXISTS(SELECT 1 FROM items WHERE id=:id)")
     suspend fun exists(id: String): Boolean
 
