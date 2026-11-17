@@ -1,5 +1,11 @@
 # Lumenara sürüm kaydı
 
+## 0.5.5 · 18 Kasım 2026
+
+- Altyazı gecikmesi: oynatıcı seçeneklerinden 100 ms ya da 1 sn adımlarla ±10 sn; anında uygulanır, film/bölüm ve sürüm başına saklanır, yedeğe girer.
+- Sağlayıcı adresi ya da şifresi değişince izleme geçmişi, kaldığın yer, Listem, sürüm/ses/altyazı tercihleri ve Android TV 'İzlemeye devam et' yeni içeriklere taşınır (yalnız birebir eşleşenler). Veritabanı şeması 12.
+- TMDB eşleştirmesi Türkçe/yerel başlıklarda alternatif başlık ve çevirilerle aranıyor; yıl ±1 ve tür denetleniyor, belirsiz sonuç bağlanmıyor.
+
 ## 0.5.4 · 18 Kasım 2026
 
 - "Devamını göster" düğmeleri kalktı: Filmler, Diziler, Canlı TV, Ara ve oynatıcı listesi aşağı indikçe kendiliğinden yükleniyor; odak hiç başa zıplamıyor. Bellekte en fazla 5 sayfa tutuluyor, uzak sayfalar atılıp geri dönünce yeniden yükleniyor.
