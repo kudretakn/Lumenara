@@ -41,11 +41,16 @@ class LivePagesTest {
                 val model = ViewModelProvider(screen.activity)[LibraryModel::class.java]
                 screen.activity.setContent {
                     val state = rememberLivePages(model, source)
+                    // Observe publication here; SideEffect itself does not subscribe to
+                    // snapshot reads made inside its callback.
+                    val firstPageLoaded = state.firstPageLoaded
+                    val countLoaded = state.countLoaded
+                    val loadedRows = state.pages.values.sumOf { it.size }
                     SideEffect {
                         pages = state
-                        if (initialRows == null && state.firstPageLoaded) {
-                            initialRows = state.pages.values.sumOf { it.size }
-                            initialCountLoaded = state.countLoaded
+                        if (initialRows == null && firstPageLoaded) {
+                            initialRows = loadedRows
+                            initialCountLoaded = countLoaded
                         }
                     }
                 }

@@ -273,15 +273,18 @@ private fun LiveChannelGrid(model: LibraryModel, title: String, result: List<Ite
                         requestPending = false
                         restored()
                     }
-                    ChannelCard(model, item, now, { item?.let { Perf.mark("channel"); play(it, paged?.loaded() ?: rows) } }, {
-                        paged?.focused(index); focused(it)
-                    },
-                        Modifier.fillMaxWidth()
-                            .testTag("live-slot-$index")
-                            .onFocusChanged { if (it.isFocused) paged?.focused(index) }
-                            .then(if (index == target) Modifier.focusRequester(focus) else Modifier),
-                        number = numbers[item?.id], operations = { item?.let(open) }, compact = true,
-                        categoryName = title, programmes = listOfNotNull(current[item?.id]))
+                    // A slot and its card have separate semantics nodes: two test tags on
+                    // the card's modifier chain would hide the channel identity.
+                    Box(Modifier.fillMaxWidth().testTag("live-slot-$index")) {
+                        ChannelCard(model, item, now, { item?.let { Perf.mark("channel"); play(it, paged?.loaded() ?: rows) } }, {
+                            paged?.focused(index); focused(it)
+                        },
+                            Modifier.fillMaxWidth()
+                                .onFocusChanged { if (it.isFocused) paged?.focused(index) }
+                                .then(if (index == target) Modifier.focusRequester(focus) else Modifier),
+                            number = numbers[item?.id], operations = { item?.let(open) }, compact = true,
+                            categoryName = title, programmes = listOfNotNull(current[item?.id]))
+                    }
                 }
             }
         }

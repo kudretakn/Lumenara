@@ -559,14 +559,15 @@ internal fun Playback(
         }
         val optionsState = rememberLazyListState()
         LaunchedEffect(panel) { if (!panel) optionsState.scrollToItem(0) }
+        // Keep the channel window alive behind subtitle results. Recreating it on Back
+        // resets the list and disposes the subtitle row before focus can return to it.
+        val candidates = if (panel && live) rememberCatalogPages(model, item.source, "LIVE",
+            category = category, query = dev.lumenara.catalog.searchable(channelQuery),
+            pageSize = 80, columns = 1) else null
+        LaunchedEffect(candidates) {
+            if (candidates != null) optionsState.scrollToItem(0)
+        }
         if (panel && !subtitleSearch.open) {
-            val candidates = if (live) rememberCatalogPages(model, item.source, "LIVE",
-                category = category, query = dev.lumenara.catalog.searchable(channelQuery),
-                pageSize = 80, columns = 1) else null
-            LaunchedEffect(candidates) {
-                // Filter/visibility changes deliberately return the options to their first row.
-                optionsState.scrollToItem(0)
-            }
             LaunchedEffect(candidates, optionsState) {
                 if (candidates != null) snapshotFlow {
                     optionsState.layoutInfo.visibleItemsInfo.mapNotNull {
