@@ -6,6 +6,9 @@ import org.junit.Test
 
 class UpdatesTest {
  @Test fun acceptsValidRepositoryNames() { assertTrue(Updates.validRepo("owner/repo")) }
+ @Test fun rejectsDotAndTrailingDotRepositoryNames() {
+  for (repo in listOf("o/.", "o/..", "o/repo.")) assertFalse(Updates.validRepo(repo))
+ }
  @Test fun rejectsMissingRepositoryPart() { assertFalse(Updates.validRepo("owner")) }
  @Test fun rejectsTraversalRepository() { assertFalse(Updates.validRepo("owner/../repo")) }
  @Test fun rejectsSpacesInRepository() { assertFalse(Updates.validRepo("bad owner/repo")) }
