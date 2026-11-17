@@ -3,7 +3,7 @@ package dev.lumenara.tv
 import java.util.Locale
 
 private val channelCountryPrefix = Regex("^([A-Z]{2}):\\s*")
-private val categoryCountryPrefix = Regex("^([A-Z]{2})(?=$|[:\\s➾→|–-])")
+private val categoryCountryPrefix = Regex("^([A-Z]{2})(?=$|[:\\s➾\u2192|–-])")
 
 /** Only remove redundant country context supplied by the open category. */
 internal fun channelCardName(title: String, categoryName: String?): String {
