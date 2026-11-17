@@ -2,29 +2,36 @@ package dev.lumenara.data
 
 import dev.lumenara.catalog.*
 import java.io.File
-import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption.ATOMIC_MOVE
 import java.nio.file.StandardCopyOption.REPLACE_EXISTING
+import java.io.IOException
+
+internal fun subtitleCacheFileName(key: String, extension: String): String =
+    "${contentKey("sub", key).replace(Regex("[^A-Za-z0-9._-]"), "_")}.$extension"
 
 /** Only normalized UTF-8 subtitle files are persisted; API links and credentials are never cached. */
 class SubtitleCache(private val directory: File) {
-    @Synchronized fun find(key: String): File? = SubtitleType.entries.map { File(directory, "${contentKey("sub", key)}.${it.extension}") }
+    @Synchronized fun find(key: String): File? = SubtitleType.entries.map { File(directory, subtitleCacheFileName(key, it.extension)) }
         .firstOrNull { it.isFile }?.also { it.setLastModified(System.currentTimeMillis()) }
     @Synchronized fun save(key: String, bytes: ByteArray, name: String): File {
         val decoded = decodeSubtitle(bytes, name)
         directory.mkdirs()
-        val target = File(directory, "${contentKey("sub", key)}.${decoded.type.extension}")
+        val target = File(directory, subtitleCacheFileName(key, decoded.type.extension))
         val temporary = File.createTempFile("subtitle-", ".tmp", directory)
         try {
             temporary.writeText(decoded.text, Charsets.UTF_8)
             try {
                 Files.move(temporary.toPath(), target.toPath(), REPLACE_EXISTING, ATOMIC_MOVE)
-            } catch (_: AtomicMoveNotSupportedException) {
+            } catch (_: IOException) {
+                // Windows may report an existing destination as a generic
+                // FileSystemException for ATOMIC_MOVE (rather than
+                // AtomicMoveNotSupportedException). Retry with replacement;
+                // the temp file is still in the same directory/filesystem.
                 Files.move(temporary.toPath(), target.toPath(), REPLACE_EXISTING)
             }
             SubtitleType.entries.filter { it != decoded.type }.forEach {
-                File(directory, "${contentKey("sub", key)}.${it.extension}").delete()
+                File(directory, subtitleCacheFileName(key, it.extension)).delete()
             }
         } finally { temporary.delete() }
         var size = 0L
