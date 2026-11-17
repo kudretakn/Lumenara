@@ -117,7 +117,7 @@ internal fun rememberFullscreenState(item: Item): FullscreenState {
 internal fun BoxScope.FullscreenOverlay(
     model: LibraryModel, item: Item, group: List<Item>, state: FullscreenState,
     select: (Item, List<Item>) -> Unit, options: () -> Unit,
-    position: () -> Long, duration: () -> Long, next: (() -> Unit)?,
+    position: Long, duration: Long, next: (() -> Unit)?,
 ) {
     LaunchedEffect(state, item.kind == "LIVE") {
         if (item.kind == "LIVE" && !state.hintClaimed) {
@@ -171,8 +171,8 @@ internal fun BoxScope.FullscreenOverlay(
             if (item.kind == "LIVE") {
                 LiveBanner(model, item, state)
             } else {
-                val elapsed = position().coerceAtLeast(0)
-                val total = duration().coerceAtLeast(0)
+                val elapsed = position.coerceAtLeast(0)
+                val total = duration.coerceAtLeast(0)
                 Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                     .padding(horizontal = Spacing.screenHorizontal, vertical = Spacing.screenVertical),
                     verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {

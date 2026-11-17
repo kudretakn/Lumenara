@@ -474,6 +474,8 @@ internal fun Playback(
         changeGroup(rows); select(channel)
     } else null
     val retry = rememberLiveRetry(item.id)
+    val playerUi by rememberPlayerUiState(engine,
+        visible = panel || !fullscreen.guide && !sleepCountdown && fullscreen.bannerUntil > fullscreen.now)
     val subtitleSearch = rememberSubtitleSearchState(model, item, status = { subtitleNotice = it }) {
         subtitle = it
         panel = false
@@ -548,7 +550,7 @@ internal fun Playback(
         if (!panel && !sleepCountdown) FullscreenOverlay(model, item, group, fullscreen,
             { channel, rows -> changeGroup(rows); select(channel) },
             { panel = true },
-            { engine?.currentPosition ?: 0 }, { engine?.duration ?: 0 },
+            playerUi.position, playerUi.duration,
             if (item.kind == "EPISODE" && group.nextItem(item) != null)
                 ({ move(1) }) else null)
         numbers?.let { NumberEntry(it) }
@@ -622,7 +624,7 @@ internal fun Playback(
                         select(version)
                     }
                 } }
-                item { Tracks(engine, model, item) }
+                item { Tracks(engine, playerUi.tracks, model, item) }
                 item { PlaybackSection("ALTYAZI") }
                 item { SubtitleSearch(subtitleSearch) }
                 item {
@@ -636,7 +638,7 @@ internal fun Playback(
                 if (item.introStartMs >= 0)
                     item {
                         engine?.let { p ->
-                            IntroSkip(item, { p.currentPosition }, { p.duration }) {
+                            IntroSkip(item, playerUi.position, playerUi.duration) {
                                 p.seekTo(item.introEndMs)
                                 panel = false
                             }
@@ -728,7 +730,7 @@ internal fun Playback(
                         }
                     if (hint.isNotEmpty()) Text(hint)
                     val e = engine
-                    if (e != null && e.isCurrentMediaItemLive && e.isCurrentMediaItemSeekable) {
+                    if (e != null && playerUi.isLive && playerUi.isSeekable) {
                         PlayerOption(
                             onClick = { e.seekTo((e.currentPosition - 30_000).coerceAtLeast(0)) }
                         ) {
@@ -839,22 +841,11 @@ internal fun androidx.compose.foundation.layout.BoxScope.SleepTimerCard(
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
-private fun Tracks(player: ExoPlayer?, model: LibraryModel, item: Item) {
+private fun Tracks(player: ExoPlayer?, tracks: Tracks, model: LibraryModel, item: Item) {
     val scope = rememberCoroutineScope()
     var preferenceKey by remember(item.id) { mutableStateOf("") }
     LaunchedEffect(item.id) { preferenceKey = model.repo.preferenceKey(item) }
     if (player == null) return
-    var tracks by remember(player) { mutableStateOf(player.currentTracks) }
-    DisposableEffect(player) {
-        val listener =
-            object : Player.Listener {
-                override fun onTracksChanged(value: Tracks) {
-                    tracks = value
-                }
-            }
-        player.addListener(listener)
-        onDispose { player.removeListener(listener) }
-    }
     for (type in listOf(C.TRACK_TYPE_AUDIO, C.TRACK_TYPE_TEXT)) key(type) {
         val groups = tracks.groups.filter { it.type == type }
         val label = if (type == C.TRACK_TYPE_AUDIO) "Ses" else "Altyazı"
