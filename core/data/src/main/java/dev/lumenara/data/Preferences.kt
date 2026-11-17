@@ -106,14 +106,20 @@ class Preferences internal constructor(
         val sourcePattern = sources.keys.takeIf { it.isNotEmpty() }
             ?.joinToString("|") { Regex.escape(it) }?.let { Regex(it) }
         val prepared = settings.filter { isBackupSetting(it.name) }.map { saved ->
-            val name = sourcePattern?.replace(saved.name) { sources.getValue(it.value) } ?: saved.name
+            val name = if (saved.name.startsWith("subtitle_delay_")) {
+                val identity = saved.name.removePrefix("subtitle_delay_").split('|', limit = 2)
+                if (identity.size != 2) return@map null
+                val source = sources[identity[0]] ?: return@map null
+                val item = items[identity[1]] ?: return@map null
+                "subtitle_delay_$source|$item"
+            } else sourcePattern?.replace(saved.name) { sources.getValue(it.value) } ?: saved.name
             val value = when {
                 saved.name == "recent_live" -> saved.value.lines().mapNotNull { items[it] }.distinct().take(20).joinToString("\n")
                 saved.name.startsWith("secret_") && saved.value.isNotEmpty() -> encrypt(saved.value)
                 else -> saved.value
             }
             saved.copy(name = name, value = value)
-        }
+        }.filterNotNull()
         require(prepared.map { it.name }.distinct().size == prepared.size) { "Yinelenen ayar adı." }
         replaceSettings(prepared)
     }

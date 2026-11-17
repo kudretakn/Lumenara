@@ -61,6 +61,9 @@ internal fun VlcScreen(
     sleepTimerVersion: Int,
     onSleepTimerChanged: () -> Unit,
     episodeEnded: () -> Unit,
+    delayMs: Long,
+    delayReady: Boolean,
+    changeSubtitleDelay: (Long) -> Unit,
 ) {
     val sleepCountdown = sleepTimerVersion.let { sleepTimer.showCountdown() }
     val life by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
@@ -114,6 +117,7 @@ internal fun VlcScreen(
             if (uiVisible) wallClockTicks(500).collect { refreshCurrentUi(p) }
         }
     }
+    var receivedSubtitleDelayUs by remember(player) { mutableLongStateOf(0L) }
     var frameRate by remember(item.id, retry.generation) { mutableStateOf<Float?>(null) }
     LaunchedEffect(player, item.id, retry.generation) {
         val p = player ?: return@LaunchedEffect
@@ -138,7 +142,6 @@ internal fun VlcScreen(
         attachSubtitle(it)
         panel = false
     }
-    var delayMs by remember(item.id) { mutableLongStateOf(0) }
     var preferenceKey by remember(item.id) { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     var audioTracks by remember(item.id) { mutableStateOf(emptyList<MediaPlayer.TrackDescription>()) }
@@ -146,7 +149,6 @@ internal fun VlcScreen(
     var languages by remember(item.id) { mutableStateOf(emptyMap<Int, String>()) }
     LaunchedEffect(item.id) {
         preferenceKey = model.repo.preferenceKey(item)
-        delayMs = model.prefs.text("delay_$preferenceKey", "0").first().toLongOrNull() ?: 0
     }
     var nativePlaying by remember(item.id) { mutableStateOf(false) }
     var mediaGeneration by remember { mutableIntStateOf(0) }
@@ -165,6 +167,20 @@ internal fun VlcScreen(
     // a newly published player while still holding the previous input's state.
     val subtitlePlayer = player
     val inputGeneration = mediaGeneration
+    // One engine writer: changing the shared delay restarts this effect immediately.
+    LaunchedEffect(subtitlePlayer, inputGeneration, delayMs, delayReady, nativePlaying) {
+        val p = subtitlePlayer ?: return@LaunchedEffect
+        if (!delayReady) return@LaunchedEffect
+        withContext(Dispatchers.Main.immediate) {
+            wallClockTicks(500).collect {
+                requireMainThread()
+                if (p !== player || p.isReleased || inputGeneration != mediaGeneration) return@collect
+                val requestedUs = delayMs * 1000
+                if (p.spuDelay != requestedUs) p.setSpuDelay(requestedUs)
+                receivedSubtitleDelayUs = p.spuDelay
+            }
+        }
+    }
     LaunchedEffect(subtitlePlayer, subtitle?.uri) {
         withContext(Dispatchers.Main.immediate) {
             if (subtitle == null) subtitlePlayer?.let { if (it.spuTrack != -1) it.setSpuTrack(-1) }
@@ -331,7 +347,6 @@ internal fun VlcScreen(
                     }
                 }
                 activeSubtitle = attached != null && slaveTrack != null && p.spuTrack == slaveTrack
-                if (nativePlaying && p.spuDelay != delayMs * 1000) p.setSpuDelay(delayMs * 1000)
                 refreshCurrentUi(p)
             }
         }
@@ -545,6 +560,7 @@ internal fun VlcScreen(
             .focusRequester(focus)
             .testTag("vlc-player")
             .semantics {
+                this[SubtitleEngineDelayUs] = receivedSubtitleDelayUs
                 contentDescription = "Tam ekran oynatıcı"
                 if (activeSubtitle) stateDescription = "İndirilen altyazı etkin"
             }
@@ -711,18 +727,7 @@ internal fun VlcScreen(
                         }
                     }
                     item {
-                        Text("Altyazı gecikmesi · $delayMs ms")
-                        Column {
-                            for (step in listOf(-500L, 500L)) PlayerOption(
-                                onClick = {
-                                    delayMs = (delayMs + step).coerceIn(-60_000, 60_000)
-                                    scope.launch { model.prefs.set("delay_$preferenceKey", delayMs.toString()) }
-                                    p.setSpuDelay(delayMs * 1000)
-                                }
-                            ) {
-                                Text(if (step < 0) "−0,5 sn" else "+0,5 sn")
-                            }
-                        }
+                        SubtitleDelayControls(delayMs, delayReady, changeSubtitleDelay)
                     }
                 }
             }
