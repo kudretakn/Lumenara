@@ -27,7 +27,12 @@ class MigrationTest {
     @Test
     fun versionTenRecomputesStaleProviderVersionKeys() = verifyUpgrade(10)
 
+    @Test
+    fun versionElevenAddsCarryIdentitiesWithoutChangingUserState() = verifyUpgrade(11)
+
     private fun verifyUpgrade(from: Int) {
+        val year = java.util.Calendar.getInstance().apply { timeInMillis = System.currentTimeMillis() }
+            .get(java.util.Calendar.YEAR).toString()
         val test = InstrumentationRegistry.getInstrumentation()
         val context = test.targetContext
         val name = "lumenara-migration-test-$from"
@@ -59,7 +64,7 @@ class MigrationTest {
                     """INSERT INTO items (id,source,title,category,kind,tvgId,encryptedUrl,search,generation,logo,parent)
                     VALUES ('item','local','Başlık','Spor','LIVE','1','opaque','baslik',1,'','')"""
                 )
-                for ((id, title) in listOf("dub" to "TR: Avatar (2009) 4K Dublaj", "sub" to "Avatar [Altyazılı]")) {
+                for ((id, title) in listOf("dub" to "TR: Avatar ($year) 4K Dublaj", "sub" to "Avatar [Altyazılı]")) {
                     db.execSQL("""INSERT INTO items (id,source,title,category,kind,tvgId,encryptedUrl,search,generation,logo,parent)
                         VALUES (?, 'local', ?, 'Film', 'MOVIE', '', 'opaque', 'film', 1, '', '')""", arrayOf(id, title))
                 }
@@ -69,6 +74,11 @@ class MigrationTest {
                     // Simulate both stale keys and the old migration's empty defaults.
                     db.execSQL("UPDATE items SET versionKey=id,isRepresentative=1,versionRank=0 WHERE id='dub'")
                 }
+                if (from >= 11) {
+                    db.execSQL("""UPDATE items SET versionKey='local|MOVIE|fixture',displayTitle='Avatar',
+                        displayYear='$year',isRepresentative=CASE WHEN id='dub' THEN 1 ELSE 0 END,
+                        versionRank=CASE WHEN id='dub' THEN 0 ELSE 1 END WHERE kind='MOVIE'""")
+                }
                 if (from >= 7) {
                     db.execSQL("INSERT INTO feeds VALUES ('guide','local','opaque')")
                     db.execSQL("INSERT INTO programmes VALUES ('guide','1',100,200,'Program','Description','program')")
@@ -77,14 +87,18 @@ class MigrationTest {
             }
             val db = Room.databaseBuilder(context, LibraryDb::class.java, name)
                 .addMigrations(LibraryDb.MIGRATION_7_8, LibraryDb.MIGRATION_8_9, LibraryDb.MIGRATION_9_10,
-                    LibraryDb.MIGRATION_10_11).build()
+                    LibraryDb.MIGRATION_10_11, LibraryDb.MIGRATION_11_12).build()
             try {
                 runBlocking {
                     assertEquals(250L, db.library().mark("item")?.position)
                     val old = db.library().item("dub")!!
+                    assertEquals("", old.providerId)
+                    assertEquals("", old.tvgName)
+                    assertEquals("", old.tvgGroup)
+                    assertTrue(db.library().redirects().isEmpty())
                     assertTrue(old.versionKey.isNotEmpty())
                     assertEquals("Avatar", old.displayTitle)
-                    assertEquals("2009", old.displayYear)
+                    assertEquals(year, old.displayYear)
                     assertEquals(0, old.versionRank)
                     assertTrue(old.isRepresentative)
                     assertEquals(1, db.library().browse("local", "MOVIE", "", "", "", 120).first().size)
@@ -109,7 +123,7 @@ class MigrationTest {
                     val columns = buildList { while (cursor.moveToNext()) add(cursor.getString(2)) }
                     assertEquals(listOf("start"), columns)
                 }
-                assertEquals(11, db.openHelper.readableDatabase.version)
+                assertEquals(12, db.openHelper.readableDatabase.version)
                 db.openHelper.readableDatabase.query("SELECT COUNT(*) FROM restore_pending").use { cursor ->
                     assertTrue(cursor.moveToFirst())
                     assertEquals(0, cursor.getInt(0))

@@ -23,6 +23,32 @@ class PreferencesBackupTest {
 
     private fun preferences() = Preferences(MemoryStore(), { "sealed:$it" }, { it.removePrefix("sealed:") })
 
+    @Test fun carryOverMovesVersionTrackKeysAndRecentIdsWithoutOverwritingTargetChoices() = runBlocking {
+        val prefs = preferences()
+        val from = "old|SERIES|show|"
+        val to = "new|SERIES|show|"
+        prefs.set("version_$from", "id:old-item")
+        prefs.set("audio_${from}|1|2", "id:track|lang:en")
+        prefs.set("text_${from}|1|2", "off")
+        prefs.set("text_$from", "downloaded")
+        prefs.set("delay_${from}|1|2", "500")
+        prefs.set("sub_$from", "off")
+        prefs.set("sub_$to", "tr")
+        prefs.set("series_expanded_old-item", System.currentTimeMillis().toString())
+        prefs.recordLive("old-item")
+        val subtitleKeys = prefs.carryItems(mapOf("old-item" to "new-item"), mapOf(from to to))
+        assertEquals(mapOf(from to to), subtitleKeys)
+        assertEquals("id:new-item", prefs.text("version_$to").first())
+        assertEquals("id:track|lang:en", prefs.text("audio_${to}|1|2").first())
+        assertEquals("off", prefs.text("text_${to}|1|2").first())
+        assertEquals("500", prefs.text("delay_${to}|1|2").first())
+        assertEquals("tr", prefs.text("sub_$to").first())
+        assertEquals("", prefs.text("version_$from").first())
+        assertEquals("", prefs.text("audio_${from}|1|2").first())
+        assertEquals(listOf("new-item"), prefs.recentLive.first())
+        assertTrue(prefs.text("series_expanded_new-item").first().toLong() > 0)
+    }
+
     @Test fun updateStateIsExcludedFromBackupAndIncomingRestore() = runBlocking {
         val prefs = preferences()
         prefs.set("theme", "dark")
