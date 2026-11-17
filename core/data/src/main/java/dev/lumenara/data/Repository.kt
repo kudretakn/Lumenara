@@ -23,6 +23,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import org.json.JSONObject
 
 data class SourceSpec(
@@ -279,6 +280,7 @@ class Repository private constructor(private val context: Context) {
     private suspend fun allVersions(item: Item): List<Item> = withContext(Dispatchers.IO) {
         val base = production(item)
         if (base.kind !in listOf("MOVIE", "SERIES")) return@withContext listOf(base)
+        if (db.versionBackfill().pending(base.id)) return@withContext listOf(base)
         if (base.versionKey.isNotEmpty()) return@withContext library.versionRows(base.versionKey)
         // Legacy rows from the 7 to 8 migration have no grouping key. Avoid scanning the full
         // source on first detail/playback; the next import assigns keys in one bounded projection.
@@ -364,6 +366,33 @@ class Repository private constructor(private val context: Context) {
     fun tmdbBuiltIn() = metadata.hasBuiltInToken
 
     private val lock = Mutex()
+    private var versionBackfillJob: kotlinx.coroutines.Job? = null
+
+    /** Called only after the UI's first frame gate. Each commit leaves room for navigation. */
+    fun startVersionBackfill() {
+        synchronized(this) {
+            if (versionBackfillJob?.isActive == true) return
+            versionBackfillJob = catalogScope.launch(Dispatchers.IO) {
+                try {
+                    val backfill = VersionBackfill(db)
+                    while (currentCoroutineContext().isActive) {
+                        if (!RefreshGate.foreground || RefreshGate.playing) {
+                            delay(500)
+                            continue
+                        }
+                        val more = lock.withLock { backfill.runBatch() }
+                        if (!more) break
+                        delay(50)
+                    }
+                } catch (error: kotlinx.coroutines.CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    // The committed cursor survives. A later foreground launch retries it.
+                    StartupPerf.duration("version_backfill_failed", 0)
+                }
+            }
+        }
+    }
 
     // Hold the same lock through networking and cache writes, so an in-flight check
     // cannot cross a backup/restore snapshot. Automatic checks skip a busy repository.
@@ -627,6 +656,9 @@ class Repository private constructor(private val context: Context) {
                 it.kind == "EPISODE" && it.parent in incomingIds && it.parent !in refreshedParents
             }, incoming)
             val commit: suspend () -> Unit = {
+                // A full import supplies current assignments; staged snapshots must not
+                // overwrite refreshed metadata in a later migration batch.
+                db.versionBackfill().discardSource(source.id)
                 library.save(source)
                 staged.read { batch ->
                     job.ensureActive()

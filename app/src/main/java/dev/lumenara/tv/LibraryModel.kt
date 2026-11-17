@@ -77,6 +77,10 @@ constructor(private val repository: dagger.Lazy<Repository>, val prefs: Preferen
     init {
         viewModelScope.launch(Dispatchers.IO) {
             awaitFirstDraw()
+            repo.startVersionBackfill()
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            awaitFirstDraw()
             Perf.mark("startup_preferences")
             val hours = prefs.text("hours", "12").first().toLong()
             val repository = prefs.text("github").first()

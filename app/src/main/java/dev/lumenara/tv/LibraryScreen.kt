@@ -26,8 +26,12 @@ import kotlinx.coroutines.flow.first
 internal fun LibraryScreen(model: LibraryModel = viewModel(), onFirstDraw: () -> Unit = {}) {
     val sources by model.sources.collectAsStateWithLifecycle()
     val startInSetup by model.startInSetup.collectAsStateWithLifecycle()
-    val available = sources ?: return
-    val initialSetup = startInSetup ?: return
+    if (sources == null || startInSetup == null) {
+        MigrationLoadingScreen()
+        return
+    }
+    val available = checkNotNull(sources)
+    val initialSetup = checkNotNull(startInSetup)
     LaunchedEffect(model) {
         // Frame callbacks run before drawing. The second callback follows a submitted frame.
         withFrameNanos { }; withFrameNanos { }

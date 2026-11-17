@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.lumenara.data.LibraryDb
+import dev.lumenara.data.VersionBackfill
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.first
 import org.json.JSONObject
@@ -96,14 +97,21 @@ class MigrationTest {
                     assertEquals("", old.tvgName)
                     assertEquals("", old.tvgGroup)
                     assertTrue(db.library().redirects().isEmpty())
-                    assertTrue(old.versionKey.isNotEmpty())
-                    assertEquals("Avatar", old.displayTitle)
-                    assertEquals(year, old.displayYear)
-                    assertEquals(0, old.versionRank)
-                    assertTrue(old.isRepresentative)
+                    // Opening Room only changes schema. Every legacy stream is immediately
+                    // visible, even when its stale representative flag previously hid it.
+                    assertEquals(2, db.library().browse("local", "MOVIE", "", "", "", 120).first().size)
+                    assertEquals("normalize", db.versionBackfill().state()?.phase)
+                    val backfill = VersionBackfill(db)
+                    while (backfill.runBatch(1)) { /* Deliberately split the two versions. */ }
+                    val grouped = db.library().item("dub")!!
+                    assertTrue(grouped.versionKey.isNotEmpty())
+                    assertEquals("Avatar", grouped.displayTitle)
+                    assertEquals(year, grouped.displayYear)
+                    assertEquals(0, grouped.versionRank)
+                    assertTrue(grouped.isRepresentative)
                     assertEquals(1, db.library().browse("local", "MOVIE", "", "", "", 120).first().size)
                     assertEquals(1, db.library().browse("local", "MOVIE", "Film", "", "", 120).first().size)
-                    assertEquals(2, db.library().versionRows(old.versionKey).size)
+                    assertEquals(2, db.library().versionRows(grouped.versionKey).size)
                     assertEquals(100L, db.library().mark("sub")?.position)
                     assertEquals("sub", db.library().browse("local", "MOVIE", "Film", "", "favorite", 120).first().single().id)
                     assertEquals(1, db.library().browse("local", "LIVE", "", "", "favorite", 120).first().size)
