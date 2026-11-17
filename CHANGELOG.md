@@ -1,5 +1,12 @@
 # Lumenara sürüm kaydı
 
+## 0.5.4 · 18 Kasım 2026
+
+- "Devamını göster" düğmeleri kalktı: Filmler, Diziler, Canlı TV, Ara ve oynatıcı listesi aşağı indikçe kendiliğinden yükleniyor; odak hiç başa zıplamıyor. Bellekte en fazla 5 sayfa tutuluyor, uzak sayfalar atılıp geri dönünce yeniden yükleniyor.
+- Aynı filmin sürümleri (4K, HD, altyazılı, dublaj, "TR:" önekli) artık tek kart; sürüm detay ekranında seçiliyor. Devam filmleri ayrı kalıyor. Veritabanı şeması 11 (eski kayıtlar güncellenir, izleme geçmişi korunur).
+- Açılıştaki gereksiz işlemci yükü kalktı: yayın akışı yalnız görünen kanallar için hesaplanıyor, kategori sıralaması ve yazı tipleri ana ekranı bekletmiyor.
+- Baseline profile: uygulamanın başlangıç ve gezinme kodu cihazda önceden derleniyor (ilk açılıştan sonra daha hızlı).
+
 ## 0.5.3 · 17 Kasım 2026
 
 - Daha hızlı açılış: ana ekran, katalog sayımlarını ve arka plan işlerini (yenileme, güncelleme kontrolü, Android TV "İzlemeye devam et", görseller) beklemeden çiziliyor; veritabanı ana iş parçacığını bekletmiyor.
