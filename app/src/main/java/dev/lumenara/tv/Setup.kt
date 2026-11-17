@@ -38,6 +38,7 @@ internal fun Field(
     value: String,
     change: (String) -> Unit,
     secret: Boolean = false,
+    tag: String = "setup-field",
 ) {
     var focus by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().background(LumenColors.surface3, RoundedCornerShape(Radii.button))
@@ -49,7 +50,7 @@ internal fun Field(
             onValueChange = change,
             modifier = Modifier.fillMaxWidth().heightIn(min = 28.dp)
                 .onFocusChanged { focus = it.isFocused }
-                .semantics { contentDescription = label },
+                .testTag(tag).semantics { contentDescription = label },
             textStyle = LumenType.body.copy(color = LumenColors.textPrimary),
             cursorBrush = androidx.compose.ui.graphics.SolidColor(LumenColors.focus),
             singleLine = true,
@@ -110,7 +111,7 @@ internal fun Setup(model: LibraryModel, sources: List<Source>, openRestore: () -
                 item { Text("IPTV listenizi ekleyin; kanallar, filmler ve diziler tek yerde.", style = LumenType.body, color = LumenColors.textSecondary) }
                 item {
                     Row(horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {
-                        LumenButton(onClick = { choose("M3U") }, modifier = Modifier.weight(1f).focusRequester(first)) { Text("Liste adresi gir") }
+                        LumenButton(onClick = { choose("M3U") }, modifier = Modifier.weight(1f).focusRequester(first).testTag("setup-add-m3u")) { Text("Liste adresi gir") }
                         LumenButton(onClick = { choose("Xtream") }, style = LumenButtonStyle.Secondary, modifier = Modifier.weight(1f)) { Text("Xtream ile giriş") }
                     }
                 }
@@ -141,7 +142,7 @@ internal fun Setup(model: LibraryModel, sources: List<Source>, openRestore: () -
                         color = LumenColors.textSecondary,
                     )
                 }
-                item { Field("Liste adı", name, { name = it }) }
+                item { Field("Liste adı", name, { name = it }, tag = "setup-name") }
                 item {
                     if (method == "Dosya")
                         LumenButton(
@@ -160,6 +161,7 @@ internal fun Setup(model: LibraryModel, sources: List<Source>, openRestore: () -
                             if (method == "Xtream") "Sunucu adresi" else "Liste adresi",
                             address,
                             { address = it },
+                            tag = "setup-address",
                         )
                 }
                 if (method == "Xtream") {
@@ -173,12 +175,13 @@ internal fun Setup(model: LibraryModel, sources: List<Source>, openRestore: () -
                     }
                 }
                 if (advanced) item {
-                    ListRow(onClick = { http = !http }) {
+                    ListRow(onClick = { http = !http }, modifier = Modifier.testTag("setup-http-compat")) {
                         Text("HTTP uyumluluğu · " + if (http) "Açık" else "Kapalı", style = LumenType.cardTitle)
                     }
                 }
                 item {
                     LumenButton(
+                        modifier = Modifier.testTag("setup-submit"),
                         enabled =
                             !busy &&
                                 name.isNotBlank() &&
