@@ -38,5 +38,9 @@ Kişisel kullanım için Android TV IPTV oynatıcısı (Kotlin, Compose for TV, 
   - Testlerde sabit tarih kullanma; zamanı `System.currentTimeMillis()`'ten türet. EPG saklama penceresi (12 saat) sabit tarihli bir fixture'ı zamanla sildi (BackupTest, 17 Kasım).
   - Test sınıfları JUnit 4 `@Test` olmalı; `object` + `main` testleri Gradle'da "no tests discovered" verir. Sınıf içinde `const val` olmaz.
   - Codex sandbox'ı git worktree'lerin ortak `.git` klasörüne yazamaz. Birleştirme işlerinde ajan ayrı bir klonda çalışıp bundle üretir; lider bundle'ı içe alır.
+  - Windows'ta Codex CLI PATH'te yok: `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe` kullan. `~\.codex\.sandbox-bin\codex.exe` bozuk (code-mode-host bulunamıyor, ajan hiçbir şey yapamıyor).
+  - Windows'ta `classes.jar ... başka bir işlem tarafından kullanılıyor` hatası: önceki Gradle/Kotlin daemon'u kilit tutuyor; `gradlew --stop` sonra yeniden derle. Derleme düşerse cihaz testlerini eski APK'larla çalıştırma.
+  - Yerel doğrulamada yalnız `:app:test` yetmez; `test --continue` (tüm modüller) çalıştır. `core:designsystem` `SourceGlyphTest` üretim kodunda ✓ ★ ▶ • ← → karakterlerini yasaklar (0.5.2'de regex'teki "→" CI'da düştü); gerekirse `→` kaçışı kullan.
+  - Ajan düzeltme bildirdiğinde testi gerçekten çalıştır: Windows altyazı hatasında ajanın ilk tahmini yanlıştı (asıl neden dosya adındaki `:`).
   - GitHub'ın kimliksiz API sınırı (saatte 60 istek, IP başına) sürüm kontrolünü 403 ile düşürebilir; güncelleyici bunu açık mesajla gösterir ve web sayfasından yedek yol dener (0.5.1).
 - Planlar: `docs/UI-REDESIGN.md` (bitti), `docs/USABILITY.md` (U1, S, A, U2, U3), `ROADMAP.md`.
