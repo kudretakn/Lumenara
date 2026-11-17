@@ -40,30 +40,33 @@ internal fun Details(model: LibraryModel, item: Item, play: (Item, List<Item>) -
         catch (e: CancellationException) { throw e }
         catch (_: Exception) { model.notice.value = "Ek film bilgileri alınamadı." }
     }
-    val primary = remember { FocusRequester() }
-    LaunchedEffect(item.id) { primary.requestFocus() }
     Box(Modifier.fillMaxSize()) {
         CinemaBackdrop(model, item, info)
         LazyColumn(Modifier.fillMaxSize().testTag("details-content").focusRestorer().focusGroup(),
             contentPadding = PaddingValues(start = Spacing.screenHorizontal, end = Spacing.screenHorizontal,
                 top = 156.dp, bottom = Spacing.screenVertical),
             verticalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
-            item { DetailHeading(item, info) }
-            if (info.summary.isNotBlank()) item {
+            item(key = "heading") { DetailHeading(item, info) }
+            if (info.summary.isNotBlank()) item(key = "summary") {
                 Text(info.summary, Modifier.widthIn(max = 560.dp), style = LumenType.body,
                     color = LumenColors.textPrimary, maxLines = 3, overflow = TextOverflow.Ellipsis)
             }
-            item {
+            item(key = "actions") {
+                val primary = remember { FocusRequester() }
+                // Lazy content attaches during layout. Keep this effect with the keyed row,
+                // so late metadata cannot replace it or steal focus from another action.
+                LaunchedEffect(item.id) { withFrameNanos { }; primary.requestFocus() }
                 Row(horizontalArrangement = Arrangement.spacedBy(Spacing.unit), verticalAlignment = Alignment.CenterVertically) {
-                    LumenButton(onClick = { play(item, listOf(item)) }, modifier = Modifier.focusRequester(primary)) {
+                    LumenButton(onClick = { play(item, listOf(item)) }, style = LumenButtonStyle.Secondary,
+                        modifier = Modifier.testTag("details-play").focusRequester(primary)) {
                         LumenIcon(LumenIcon.Play, null)
                         Text(if ((mark?.position ?: 0) > 0) "Devam et" else "Oynat")
                     }
                     DetailSecondaryActions(model, item, mark, info)
                 }
             }
-            item { DetailCast(info) }
-            if (item.kind == "LIVE") item { GuidePanel(model, item) { replay -> play(replay, listOf(replay)) } }
+            item(key = "cast") { DetailCast(info) }
+            if (item.kind == "LIVE") item(key = "guide") { GuidePanel(model, item) { replay -> play(replay, listOf(replay)) } }
         }
     }
 }

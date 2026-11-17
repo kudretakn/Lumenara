@@ -141,7 +141,20 @@ class SeriesJourneyTest {
                 screen.openCategory("Tümü")
                 val card = hasContentDescription(series.title) and hasAnyAncestor(hasTestTag("poster-grid"))
                 select(card)
+                waitFor(hasTestTag("series-play") and isFocused())
+                screen.onNodeWithTag("series-play").assertIsFocused()
                 waitFor(hasTestTag("season-1"))
+                waitFor(hasText("Oynat · 1. Bölüm"))
+                screen.onNodeWithTag("series-play").assertIsFocused()
+                device.pressDPadCenter()
+                waitFor(hasContentDescription("Tam ekran oynatıcı"))
+                screen.waitUntil(30_000) { requestedEpisode.get() == "101.mp4" }
+                repeat(2) {
+                    if (screen.onAllNodesWithContentDescription("Tam ekran oynatıcı")
+                            .fetchSemanticsNodes().isNotEmpty()) screen.back()
+                }
+                waitFor(hasTestTag("series-play") and isFocused())
+                screen.onNodeWithTag("series-play").assertIsFocused()
                 capture("series")
                 select(hasTestTag("season-1"))
                 waitFor(hasTestTag("season-page"))
@@ -201,6 +214,7 @@ class SeriesJourneyTest {
                     if (screen.onAllNodesWithContentDescription("Tam ekran oynatıcı").fetchSemanticsNodes().isNotEmpty()) screen.back()
                 }
                 waitFor(hasTestTag("series-page"))
+                waitFor(hasTestTag("series-play") and isFocused())
                 screen.back()
                 waitFor(card and isFocused())
                 screen.returnToHub()

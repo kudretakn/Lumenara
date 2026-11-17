@@ -52,13 +52,7 @@ internal fun SeriesDetails(model: LibraryModel, series: Item, play: (Item, List<
     val name = next?.let { episodeName(it.title, it.category) }
     val hasHistory = marks.any { it.position > 0 }
     val selectedSeason = season ?: previewSeason.takeIf { it in seasons } ?: seasons.keys.firstOrNull() ?: 1
-    val primary = remember { FocusRequester() }
     val content = rememberLazyListState()
-    LaunchedEffect(series.id) {
-        if (season == null && seriesFocus == "series-play") {
-            withFrameNanos { }; primary.requestFocus()
-        }
-    }
     BackHandler(season != null && menu == null) {
         // Playback/menu focus changes can overwrite seriesFocus while a season is open.
         // Back belongs to the active season, regardless of the last focused control.
@@ -73,17 +67,24 @@ internal fun SeriesDetails(model: LibraryModel, series: Item, play: (Item, List<
             .focusProperties { if (menu != null) canFocus = false }.focusGroup(), state = content,
             contentPadding = PaddingValues(horizontal = Spacing.screenHorizontal, vertical = Spacing.screenVertical),
             verticalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
-            item { DetailHeading(series, info) }
-            if (info.summary.isNotBlank()) item {
+            item(key = "heading") { DetailHeading(series, info) }
+            if (info.summary.isNotBlank()) item(key = "summary") {
                 Text(info.summary, Modifier.widthIn(max = 560.dp), style = LumenType.body,
                     color = LumenColors.textPrimary, maxLines = 3, overflow = TextOverflow.Ellipsis)
             }
-            item {
+            item(key = "actions") {
+                val primary = remember { FocusRequester() }
+                LaunchedEffect(series.id) {
+                    if (season == null && seriesFocus == "series-play") {
+                        withFrameNanos { }; primary.requestFocus()
+                    }
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(Spacing.unit), verticalAlignment = Alignment.CenterVertically) {
                     LumenButton(onClick = {
                         if (next != null) play(next, episodes)
                         else model.job("Bölüm listesi güncellendi.") { model.repo.expand(series); loaded = true }
-                    }, modifier = Modifier.testTag("series-play").focusRequester(primary)
+                    }, style = LumenButtonStyle.Secondary,
+                        modifier = Modifier.testTag("series-play").focusRequester(primary)
                         .onFocusChanged { if (it.isFocused) seriesFocus = "series-play" }) {
                         LumenIcon(LumenIcon.Play, null)
                         Column {
@@ -98,7 +99,7 @@ internal fun SeriesDetails(model: LibraryModel, series: Item, play: (Item, List<
                     DetailSecondaryActions(model, series, mark, info)
                 }
             }
-            item {
+            item(key = "seasons") {
                 LazyRow(Modifier.testTag("season-shelf").focusGroup(),
                     horizontalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
                     if (loading) items(3) { LoadingCard(Modifier.width(112.dp).height(40.dp)) }
@@ -119,7 +120,7 @@ internal fun SeriesDetails(model: LibraryModel, series: Item, play: (Item, List<
                     }
                 }
             }
-            item {
+            item(key = "episodes") {
                 key(selectedSeason) {
                     EpisodeShelf(model, seasons[selectedSeason].orEmpty(), episodes, byId, loading,
                         enter = season != null || seriesFocus.startsWith("episode-"), restore = restoreEpisode,
@@ -127,13 +128,13 @@ internal fun SeriesDetails(model: LibraryModel, series: Item, play: (Item, List<
                         focused = { if (season == null) seriesFocus = "episode-${it.id}" })
                 }
             }
-            if (!loading && episodes.isEmpty()) item {
+            if (!loading && episodes.isEmpty()) item(key = "empty") {
                 Text(if (loaded) "Sağlayıcı bölüm bildirmedi." else notice, style = LumenType.meta)
                 if (!busy) LumenButton(onClick = {
                     model.job("Bölüm listesi güncellendi.") { model.repo.expand(series); loaded = true }
                 }) { Text("Yeniden dene") }
             }
-            item { DetailCast(info) }
+            item(key = "cast") { DetailCast(info) }
         }
         menu?.let { ep ->
             val focus = remember { FocusRequester() }
