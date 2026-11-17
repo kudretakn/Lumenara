@@ -25,7 +25,6 @@ baselineProfile {
     automaticGenerationDuringBuild = false
     saveInSrc = true
     mergeIntoMain = true
-    baselineProfileOutputDir = "."
     dexLayoutOptimization = true
 }
 dependencies {
