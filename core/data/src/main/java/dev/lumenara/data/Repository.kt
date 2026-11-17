@@ -106,7 +106,16 @@ class Repository private constructor(private val context: Context) {
 
     fun categoryCounts(kind: String, source: String) = catalog.categoryCounts(kind, source)
     fun categories(kind: String, source: String) = categoryCounts(kind, source).map { groups -> groups.map { it.category } }
-    fun liveCategoryCounts(source: String) = categoryCounts("LIVE", source)
+    fun liveCategoryCounts(source: String) =
+        hidden.flatMapLatest { library.liveCategoryCounts(source, it) }
+            .distinctUntilChanged()
+    /** A bounded visible page, with no whole-catalog GuideResolver or future schedules. */
+    fun liveNow(rows: List<Item>, now: Long): Flow<Map<String, Slot>> = flow {
+        if (rows.isEmpty()) emit(emptyMap()) else emitAll(
+            library.liveNow(rows, now).map { current ->
+                current.groupBy { it.itemId }.mapValues { (_, hits) -> hits.first().slot }
+            })
+    }.flowOn(Dispatchers.Default)
     fun liveByIds(source: String, ids: List<String>) =
         hidden.flatMapLatest { library.liveByIds(source, ids, it) }
     private val liveScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)

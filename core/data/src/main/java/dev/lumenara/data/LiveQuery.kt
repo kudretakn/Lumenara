@@ -63,6 +63,15 @@ internal fun liveCountQuery(filter: CatalogFilter): SimpleSQLiteQuery {
     return SimpleSQLiteQuery("SELECT COUNT(*) FROM items i WHERE ${eligible.sql}", eligible.args.toTypedArray())
 }
 
+/** LIVE has no production versions: a covering category index avoids touching VOD rows. */
+internal fun liveCategoryCountsQuery(source: String, hidden: List<String>): SimpleSQLiteQuery {
+    val filter = CatalogFilter(source = source, hidden = hidden)
+    val eligible = filter.livePredicate("i")
+    val index = if (source.isEmpty()) "index_items_kind_category_title" else "index_items_source_kind_category_title"
+    return SimpleSQLiteQuery("""SELECT i.category,COUNT(*) AS count FROM items i INDEXED BY $index
+        WHERE ${eligible.sql} GROUP BY i.category ORDER BY i.category""", eligible.args.toTypedArray())
+}
+
 internal fun liveIndexQuery(filter: CatalogFilter, id: String): SimpleSQLiteQuery {
     val before = filter.livePredicate("i")
     val target = filter.livePredicate("t")

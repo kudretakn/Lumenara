@@ -146,6 +146,11 @@ interface LibraryDao {
     @RawQuery(observedEntities = [Item::class])
     fun catalogCategoryCounts(query: SupportSQLiteQuery): Flow<List<LiveCategoryCount>>
 
+    @RawQuery(observedEntities = [Item::class, Feed::class, Slot::class, GuideName::class, Mapping::class])
+    fun liveNowRows(query: SupportSQLiteQuery): Flow<List<LiveNow>>
+
+    fun liveNow(rows: List<Item>, now: Long): Flow<List<LiveNow>> = liveNowRows(liveNowQuery(rows, now))
+
     @RawQuery(observedEntities = [Item::class])
     fun catalogKindCategoryCounts(query: SupportSQLiteQuery): Flow<List<KindCategoryCount>>
 
@@ -231,9 +236,8 @@ interface LibraryDao {
         ORDER BY title,id LIMIT 20""")
     fun firstLiveCategory(source: String, hidden: List<String> = emptyList()): Flow<List<Item>>
 
-    @Query("""SELECT category, COUNT(*) AS count FROM items
-        WHERE kind='LIVE' AND category NOT IN (:hidden) AND (:source='' OR source=:source) GROUP BY category ORDER BY category""")
-    fun liveCategoryCounts(source: String, hidden: List<String> = emptyList()): Flow<List<LiveCategoryCount>>
+    fun liveCategoryCounts(source: String, hidden: List<String> = emptyList()): Flow<List<LiveCategoryCount>> =
+        catalogCategoryCounts(liveCategoryCountsQuery(source, hidden))
 
     fun categoryCounts(kind: String, source: String, hidden: List<String> = emptyList()): Flow<List<LiveCategoryCount>> =
         catalogCategoryCounts(categoryCountsQuery(CatalogFilter(source = source, kind = kind, hidden = hidden)))

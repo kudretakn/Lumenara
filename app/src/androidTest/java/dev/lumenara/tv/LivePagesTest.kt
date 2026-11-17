@@ -22,6 +22,48 @@ import org.junit.Test
 class LivePagesTest {
     @get:Rule val screen = createAndroidComposeRule<MainActivity>()
 
+    @Test fun firstOpenPublishesOnePageBeforeTheTotalIsLoaded() {
+        val repo = Repository.get(InstrumentationRegistry.getInstrumentation().targetContext)
+        val source = "live-first-page-${System.nanoTime()}"
+        val rows = List(4 * LIVE_PAGE_SIZE) { index ->
+            val title = "Channel %04d".format(java.util.Locale.ROOT, index)
+            Item("$source-$index", source, title, "News", "LIVE", "", "", title.lowercase(), 1, "")
+        }
+        var pages: LivePages? = null
+        var initialRows: Int? = null
+        var initialCountLoaded = true
+        try {
+            runBlocking {
+                repo.library.save(Source(source, source, "", false, System.currentTimeMillis(), rows.size))
+                repo.library.save(rows)
+            }
+            screen.runOnUiThread {
+                val model = ViewModelProvider(screen.activity)[LibraryModel::class.java]
+                screen.activity.setContent {
+                    val state = rememberLivePages(model, source)
+                    SideEffect {
+                        pages = state
+                        if (initialRows == null && state.firstPageLoaded) {
+                            initialRows = state.pages.values.sumOf { it.size }
+                            initialCountLoaded = state.countLoaded
+                        }
+                    }
+                }
+            }
+            screen.waitUntil(10_000) { initialRows != null && pages?.countLoaded == true }
+            screen.runOnIdle {
+                assertFalse("COUNT must start after the first page is published", initialCountLoaded)
+                assertEquals(LIVE_PAGE_SIZE, initialRows)
+                assertEquals(rows.size, pages?.count)
+                assertEquals(rows.first().id, pages?.get(0)?.id)
+                assertTrue(checkNotNull(pages).pages.values.sumOf { it.size } <= 3 * LIVE_PAGE_SIZE)
+            }
+        } finally {
+            screen.runOnUiThread { screen.activity.setContent {} }
+            runBlocking { repo.remove(source) }
+        }
+    }
+
     @Test fun distantReturnLoadsOnlyNearbyPagesAndRestoresFocus() {
         val repo = Repository.get(InstrumentationRegistry.getInstrumentation().targetContext)
         val source = "live-pages-${System.nanoTime()}"

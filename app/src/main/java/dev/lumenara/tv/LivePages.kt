@@ -8,13 +8,14 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 
 internal const val LIVE_GRID_COLUMNS = 4
-internal const val LIVE_PAGE_SIZE = LIVE_GRID_COLUMNS * 14
+internal const val LIVE_PAGE_SIZE = LIVE_GRID_COLUMNS * 7
 
 /** Absolute lazy-list indices keep focus/scroll stable while old pages leave memory. */
 @Stable
 internal class LivePages(val source: String, val category: String, val query: String, val shelf: String) {
     var count by mutableIntStateOf(0)
     var countLoaded by mutableStateOf(false)
+    var firstPageLoaded by mutableStateOf(false)
     var anchor by mutableStateOf<Int?>(null)
     var center by mutableIntStateOf(0)
     val pages = mutableStateMapOf<Int, List<Item>>()
@@ -45,27 +46,31 @@ internal suspend fun liveNeighbor(model: LibraryModel, item: Item, group: LiveCh
 internal fun rememberLivePages(model: LibraryModel, source: String, category: String = "",
     query: String = "", shelf: String = "", returnId: String? = null): LivePages {
     val state = remember(source, category, query, shelf) { LivePages(source, category, query, shelf) }
-    val count by remember(source, category, query, shelf) {
-        model.repo.liveCount(source, category, query, shelf)
-    }.collectAsLoadingState()
-    SideEffect { state.count = count ?: 0; state.countLoaded = count != null }
+    LaunchedEffect(state) {
+        snapshotFlow { state.firstPageLoaded }.first { it }
+        // Let the visible cards draw before COUNT or neighbouring pages compete for Room/CPU.
+        withFrameNanos { }; withFrameNanos { }
+        model.repo.liveCount(source, category, query, shelf).collect {
+            state.count = it
+            state.countLoaded = true
+        }
+    }
     LaunchedEffect(state, returnId) {
         val index = returnId?.let { model.repo.liveIndex(source, it, category, query, shelf) } ?: 0
         state.center = index / LIVE_PAGE_SIZE
         state.anchor = index
     }
-    val total = count
-    if (state.anchor != null && total != null) {
-        val lastPage = (total - 1).coerceAtLeast(0) / LIVE_PAGE_SIZE
-        val center = state.center.coerceIn(0, lastPage)
-        val firstPage = (center - 1).coerceAtLeast(0)
-        val endPage = (center + 1).coerceAtMost(lastPage)
+    if (state.anchor != null) {
+        val lastPage = (state.count - 1).coerceAtLeast(0) / LIVE_PAGE_SIZE
+        val center = if (state.countLoaded) state.center.coerceIn(0, lastPage) else state.center
+        val firstPage = if (state.countLoaded) (center - 1).coerceAtLeast(0) else center
+        val endPage = if (state.countLoaded) (center + 1).coerceAtMost(lastPage) else center
         LaunchedEffect(state, firstPage, endPage) {
             val offset = firstPage * LIVE_PAGE_SIZE
             val after = state.boundaries[firstPage]
             var initial = true
-            // One observed window replaces three independently subscribed pages. Initial open
-            // is COUNT + one window; adjacent windows seek with the preceding boundary.
+            // First open reads one page without COUNT. Later windows retain absolute indices
+            // and seek from a boundary; arbitrary focus restores still use the skinny offset.
             model.repo.liveWindow(source, category, query, shelf,
                 (endPage - firstPage + 1) * LIVE_PAGE_SIZE, offset, after).collect { window ->
                 val rows = window.rows
@@ -83,6 +88,8 @@ internal fun rememberLivePages(model: LibraryModel, source: String, category: St
                         state.boundaries[page + 1] = LiveWindowCursor(LiveCursor(it.title, it.id), window.revision, window.hidden)
                     }
                 }
+                if (!state.countLoaded) state.count = offset + rows.size
+                state.firstPageLoaded = true
             }
         }
     }
