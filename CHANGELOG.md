@@ -1,11 +1,18 @@
 # Lumenara sürüm kaydı
 
-## 0.5.1 · 17 Kasım 2026
+## 0.5.2 · 17 Kasım 2026
 
 - Canlı yayın donma düzeltmesi: sağlayıcı akışı kapattığında ya da görüntü 8 saniye ilerlemediğinde oynatıcı kendiliğinden yeniden bağlanıyor ("Yeniden bağlanıyor" rozeti). Önceden görüntü donup kalıyordu.
 - Kumandanın kanal +/− (ve sayfa yukarı/aşağı) tuşları tam ekran canlı yayında kanal değiştiriyor.
 - Daha geniş kartlar, okunur adlar: kategori ve kanal ızgaraları 4 sütun (yükseklik aynı); kanal adı ayrı satırda, numara yanında; şu an yayındaki program altında.
 - Ana ekran kanal rafı 150 dp, "Kaldığın yerden devam et" 180 dp, arama 140 dp, bölüm kartları 180 dp; başlıklar iki satıra kadar. Devam kartında arka plan görseli yoksa afiş gösteriliyor.
+
+## 0.5.1 · 17 Kasım 2026
+
+- Uygulama içi güncelleme kontrolü GitHub'ın istek sınırına (saatte 60 istek) takılınca artık "GitHub istek sınırına ulaşıldı, N dakika sonra tekrar deneyin" diyor; "Sağlayıcı HTTP 403" mesajı kalktı.
+- GitHub API yanıt vermezse sürüm GitHub'ın web sayfasından bulunuyor; SHA-256 doğrulama özeti alınamazsa hiçbir şey kurulmuyor.
+- Son kontrol sonucu önbellekte tutuluyor (ETag); açılıştaki otomatik kontrol saatte en fazla bir kez yapılıyor.
+- Hata mesajları sürüm denetimi ile APK indirmeyi ayırıyor.
 
 ## 0.5.0 · 16 Kasım 2026
 

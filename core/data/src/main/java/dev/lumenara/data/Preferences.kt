@@ -45,6 +45,30 @@ class Preferences internal constructor(
     internal suspend fun setFetchState(key: String, state: FetchState) =
         setSecret("refresh_$key", state.encode())
 
+    internal suspend fun updateState(repository: String): UpdateState =
+        UpdateState.decode(text("update_$repository").first())
+
+    // Claim before networking, including failed attempts, so restarts cannot hammer GitHub.
+    internal suspend fun beginUpdateCheck(repository: String, automatic: Boolean, now: Long): Boolean {
+        var claimed = false
+        store.edit {
+            val key = stringPreferencesKey("update_$repository")
+            val previous = UpdateState.decode(it[key].orEmpty())
+            if (!automatic || previous.checkedAt == 0L || now < previous.checkedAt || now - previous.checkedAt >= 3_600_000L) {
+                it[key] = previous.copy(checkedAt = now).encode()
+                claimed = true
+            }
+        }
+        return claimed
+    }
+
+    internal suspend fun setUpdateRelease(repository: String, tag: String, etag: String, release: String) {
+        store.edit {
+            val key = stringPreferencesKey("update_$repository")
+            it[key] = UpdateState.decode(it[key].orEmpty()).copy(tag = tag, etag = etag, release = release).encode()
+        }
+    }
+
     fun text(key: String, fallback: String = "") =
         store.data.map { it[stringPreferencesKey(key)] ?: fallback }
 
@@ -52,11 +76,8 @@ class Preferences internal constructor(
         store.edit { it[stringPreferencesKey(key)] = value }
     }
 
-    // These describe local cache contents, which are not part of the backup.
-    private fun cacheSetting(name: String) = name.startsWith("secret_refresh_") || name.startsWith("series_expanded_")
-
     internal suspend fun backupSettings(): List<BackupSetting> = withContext(Dispatchers.IO) {
-        rawSettings().filterNot { cacheSetting(it.name) }.map {
+        rawSettings().filter { isBackupSetting(it.name) }.map {
             if (it.name.startsWith("secret_") && it.value.isNotEmpty()) it.copy(value = decrypt(it.value)) else it
         }
     }
@@ -67,7 +88,7 @@ class Preferences internal constructor(
         // Prepare all secrets before the atomic DataStore edit; Keystore values are device specific.
         val sourcePattern = sources.keys.takeIf { it.isNotEmpty() }
             ?.joinToString("|") { Regex.escape(it) }?.let { Regex(it) }
-        val prepared = settings.filterNot { cacheSetting(it.name) }.map { saved ->
+        val prepared = settings.filter { isBackupSetting(it.name) }.map { saved ->
             val name = sourcePattern?.replace(saved.name) { sources.getValue(it.value) } ?: saved.name
             val value = when {
                 saved.name == "recent_live" -> saved.value.lines().mapNotNull { items[it] }.distinct().take(20).joinToString("\n")
@@ -80,7 +101,7 @@ class Preferences internal constructor(
         replaceSettings(prepared)
     }
 
-    // Raw snapshots retain device-encrypted secret values and include cache/validator keys.
+    // Rollback retains encrypted secrets and catalog validators, but never rewinds updater state.
     internal suspend fun snapshotSettings(): String = JSONArray().apply {
         rawSettings().forEach { put(org.json.JSONObject().put("name", it.name).put("type", it.type).put("value", it.value)) }
     }.toString()
@@ -92,7 +113,8 @@ class Preferences internal constructor(
         })
     }
 
-    private suspend fun rawSettings(): List<BackupSetting> = store.data.first().asMap().map { (key, value) ->
+    private suspend fun rawSettings(): List<BackupSetting> = store.data.first().asMap()
+        .filterKeys { !it.name.startsWith("update_") }.map { (key, value) ->
         val type = when (value) {
             is String -> "string"
             is Boolean -> "boolean"
@@ -109,8 +131,8 @@ class Preferences internal constructor(
     private suspend fun replaceSettings(settings: List<BackupSetting>) {
         store.edit { target ->
             // Missing keys represent defaults in the snapshot, including unset secrets.
-            target.clear()
-            for ((name, type, value) in settings) when (type) {
+            target.asMap().keys.filterNot { it.name.startsWith("update_") }.forEach { target.remove(it) }
+            for ((name, type, value) in settings.filterNot { it.name.startsWith("update_") }) when (type) {
                 "string" -> target[stringPreferencesKey(name)] = value
                 "boolean" -> target[booleanPreferencesKey(name)] = value.toBooleanStrict()
                 "int" -> target[intPreferencesKey(name)] = value.toInt()

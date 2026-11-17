@@ -52,6 +52,13 @@ class BackupTest {
         assertNotEquals(a.getString("data"), b.getString("data"))
     }
 
+    @Test fun updateKeysAreExcludedFromEncodedBackupsAndPreviewCounts() {
+        val settings = data.settings + BackupSetting("update_o/r", "string", "cached release")
+        val withUpdate = data.copy(settings = settings)
+        assertEquals(data, BackupCodec.decrypt(BackupCodec.encrypt(withUpdate, password), password))
+        assertEquals(BackupPreview(data).summary, BackupPreview(withUpdate).summary)
+    }
+
     @Test fun wrongPasswordDoesNotReturnAnyData() {
         val bytes = BackupCodec.encrypt(data, password)
         assertEquals("Parola yanlış veya yedek dosyası bozuk.", rejected(bytes, "yanlış-parola".toCharArray()).message)
@@ -150,6 +157,14 @@ class BackupTest {
         header.put("data", Base64.getEncoder().encodeToString(cipher(javax.crypto.Cipher.ENCRYPT_MODE)
             .doFinal(json.toString().toByteArray())))
         return header.toString().toByteArray()
+    }
+
+    @Test fun legacyUpdateKeysAreIgnoredWhenDecodingBackups() {
+        val bytes = malformedPayload {
+            it.getJSONArray("settings").put(JSONObject().put("name", "update_o/r")
+                .put("type", "string").put("value", "foreign cache"))
+        }
+        assertEquals(data, BackupCodec.decrypt(bytes, password))
     }
 
     @Test fun authenticatedMalformedSchemaIsRejectedBeforePreview() {
