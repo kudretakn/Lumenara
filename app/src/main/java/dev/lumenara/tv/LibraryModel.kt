@@ -80,7 +80,7 @@ constructor(val repo: Repository, val prefs: Preferences) : androidx.lifecycle.V
 
     suspend fun checkUpdate(repository: String, automatic: Boolean = false) {
         update.value = if (repository.isEmpty()) null else
-            Updates.check(repository, BuildConfig.VERSION_NAME, prefs, automatic)
+            repo.checkUpdate(repository, BuildConfig.VERSION_NAME, automatic)
     }
 
     fun diagnostic(code: String) {

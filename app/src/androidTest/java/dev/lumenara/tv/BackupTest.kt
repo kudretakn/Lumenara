@@ -30,6 +30,12 @@ class BackupTest {
         val oldSecret = prefs.secret("backup_test")
         val absentKey = "backup_missing_${java.util.UUID.randomUUID()}"
         val name = "Test · Yedek"
+        // Keep the programme inside the production guide retention window on every run.
+        val now = java.time.Instant.now()
+        val stamp = java.time.format.DateTimeFormatter.ofPattern("yyyyMMddHHmmss Z")
+            .withZone(java.time.ZoneOffset.UTC)
+        val start = stamp.format(now.minusSeconds(3600))
+        val stop = stamp.format(now.plusSeconds(3600))
         MockWebServer().use { server ->
             server.dispatcher = object : Dispatcher() {
                 override fun dispatch(request: RecordedRequest): MockResponse = when (request.path) {
@@ -39,7 +45,7 @@ class BackupTest {
                         ${server.url("/live/channel.ts")}
                     """.trimIndent())
                     "/guide" -> MockResponse().setBody("""<tv><channel id="channel"><display-name>Yedek Kanal</display-name></channel>
-                        <programme channel="channel" start="20261115120000 +0000" stop="20261115140000 +0000"><title>Haber</title></programme></tv>""")
+                        <programme channel="channel" start="$start" stop="$stop"><title>Haber</title></programme></tv>""")
                     else -> MockResponse().setResponseCode(404)
                 }
             }

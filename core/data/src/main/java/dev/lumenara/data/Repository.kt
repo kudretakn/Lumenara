@@ -328,6 +328,17 @@ class Repository private constructor(private val context: Context) {
 
     private val lock = Mutex()
 
+    // Hold the same lock through networking and cache writes, so an in-flight check
+    // cannot cross a backup/restore snapshot. Automatic checks skip a busy repository.
+    suspend fun checkUpdate(repository: String, current: String, automatic: Boolean = false): Update? =
+        withContext(Dispatchers.IO) {
+            if (automatic) {
+                if (!lock.tryLock()) return@withContext null
+            } else lock.lock()
+            try { Updates.check(repository, current, preferences, automatic) }
+            finally { lock.unlock() }
+        }
+
     // Queue the launch read with catalog commits, before a later import can
     // overtake the first composition. Downloads do not hold up this snapshot.
     suspend fun sourceSnapshot(): List<Source> = db.withTransaction { library.snapshot() }
@@ -344,7 +355,7 @@ class Repository private constructor(private val context: Context) {
     }
 
     suspend fun previewBackup(bytes: ByteArray, password: CharArray): BackupPreview = withContext(Dispatchers.IO) {
-        BackupPreview(BackupCodec.decrypt(bytes, password))
+        lock.withLock { BackupPreview(BackupCodec.decrypt(bytes, password)) }
     }
 
     suspend fun restoreBackup(preview: BackupPreview): BackupRestoreResult = withContext(Dispatchers.IO) {

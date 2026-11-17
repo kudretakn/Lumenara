@@ -15,6 +15,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 internal data class BackupSetting(val name: String, val type: String, val value: String)
+internal fun isBackupSetting(name: String) = !name.startsWith("secret_refresh_") &&
+    !name.startsWith("series_expanded_") && !name.startsWith("update_")
 internal data class BackupSource(val id: String, val name: String, val spec: SourceSpec)
 internal data class BackupFeed(val id: String, val source: String, val address: String)
 // Only identities needed for user state are exported, never catalog metadata.
@@ -32,7 +34,7 @@ internal data class BackupData(
 class BackupPreview internal constructor(internal val data: BackupData) {
     val summary: String get() = "${data.sources.size} kaynak, ${data.marks.size} izleme kaydı, " +
         "${data.marks.count { it.favorite }} favori, ${data.marks.count { it.listed }} liste kaydı, " +
-        "${data.feeds.size} EPG adresi, ${data.mappings.size} eşleştirme, ${data.settings.size} ayar"
+        "${data.feeds.size} EPG adresi, ${data.mappings.size} eşleştirme, ${data.settings.count { isBackupSetting(it.name) }} ayar"
 }
 
 data class BackupRestoreResult(val skipped: Int, val guideFailures: Int)
@@ -108,7 +110,7 @@ internal object BackupCodec {
     }
 
     private fun encode(data: BackupData) = JSONObject().put("version", VERSION)
-        .put("settings", rows(data.settings) { JSONObject().put("name", it.name).put("type", it.type).put("value", it.value) })
+        .put("settings", rows(data.settings.filter { isBackupSetting(it.name) }) { JSONObject().put("name", it.name).put("type", it.type).put("value", it.value) })
         .put("sources", rows(data.sources) { JSONObject().put("id", it.id).put("name", it.name).put("spec", JSONObject(it.spec.encode())) })
         .put("feeds", rows(data.feeds) { JSONObject().put("id", it.id).put("source", it.source).put("address", it.address) })
         .put("items", rows(data.items) { JSONObject().put("id", it.id).put("source", it.source).put("address", it.address).put("parent", it.parentAddress) })
@@ -157,7 +159,7 @@ internal object BackupCodec {
             json.getString("tmdb"),
         )
         validate(data)
-        return data
+        return data.copy(settings = data.settings.filter { isBackupSetting(it.name) })
     }
 
     internal fun validate(data: BackupData) {
