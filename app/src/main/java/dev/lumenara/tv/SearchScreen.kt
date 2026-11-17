@@ -19,6 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.*
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
@@ -43,6 +44,7 @@ import dev.lumenara.design.Spacing
 import java.time.*
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 @Composable
@@ -57,7 +59,12 @@ internal fun SearchScreen(
     var restoring by remember { mutableStateOf(true) }
     var fieldFocused by remember { mutableStateOf(false) }
     val entryFocus = remember { FocusRequester() }
+    // The wide input's spatial centre can point at a later card. Keep DOWN on the
+    // first absolute slot, including while the combined row separates into shelves.
+    val firstResultFocus = remember { FocusRequester() }
     val resultsState = rememberLazyListState()
+    val firstResultsState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) {
         if (lastShelf == null) {
             withFrameNanos { }
@@ -98,7 +105,10 @@ internal fun SearchScreen(
         listOf("Kanallar" to "LIVE", "Filmler" to "MOVIE", "Diziler" to "SERIES").map { (title, kind) ->
             title to rememberCatalogPages(model, source, kind, query = settledQuery, columns = 1)
         }
-    LaunchedEffect(source, settledQuery, shelves.map { it.second }) { resultsState.scrollToItem(0) }
+    LaunchedEffect(source, settledQuery, shelves.map { it.second }) {
+        resultsState.scrollToItem(0)
+        firstResultsState.scrollToItem(0)
+    }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { wallClockTicks(30_000).collect { now = it } }
     val programResult by remember(source, settledQuery) {
@@ -115,6 +125,7 @@ internal fun SearchScreen(
     }.collectAsLoadingState()
     val loading = shelves.any { !it.second.firstPageLoaded } || programResult == null
     val programs = programResult.orEmpty()
+    val firstCatalogShelf = shelves.firstOrNull { it.second.count > 0 }?.first
     LaunchedEffect(shelves, programs, loading) {
         if (restoring && lastShelf != null && !loading) {
             val visible = shelves.filter { it.second.count > 0 }.map { it.first } +
@@ -136,7 +147,16 @@ internal fun SearchScreen(
                     recentSearches = (listOf(query.trim()) + recentSearches.filterNot { it.equals(query.trim(), true) }).take(6)
                 }
                 fieldFocused = focused
-            }, Modifier.weight(1f))
+            }, Modifier.weight(1f), if (firstCatalogShelf != null) {
+                {
+                    scope.launch {
+                        resultsState.scrollToItem(0)
+                        firstResultsState.scrollToItem(0)
+                        withFrameNanos { }
+                        firstResultFocus.requestFocus()
+                    }
+                }
+            } else null)
             LumenButton(onClick = { listen() }, style = LumenButtonStyle.Secondary,
                 modifier = Modifier.size(56.dp).testTag("search-voice")) {
                 LumenIcon(LumenIcon.Search, contentDescription = "Sesle ara")
@@ -179,7 +199,9 @@ internal fun SearchScreen(
                     key(shelves.map { it.second }) {
                         SearchPagingRow(model, rowShelves,
                             if (!fieldFocused && title == "Kanallar") "channel-shelf-$title" else "search-shelf-$title",
-                            { lastShelf = it }, open, play)
+                            { lastShelf = it }, open, play,
+                            if (title == firstCatalogShelf) firstResultFocus else null,
+                            if (title == firstCatalogShelf) firstResultsState else rememberLazyListState())
                     }
                 }
             }
@@ -218,6 +240,7 @@ private fun SearchField(
     requester: FocusRequester,
     onFocus: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    onDown: (() -> Unit)? = null,
 ) {
     Row(modifier.height(56.dp).background(LumenColors.surface3, RoundedCornerShape(8.dp))
         .padding(horizontal = 16.dp),
@@ -228,6 +251,12 @@ private fun SearchField(
             value = value,
             onValueChange = onValueChange,
             modifier = Modifier.weight(1f).fillMaxHeight().wrapContentHeight(Alignment.CenterVertically)
+                .onPreviewKeyEvent { event ->
+                    if (event.key == Key.DirectionDown && onDown != null) {
+                        if (event.type == KeyEventType.KeyDown) onDown()
+                        true
+                    } else false
+                }
                 .focusRequester(requester).onFocusChanged {
                     onFocus(it.isFocused)
                 }.testTag("search-input"),
@@ -253,8 +282,9 @@ internal fun SearchPagingRow(
     focus: (String) -> Unit,
     open: (Item) -> Unit,
     play: (Item, List<Item>) -> Unit,
+    firstResult: FocusRequester? = null,
+    state: LazyListState = rememberLazyListState(),
 ) {
-    val state = rememberLazyListState()
     val counts = shelves.map { it.second.count }
     fun slot(index: Int): Pair<Int, Int> {
         var local = index
@@ -289,7 +319,7 @@ internal fun SearchPagingRow(
                 else -> Modifier
             }
             Box(wrapper) {
-                SearchResultCard(model, entry, "$title:$local", {
+                SearchResultCard(model, entry, "$title:$local", if (index == 0) firstResult else null, {
                     pages.focused(local)
                     focus(title)
                 }) {
@@ -302,9 +332,11 @@ internal fun SearchPagingRow(
 
 /** The focus surface survives both page arrival and eviction. */
 @Composable
-private fun SearchResultCard(model: LibraryModel, item: Item?, slot: String, focus: () -> Unit, click: () -> Unit) {
+private fun SearchResultCard(model: LibraryModel, item: Item?, slot: String,
+    entryFocus: FocusRequester?, focus: () -> Unit, click: () -> Unit) {
     var restoreFocus by rememberSaveable(slot) { mutableStateOf(false) }
-    val requester = remember { FocusRequester() }
+    val ownRequester = remember { FocusRequester() }
+    val requester = entryFocus ?: ownRequester
     LaunchedEffect(Unit) {
         if (restoreFocus) { withFrameNanos { }; requester.requestFocus(); restoreFocus = false }
     }
