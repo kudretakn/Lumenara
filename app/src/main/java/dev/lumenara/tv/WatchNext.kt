@@ -88,9 +88,11 @@ internal class WatchNext private constructor(private val context: Context) {
             for (ignored in requests) {
                 previous?.let { delay((30_000 - (SystemClock.elapsedRealtime() - it)).coerceAtLeast(0)) }
                 try {
+                    Perf.mark("startup_watch_next_publish")
                     sync()
                 } catch (e: CancellationException) { throw e }
                 catch (_: Exception) { /* Unsupported or temporarily unavailable TV provider. */ }
+                finally { Perf.since("startup_watch_next_publish", "startup_watch_next_publish_complete") }
                 previous = SystemClock.elapsedRealtime()
             }
         }

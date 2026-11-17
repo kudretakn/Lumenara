@@ -87,7 +87,10 @@ class Repository private constructor(private val context: Context) {
         override suspend fun <T> transaction(block: suspend () -> T): T = db.withTransaction { block() }
     })
     // Constructors and workers must not expose Room/preferences until crash recovery finishes.
-    init { kotlinx.coroutines.runBlocking(Dispatchers.IO) { restoreTransaction.recover() } }
+    init { kotlinx.coroutines.runBlocking(Dispatchers.IO) {
+        StartupPerf.measure("startup_room_open") { db.openHelper.writableDatabase }
+        StartupPerf.measure("startup_room_recovery") { restoreTransaction.recover() }
+    } }
     private val catalogScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val catalog = CatalogStreams(library.categoryNames(), library::categoryCounts,
         library::sourceCategoryCounts, preferences.showAdult, catalogScope)
@@ -106,7 +109,16 @@ class Repository private constructor(private val context: Context) {
 
     fun categoryCounts(kind: String, source: String) = catalog.categoryCounts(kind, source)
     fun categories(kind: String, source: String) = categoryCounts(kind, source).map { groups -> groups.map { it.category } }
-    fun liveCategoryCounts(source: String) = categoryCounts("LIVE", source)
+    fun liveCategoryCounts(source: String) =
+        hidden.flatMapLatest { library.liveCategoryCounts(source, it) }
+            .distinctUntilChanged()
+    /** A bounded visible page, with no whole-catalog GuideResolver or future schedules. */
+    fun liveNow(rows: List<Item>, now: Long): Flow<Map<String, Slot>> = flow {
+        if (rows.isEmpty()) emit(emptyMap()) else emitAll(
+            library.liveNow(rows, now).map { current ->
+                current.groupBy { it.itemId }.mapValues { (_, hits) -> hits.first().slot }
+            })
+    }.flowOn(Dispatchers.Default)
     fun liveByIds(source: String, ids: List<String>) =
         hidden.flatMapLatest { library.liveByIds(source, ids, it) }
     private val liveScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -204,12 +216,19 @@ class Repository private constructor(private val context: Context) {
         library.liveIndex(source, id, category, query, shelf, hidden.first())
     fun episodes(id: String) = hidden.flatMapLatest { library.episodes(id, it) }
     suspend fun episodeSnapshot(id: String) = library.episodeSnapshot(id, hidden.first())
+    // Visibility for history needs only marked cards, their parents and those parents' episodes.
+    // Do not make the Hub wait for names/counts over the complete provider catalog.
+    private val historyHidden = combine(preferences.showAdult, library.continueWatchingCategories()) { show, names ->
+        if (show) emptyList() else names.filter(::isAdultCategory)
+    }.distinctUntilChanged()
     fun continueWatching(source: String) =
-        hidden.flatMapLatest { library.continueWatching(source, it) }
+        historyHidden.flatMapLatest { library.continueWatching(source, it) }
     fun recentLive(source: String) = preferences.recentLive.flatMapLatest { ids ->
-        liveByIds(source, ids).map { rows ->
+        // Twenty primary-key probes need no full-catalog category-name query. Apply the same
+        // visibility rule to these bounded rows, preserving DataStore's recency order.
+        combine(library.liveByIds(source, ids), preferences.showAdult) { rows, showAdult ->
             val byId = rows.associateBy { it.id }
-            ids.mapNotNull { byId[it] }
+            visibleRecentIds(ids, rows.associate { it.id to it.category }, showAdult).mapNotNull { byId[it] }
         }
     }
     private val guideStore by lazy { GuideStore(guide, liveScope, hidden) }
@@ -692,7 +711,7 @@ class Repository private constructor(private val context: Context) {
         (siblings + item).distinctBy { it.id }.forEach { library.save(result.copy(id = it.id)) }
     }
 
-    suspend fun schedule(hours: Long, checkNow: Boolean = false) {
+    suspend fun schedule(hours: Long, checkNow: Boolean = false): Unit = withContext(Dispatchers.IO) {
         val constraints =
             Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
         val request =

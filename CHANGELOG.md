@@ -1,5 +1,13 @@
 # Lumenara sürüm kaydı
 
+## 0.5.3 · 17 Kasım 2026
+
+- Daha hızlı açılış: ana ekran, katalog sayımlarını ve arka plan işlerini (yenileme, güncelleme kontrolü, Android TV "İzlemeye devam et", görseller) beklemeden çiziliyor; veritabanı ana iş parçacığını bekletmiyor.
+- "Tüm kanallar" gibi büyük kategoriler hızlı açılıyor: ilk ekran tek indeksli sorguyla geliyor, sayım ve yayın akışı bilgisi sonra yükleniyor.
+- VLC oynatıcı ana ekran çizildikten sonra arka planda hazırlanıyor; ilk kanal açılışı daha hızlı ve güvenilir. Kanal değiştirirken akış kapatma güvenli hâle geldi.
+- Film ve dizi detayında odak açılışta "Oynat"ta; oynatıcıdan dönünce geri geliyor. Düğme yalnız gerçekten odaktayken vurgulanıyor.
+- Altyazı önbelleği dosya adları her sistemde geçerli.
+
 ## 0.5.2 · 17 Kasım 2026
 
 - Canlı yayın donma düzeltmesi: sağlayıcı akışı kapattığında ya da görüntü 8 saniye ilerlemediğinde oynatıcı kendiliğinden yeniden bağlanıyor ("Yeniden bağlanıyor" rozeti). Önceden görüntü donup kalıyordu.

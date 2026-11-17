@@ -11,8 +11,8 @@ android {
         applicationId = "dev.lumenara.tv"
         minSdk = 26
         targetSdk = 36
-        versionCode = 13
-        versionName = "0.5.2"
+        versionCode = 14
+        versionName = "0.5.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures { compose = true; buildConfig = true }
@@ -28,6 +28,7 @@ dependencies {
     implementation(project(":core:data"))
     implementation(project(":core:player"))
     implementation(project(":core:player-vlc"))
+    implementation("androidx.work:work-runtime-ktx:2.11.1")
     implementation("io.coil-kt:coil-svg:2.7.0")
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("com.google.zxing:core:3.5.3")
@@ -39,6 +40,7 @@ dependencies {
     implementation("androidx.tv:tv-material:1.1.0")
     implementation("androidx.tvprovider:tvprovider:1.1.0")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")

@@ -35,14 +35,17 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        Perf.mark("startup_activity")
         super.onCreate(savedInstanceState)
         // Start the model's launch snapshot before the first composition.
         val model = library
+        Perf.since("startup_activity", "startup_activity_model_ready")
         if (savedInstanceState == null) {
             handleSearchIntent(intent)
             handlePlaybackIntent(intent)
         }
-        setContent { LumenaraTheme { LibraryScreen(model) } }
+        Perf.mark("startup_screen")
+        setContent { LumenaraTheme { LibraryScreen(model, (application as LumenaraApp)::startWatchNext) } }
     }
 
     override fun onNewIntent(intent: Intent) {

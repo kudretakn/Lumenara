@@ -21,6 +21,7 @@ import dev.lumenara.data.Preferences
 import dev.lumenara.data.Repository
 import dev.lumenara.data.SourceSpec
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.*
@@ -151,6 +152,7 @@ class CinemaJourneyTest {
         MockWebServer().use { server ->
             server.start()
             val video = test.context.assets.open("lumenara-test.mp4").use { it.readBytes() }
+            val movieRequested = AtomicBoolean(false)
             val preferences = Preferences(context)
             val previousRecent = runBlocking { preferences.text("recent_live").first() }
             val previousEngine = runBlocking { preferences.text("engine", "Media3").first() }
@@ -196,6 +198,11 @@ class CinemaJourneyTest {
             server.dispatcher =
                 object : Dispatcher() {
                     override fun dispatch(request: RecordedRequest): MockResponse {
+                        if (request.requestUrl?.encodedPath?.startsWith("/movie/") == true) {
+                            movieRequested.set(true)
+                            return MockResponse().setHeader("Content-Type", "video/mp4")
+                                .setBody(Buffer().write(video))
+                        }
                         if (request.requestUrl?.encodedPath?.startsWith("/live/") == true)
                             return MockResponse().setHeader("Content-Type", "video/mp4")
                                 .setBody(Buffer().write(video))
@@ -282,10 +289,24 @@ class CinemaJourneyTest {
                         .fetchSemanticsNode().boundsInRoot.bottom <= screen.onRoot().fetchSemanticsNode().boundsInRoot.bottom)
                 capture("cinema-focus")
                 screen.ok()
+                val detailsOpenedAt = android.os.SystemClock.uptimeMillis()
                 node("Listem").assertExists()
-                node("Oynat").assertIsFocused()
+                waitFor(hasTestTag("details-play") and isFocused())
+                screen.onNodeWithTag("details-play").assertIsFocused()
                 capture("cinema-details")
                 capture("screens/details")
+                // Native DPAD_CENTER must reach the window after artwork has settled too.
+                screen.waitUntil(30_000) { android.os.SystemClock.uptimeMillis() - detailsOpenedAt >= 4500 }
+                screen.onNodeWithTag("details-play").assertIsFocused()
+                device.pressDPadCenter()
+                waitFor(hasContentDescription("Tam ekran oynatıcı"))
+                screen.waitUntil(30_000) { movieRequested.get() }
+                repeat(2) {
+                    if (screen.onAllNodesWithContentDescription("Tam ekran oynatıcı")
+                            .fetchSemanticsNodes().isNotEmpty()) screen.back()
+                }
+                waitFor(hasTestTag("details-play") and isFocused())
+                screen.onNodeWithTag("details-play").assertIsFocused()
                 select("Listem")
                 waitFor(hasText("Listem") and SemanticsMatcher.expectValue(SemanticsProperties.Selected, true))
                 screen.back()

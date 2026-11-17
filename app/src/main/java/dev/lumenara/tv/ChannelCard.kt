@@ -60,6 +60,7 @@ internal fun ChannelCard(
     operations: (() -> Unit)? = null,
     compact: Boolean = false,
     categoryName: String? = null,
+    programmes: List<dev.lumenara.data.Slot>? = null,
 ) {
     var restoreFocus by rememberSaveable(item.id) { mutableStateOf(false) }
     val requester = remember { FocusRequester() }
@@ -70,7 +71,7 @@ internal fun ChannelCard(
             restoreFocus = false
         }
     }
-    val slots = liveProgrammes(model, item, now)
+    val slots = programmes ?: liveProgrammes(model, item, now)
     val current = slots.firstOrNull { now >= it.start && now < it.end }
     val logo by produceState<String?>(null, item.id, item.logo) { value = model.repo.poster(item) }
     if (compact) {

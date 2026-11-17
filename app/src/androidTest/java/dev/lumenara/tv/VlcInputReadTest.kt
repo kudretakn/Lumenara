@@ -1,8 +1,10 @@
 package dev.lumenara.tv
 
 import android.system.Os
+import android.os.ParcelFileDescriptor
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.lumenara.vlc.VlcInput
+import java.io.DataInputStream
 import java.util.concurrent.TimeUnit
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
@@ -13,6 +15,43 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class VlcInputReadTest {
+    @Test(timeout = 10_000) fun cancellationKeepsPipeDescriptorOwnedUntilNativeRelease() {
+        MockWebServer().use { server ->
+            val prefix = ByteArray(188 * 8) { it.toByte() }
+            // Send a prefix, then leave the declared body unfinished on the open socket.
+            // The pump cannot finish naturally before cancellation; no sleeps or delays.
+            server.enqueue(MockResponse().setBody(Buffer().write(prefix))
+                .setHeader("Content-Length", prefix.size + 1))
+            server.start()
+            val context = InstrumentationRegistry.getInstrumentation().targetContext
+            val input = VlcInput.open(context, server.url("/live.ts").toString(), true)
+            try {
+                ParcelFileDescriptor.AutoCloseInputStream(
+                    ParcelFileDescriptor.dup(input.descriptor.fileDescriptor)
+                ).use { reader ->
+                    val actual = ByteArray(prefix.size)
+                    DataInputStream(reader).readFully(actual)
+                    assertArrayEquals(prefix, actual)
+                    input.cancel()
+                    input.cancel()
+                    // EOF acknowledges that the pump has exited and closed its writer.
+                    assertEquals(-1, reader.read())
+                }
+                // Native fd:// access duplicates the descriptor asynchronously after play().
+                // Even cancellation before that open must leave a valid descriptor to duplicate.
+                ParcelFileDescriptor.dup(input.descriptor.fileDescriptor).use { native ->
+                    assertTrue(native.fileDescriptor.valid())
+                    Os.fstat(native.fileDescriptor)
+                }
+                assertTrue(input.descriptor.fileDescriptor.valid())
+            } finally {
+                input.close()
+                input.close()
+            }
+            assertFalse(input.descriptor.fileDescriptor.valid())
+        }
+    }
+
     @Test fun fragmentedHttpReadsPreserveBytesAcrossSeeksAndEof() {
         val bytes = ByteArray(96 * 1024 + 37) { (it * 31 + 7).toByte() }
         MockWebServer().use { server ->

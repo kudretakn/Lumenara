@@ -346,11 +346,19 @@ internal fun VlcScreen(
                         else it.position.takeIf { position -> it.duration <= 0 || position < it.duration * .95 } ?: 0
                     } ?: 0
                 withContext(Dispatchers.IO) {
-                    input = VlcInput.open(context, address, source.allowHttp)
-                    // Native initialization and media setup can block for seconds.
+                    // Warm/await native code before opening a short-lived live HTTP stream.
+                    val runtimeStart = android.os.SystemClock.elapsedRealtime()
+                    android.util.Log.d("LumenaraVlc", "playback runtime acquire start")
                     val lib = VlcRuntime.get(context)
+                    android.util.Log.d("LumenaraVlc", "playback runtime acquired ms=${android.os.SystemClock.elapsedRealtime() - runtimeStart}")
+                    ensureActive()
                     val p = MediaPlayer(lib)
                     engine = p
+                    val inputStart = android.os.SystemClock.elapsedRealtime()
+                    android.util.Log.d("LumenaraVlc", "playback input open start")
+                    input = VlcInput.open(context, address, source.allowHttp)
+                    android.util.Log.d("LumenaraVlc", "playback input ready demux=${input!!.demux} ms=${android.os.SystemClock.elapsedRealtime() - inputStart}")
+                    ensureActive()
                     val media = Media(lib, input!!.descriptor.fileDescriptor)
                     try {
                         media.addOption(":demux=" + input!!.demux)
@@ -481,11 +489,12 @@ internal fun VlcScreen(
                                 }
                             }
                         } finally {
-                            // Close the input before stop to unblock native reads.
-                            try { input?.close() } finally {
-                                try { p?.stop() } finally {
-                                    p?.release()
-                                }
+                            // Cancel I/O to unblock reads, but keep the fd owned through
+                            // native release: play() opens/duplicates fd:// asynchronously.
+                            try { input?.cancel() } finally {
+                                try {
+                                    try { p?.stop() } finally { p?.release() }
+                                } finally { input?.close() }
                             }
                         }
                     }

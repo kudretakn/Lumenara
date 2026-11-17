@@ -100,6 +100,8 @@ class LiveQueryPlanTest {
                 dao.liveCount(source, category, "", "", hidden).first()
                 dao.liveIndex(source, rows[10].id, category, hidden = hidden)
                 dao.liveChannelOrder(source, hidden).first()
+                assertEquals(listOf(LiveCategoryCount("News", if (source.isEmpty()) 401 else 400)),
+                    dao.liveCategoryCounts(source, hidden).first())
             }
             for ((sql, args) in queries.toList()) {
                 val plan = db.openHelper.readableDatabase.query(
