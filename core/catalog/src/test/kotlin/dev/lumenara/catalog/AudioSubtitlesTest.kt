@@ -5,6 +5,17 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AudioSubtitlesTest {
+    @Test fun turkishProviderPrefixesAndQualityTagsDoNotChangeTheTitle() {
+        val titles = listOf("TR: Avatar (2009)", "Avatar 4K", "Avatar [Altyazılı]",
+            "[TR] Avatar [2160p]", "TR | Avatar - FHD Türkçe Dublaj", "[4K] TR: Avatar")
+        assertEquals(listOf("Avatar"), titles.map { productionName(it).title }.distinct())
+        assertEquals(1, titles.map { productionName(it, "2009").key() }.distinct().size)
+        assertEquals(AudioVersion.SUBTITLED, productionName(titles[2]).version)
+        assertEquals("Avatar: Suyun Yolu", productionName("TR: Avatar: Suyun Yolu 4K").title)
+        assertNotEquals(productionName(titles[0]).key(), productionName("Avatar: Suyun Yolu").key())
+        assertEquals("HDeniz", productionName("HDeniz").title)
+    }
+
     @Test fun providerVersionsHaveOneProductionIdentity() {
         val titles = listOf("Kıyı (Dublaj)", "Kıyı [TR Dublaj]", "Kıyı - Türkçe Dublaj", "Kıyı (Altyazılı)", "Kıyı TR Altyazı")
         assertEquals(1, titles.map { productionName(it, "2024").key() }.distinct().size)

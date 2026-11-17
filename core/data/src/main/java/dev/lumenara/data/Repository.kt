@@ -57,7 +57,8 @@ data class LiveWindow(val rows: List<Item>, val revision: Long, val hidden: List
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class Repository private constructor(private val context: Context) {
     private val db = Room.databaseBuilder(context, LibraryDb::class.java, "lumenara.db")
-        .addMigrations(LibraryDb.MIGRATION_7_8, LibraryDb.MIGRATION_8_9, LibraryDb.MIGRATION_9_10)
+        .addMigrations(LibraryDb.MIGRATION_7_8, LibraryDb.MIGRATION_8_9, LibraryDb.MIGRATION_9_10,
+            LibraryDb.MIGRATION_10_11)
         .build()
     val library = db.library()
     val guide = db.guide()
@@ -282,15 +283,13 @@ class Repository private constructor(private val context: Context) {
         val base = production(item)
         val choices = versions(base)
         val preferred = preferences.text("version_${versionPreferenceIdentity(base)}").first()
-        val version = choices.firstOrNull { productionName(it.title, it.year).version.name == preferred }
-            ?: choices.firstOrNull { productionName(it.title, it.year).version == AudioVersion.DUBBED }
-            ?: choices.firstOrNull { it.id == base.id } ?: base
+        val version = choices.preferredVersion(preferred, base)
         return resolveVersion(item, version)
     }
 
     suspend fun chooseVersion(item: Item, version: Item): Item {
         val resolved = resolveVersion(item, version)
-        preferences.set("version_${versionPreferenceIdentity(item)}", productionName(version.title, version.year).version.name)
+        preferences.set("version_${versionPreferenceIdentity(item)}", "id:${version.id}")
         return resolved
     }
 
