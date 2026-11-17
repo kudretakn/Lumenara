@@ -198,7 +198,7 @@ private fun EpisodeShelf(model: LibraryModel, episodes: List<Item>, all: List<It
     }
     LazyRow(Modifier.testTag("episode-list").focusRestorer().focusGroup(), state = list,
         contentPadding = PaddingValues(8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        if (loading) items(4) { LoadingCard(Modifier.width(140.dp).height(120.dp)) }
+        if (loading) items(4) { LoadingCard(Modifier.width(180.dp).aspectRatio(16f / 9f)) }
         items(episodes, key = { it.id }) { ep ->
             val mark = marks[ep.id]
             val duration = mark?.duration ?: 0
@@ -209,7 +209,7 @@ private fun EpisodeShelf(model: LibraryModel, episodes: List<Item>, all: List<It
             if (target == ep.id) LaunchedEffect(target) {
                 withFrameNanos { }; focus.requestFocus(); target = ""; restored()
             }
-            Column(Modifier.width(140.dp)) {
+            Column(Modifier.width(180.dp)) {
                 Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).testTag("episode-artwork-${ep.id}")) {
                     FocusCard(onClick = { play(ep, all) }, onLongClick = { actions(ep) },
                         modifier = Modifier.fillMaxSize().testTag("episode-${ep.id}").focusRequester(focus)
@@ -221,7 +221,7 @@ private fun EpisodeShelf(model: LibraryModel, episodes: List<Item>, all: List<It
                 }
                 Row(Modifier.padding(top = Spacing.unit), verticalAlignment = Alignment.CenterVertically) {
                     Text("${name.episode}. ${name.title.displayTitle()}", Modifier.weight(1f), style = LumenType.label,
-                        color = LumenColors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        color = LumenColors.textPrimary, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     if (done) LumenIcon(LumenIcon.Check, "İzlendi", size = IconSizes.meta)
                 }
                 if (duration > 1) Text("${duration / 60_000} dk", style = LumenType.meta)

@@ -166,7 +166,7 @@ internal fun SearchScreen(
             }
             if (loading) item {
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    items(8) { LoadingCard(Modifier.width(110.dp).aspectRatio(2f / 3f)) }
+                    items(8) { LoadingCard(Modifier.width(140.dp).aspectRatio(2f / 3f)) }
                 }
             }
             if (!loading && programs.isEmpty() && shelves.all { it.second.isEmpty() }) item { Text("Eşleşen içerik yok.", color = LumenColors.textSecondary, style = LumenType.body) }
@@ -280,7 +280,7 @@ private fun SearchResultCard(model: LibraryModel, item: Item, focus: () -> Unit,
     LaunchedEffect(Unit) {
         if (restoreFocus) { withFrameNanos { }; requester.requestFocus(); restoreFocus = false }
     }
-    Column(Modifier.width(110.dp)) {
+    Column(Modifier.width(140.dp)) {
         // The resting slot is measured separately from the 1.06 focus transform.
         Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f).testTag("search-artwork-${item.id}")) {
             FocusCard({ restoreFocus = true; click() }, Modifier.fillMaxSize().focusRequester(requester)
@@ -293,7 +293,7 @@ private fun SearchResultCard(model: LibraryModel, item: Item, focus: () -> Unit,
             }
         }
         Text(item.title, Modifier.padding(top = 8.dp), style = LumenType.label,
-            maxLines = 1, overflow = TextOverflow.Ellipsis)
+            maxLines = 2, overflow = TextOverflow.Ellipsis)
         Text(item.year.ifBlank { item.category }, style = LumenType.meta,
             maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
@@ -317,7 +317,7 @@ private fun ProgramCard(hit: ProgramHit, channel: Item, now: Long, focus: () -> 
         else -> day.format(DateTimeFormatter.ofPattern("dd.MM"))
     }
     val time = DateTimeFormatter.ofPattern("HH:mm").withZone(zone)
-    FocusCard({ restoreFocus = true; click() }, Modifier.width(110.dp).aspectRatio(2f / 3f).focusRequester(requester)
+    FocusCard({ restoreFocus = true; click() }, Modifier.width(140.dp).aspectRatio(2f / 3f).focusRequester(requester)
         .onFocusChanged { if (it.isFocused) focus() }.testTag("search-program-${channel.id}-${slot.start}")) {
         Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(slot.title, style = LumenType.label, maxLines = 2, overflow = TextOverflow.Ellipsis)

@@ -116,7 +116,7 @@ class DenseGridTest {
         }
     }
 
-    @Test fun searchFitsSevenPortraitCardsInsideSafeArea() {
+    @Test fun searchFitsFiveWiderPortraitCardsInsideSafeArea() {
         val repo = Repository.get(InstrumentationRegistry.getInstrumentation().targetContext)
         val source = "dense-search-${System.nanoTime()}"
         val rows = List(10) { index ->
@@ -141,16 +141,16 @@ class DenseGridTest {
             }
             screen.onNodeWithTag("search-input").performTextReplacement("Film")
             screen.waitUntil(10_000) {
-                screen.onAllNodesWithTag("search-artwork-${rows[6].id}").fetchSemanticsNodes().isNotEmpty()
+                screen.onAllNodesWithTag("search-artwork-${rows[4].id}").fetchSemanticsNodes().isNotEmpty()
             }
             val viewport = screen.onNodeWithTag("search-shelf-Filmler").fetchSemanticsNode().boundsInRoot
             val density = screen.activity.resources.displayMetrics.density
-            rows.take(7).forEach { item ->
+            rows.take(5).forEach { item ->
                 val card = screen.onNodeWithTag("search-artwork-${item.id}").assertIsDisplayed()
                     .fetchSemanticsNode().boundsInRoot
-                assertEquals("Arama kartı genişliği", 110f, card.width / density, 1f)
-                assertEquals("Arama kartı yüksekliği", 165f, card.height / density, 1f)
-                assertTrue("Yedi kart ilk satırda tamamen görünmeli",
+                assertEquals("Arama kartı genişliği", 140f, card.width / density, 1f)
+                assertEquals("Arama kartı yüksekliği", 210f, card.height / density, 1f)
+                assertTrue("Beş kart ilk satırda tamamen görünmeli",
                     card.left >= viewport.left && card.right <= viewport.right &&
                         card.top >= viewport.top && card.bottom <= viewport.bottom)
             }

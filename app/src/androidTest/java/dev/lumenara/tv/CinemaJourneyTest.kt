@@ -354,7 +354,7 @@ class CinemaJourneyTest {
                 val searchArtwork = screen.onNode(hasContentDescription("Açık Deniz") and
                     hasAnyAncestor(hasTestTag("search-shelf-Filmler"))).fetchSemanticsNode().boundsInRoot
                 val searchDensity = screen.onNodeWithTag("section-Ara").fetchSemanticsNode().boundsInRoot.left / 48f
-                assertEquals("Arama kartı genişliği", 110f, searchArtwork.width / searchDensity, 1f)
+                assertEquals("Arama kartı genişliği", 140f, searchArtwork.width / searchDensity, 1f)
                 assertEquals("Arama afişi 2:3 kalmalı", 2f / 3f, searchArtwork.width / searchArtwork.height, .02f)
                 waitAbsent(hasTestTag("channel-shelf-Kanallar"))
                 screen.onNodeWithTag("channel-shelf-Kanallar").assertDoesNotExist()
