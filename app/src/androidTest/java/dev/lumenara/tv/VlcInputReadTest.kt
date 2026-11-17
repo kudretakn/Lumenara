@@ -1,6 +1,7 @@
 package dev.lumenara.tv
 
 import android.system.Os
+import android.os.ParcelFileDescriptor
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.lumenara.vlc.VlcInput
 import java.util.concurrent.TimeUnit
@@ -13,6 +14,30 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class VlcInputReadTest {
+    @Test fun cancellationKeepsPipeDescriptorOwnedUntilNativeRelease() {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody(Buffer().write(ByteArray(188 * 8))))
+            server.start()
+            val context = InstrumentationRegistry.getInstrumentation().targetContext
+            val input = VlcInput.open(context, server.url("/live.ts").toString(), true)
+            try {
+                input.cancel()
+                input.cancel()
+                // Native fd:// access duplicates the descriptor asynchronously after play().
+                // Even cancellation before that open must leave a valid descriptor to duplicate.
+                ParcelFileDescriptor.dup(input.descriptor.fileDescriptor).use { native ->
+                    assertTrue(native.fileDescriptor.valid())
+                    Os.fstat(native.fileDescriptor)
+                }
+                assertTrue(input.descriptor.fileDescriptor.valid())
+            } finally {
+                input.close()
+                input.close()
+            }
+            assertFalse(input.descriptor.fileDescriptor.valid())
+        }
+    }
+
     @Test fun fragmentedHttpReadsPreserveBytesAcrossSeeksAndEof() {
         val bytes = ByteArray(96 * 1024 + 37) { (it * 31 + 7).toByte() }
         MockWebServer().use { server ->

@@ -241,6 +241,7 @@ internal fun Home(
             Perf.since("startup", "startup_hub_first_draw")
         }
     }
+    WarmVlcAfterHubFrame(counts.all { it != null })
     val update by model.update.collectAsStateWithLifecycle()
     var focused by rememberSaveable { mutableStateOf(lastCard) }
     val entry = remember { FocusRequester() }

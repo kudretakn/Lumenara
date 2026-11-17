@@ -24,9 +24,11 @@ private constructor(
     private val release: () -> Unit,
 ) : Closeable {
     private val closed = AtomicBoolean(false)
+    private val cancelled = AtomicBoolean(false)
 
-    override fun close() {
-        if (!closed.compareAndSet(false, true)) return
+    /** Unblock native reads without invalidating an fd VLC may still be opening. */
+    fun cancel() {
+        if (!cancelled.compareAndSet(false, true)) return
         // Releasing an OkHttp response may perform socket I/O. Callers can be on
         // the main thread, so dispatch the release when needed.
         if (Looper.myLooper() == Looper.getMainLooper()) {
@@ -34,7 +36,12 @@ private constructor(
         } else {
             release()
         }
-        descriptor.close()
+    }
+
+    /** The owner must retain this descriptor until the native player has been released. */
+    override fun close() {
+        if (!closed.compareAndSet(false, true)) return
+        try { cancel() } finally { descriptor.close() }
     }
 
     companion object {
@@ -66,7 +73,10 @@ private constructor(
                         ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]).use { out ->
                             try {
                                 it.body?.byteStream()?.copyTo(out)
-                            } catch (_: IOException) {}
+                            } catch (e: IOException) {
+                                if (!call.isCanceled()) android.util.Log.w("LumenaraVlc",
+                                    "TS input read failed: ${e.javaClass.simpleName}")
+                            }
                         }
                     }
                 }
