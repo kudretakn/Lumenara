@@ -11,6 +11,8 @@ Kişisel kullanım için Android TV IPTV oynatıcısı (Kotlin, Compose for TV, 
   - Çağrı biçimi: `codex exec -m <model> -c model_reasoning_effort='"<seviye>"' -s workspace-write -C <dizin> -o <sonuç> - < istem.md`. İstem dosyadan verilir, stdin kapalı olur.
   - Codex commit ya da push yapmaz.
   - Codex'in bildirdiği düzeltmenin diskte olduğunu her zaman doğrula.
+- **Ekip düzeni (kullanıcı isteği, 15 Kasım 2026):** Claude ekip lideridir: işi böler, her parçayı ayrı bir Codex ajanına verir, sonuçları inceler, birleştirir, derler ve test eder. Kod düzeltmeleri dahil her iş ayrı bir ajana gider. Lider kodu kendisi yazmaz; yalnız birleştirme çakışması ve tek satırlık mekanik düzeltme istisnadır. Ajanın modeli işin zorluğuna göre seçilir: mekanik iş `gpt-6-luna` low, orta iş luna medium ya da sol medium, çok dosyalı, kök neden arama ya da güvenlik işi sol high. Sol high'ın çözemediği ya da çok zor işler `gpt-6-astra`'ya gider (kullanıcı kararı, 15 Kasım 2026).
+- **Claude tarafı da alt ajanlarla (kullanıcı isteği, 15 Kasım 2026):** Claude'un yapması gereken işler de alt ajanlara verilir: diff inceleme, CI loglarından kök neden çıkarma, spesifikasyon ya da tasarım taslağı yazma, araştırma. Lider bu işleri kendi yapmaz, Claude alt ajanlarına (Agent aracı) dağıtır. Model işin zorluğuna göre seçilir: basit ve özetleme işi `haiku`, orta iş `sonnet`, zor analiz ya da mimari iş `opus`. Lider yalnız koordinasyonu, kararları, birleştirmeyi, derleme/test başlatmayı, PR/merge/yayın işini ve kullanıcıyla iletişimi yürütür.
 - **Paralellik (kullanıcı isteği, 15 Kasım 2026):** İşleri küçük, bağımsız parçalara bölüp 8–12 Codex ajanıyla paralel çalıştır. Her ajan ayrı git worktree'de çalışır (`../lumenara-wt/<ad>`) ve Gradle çalıştırmaz. Derleme ve testleri Claude sırayla yapar, çünkü sunucuda 2 CPU var. Her ajanın modeli kendi görevinin zorluğuna göre seçilir.
 - **Model seçimi:** Basit işte `gpt-6-luna` low/medium, çok dosyalı ya da kritik işte `gpt-6.1-sol` medium/high. İstem kısa olur: dosya yolları, kabul ölçütleri ve "en fazla N satır rapor" isteği içerir. Token tasarrufu her iki tarafta da önemli.
 - **Merge:** CI'daki **tüm** işler (`build` + `device`) pass olmadan merge yapılmaz; tam `gh pr checks` çıktısına bak. Hepsi yeşilse sormadan merge et. `main` korumalı.
@@ -32,4 +34,9 @@ Kişisel kullanım için Android TV IPTV oynatıcısı (Kotlin, Compose for TV, 
   - Uygulama çökerse kalan testler yine çalışır.
   - Hata dökümü için: `gh run download <run-id> -n android-tv-device-artifacts`, sonra `summary.txt`, `instrument*.txt` ve `logcat.txt` dosyalarına bak.
 - Yayın: `v*` etiketi `.github/workflows/release.yml` iş akışını tetikler. İş akışı APK'yı imzalar, sertifikayı kontrol eder ve `kudretakn/Lumenara-releases` deposuna yayınlar. Sürüm notları CHANGELOG'daki `## <sürüm> · <tarih>` bölümünden alınır.
+- **Tuzaklar (öğrenilenler):**
+  - Testlerde sabit tarih kullanma; zamanı `System.currentTimeMillis()`'ten türet. EPG saklama penceresi (12 saat) sabit tarihli bir fixture'ı zamanla sildi (BackupTest, 17 Kasım).
+  - Test sınıfları JUnit 4 `@Test` olmalı; `object` + `main` testleri Gradle'da "no tests discovered" verir. Sınıf içinde `const val` olmaz.
+  - Codex sandbox'ı git worktree'lerin ortak `.git` klasörüne yazamaz. Birleştirme işlerinde ajan ayrı bir klonda çalışıp bundle üretir; lider bundle'ı içe alır.
+  - GitHub'ın kimliksiz API sınırı (saatte 60 istek, IP başına) sürüm kontrolünü 403 ile düşürebilir; güncelleyici bunu açık mesajla gösterir ve web sayfasından yedek yol dener (0.5.1).
 - Planlar: `docs/UI-REDESIGN.md` (bitti), `docs/USABILITY.md` (U1, S, A, U2, U3), `ROADMAP.md`.
