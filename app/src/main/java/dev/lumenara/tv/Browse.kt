@@ -453,7 +453,6 @@ private const val POSTER_PAGE_SIZE = POSTER_GRID_COLUMNS * 10
 private fun PosterGridContent(model: LibraryModel, section: String, source: String, kind: String,
     category: String, shelf: String, categoryTitle: String, open: (Item) -> Unit,
     play: (Item, List<Item>) -> Unit) {
-    var limit by rememberSaveable { mutableIntStateOf(POSTER_PAGE_SIZE) }
     var advanced by rememberSaveable { mutableStateOf(false) }
     var year by rememberSaveable { mutableStateOf("") }
     var genre by rememberSaveable { mutableStateOf("") }
@@ -471,13 +470,18 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
             restoreFilterFocus = false
         }
     }
-    val result by remember(source, kind, shelf, category, limit, year, genre, language, rating) {
-        model.repo.browse(source, kind, category, "", shelf, limit, year, genre, language, rating.toDouble())
-    }.collectAsLoadingState()
-    val rows = result.orEmpty()
-    val loading = result == null
-    LaunchedEffect(rows.isNotEmpty()) {
-        if (rows.isNotEmpty()) {
+    var lastPoster by rememberSaveable(source, category, shelf) { mutableStateOf<String?>(null) }
+    val restoreOnce = remember { booleanArrayOf(true) }
+    val restoreId = remember(source, kind, category, shelf, year, genre, language, rating) {
+        lastPoster.takeIf { restoreOnce[0] }.also { restoreOnce[0] = false }
+    }
+    val paged = rememberCatalogPages(model, source, kind, category, shelf = shelf,
+        year = year, genre = genre, language = language, minRating = rating.toDouble(),
+        pageSize = POSTER_PAGE_SIZE, columns = POSTER_GRID_COLUMNS, returnId = restoreId)
+    val loading = !paged.firstPageLoaded
+    val count = paged.count
+    LaunchedEffect(paged, loading) {
+        if (!loading && count > 0) {
             withFrameNanos { }; withFrameNanos { }
             Perf.since("category", "category_grid_first_draw")
         }
@@ -489,27 +493,29 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
     val posterWidth = with(density) { if (gridWidth == 0) 0 else ((gridWidth - (POSTER_GRID_COLUMNS - 1) * Spacing.cardGap.roundToPx()) / POSTER_GRID_COLUMNS).coerceAtLeast(1) }
     val posterHeight = (posterWidth * 1.5f).toInt()
     val grid = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
-    var lastPoster by rememberSaveable(source, category, shelf) { mutableStateOf<String?>(null) }
     val posterFocus = remember { FocusRequester() }
-    var positioned by remember(category, shelf) { mutableStateOf(false) }
-    var requestPending by remember { mutableStateOf(true) }
-    val restoreId = remember { lastPoster }
-    val posterTarget = rows.indexOfFirst { it.id == restoreId }.coerceAtLeast(0)
-    LaunchedEffect(rows) {
-        if (!positioned && rows.isNotEmpty()) {
+    var positioned by remember(paged) { mutableStateOf(false) }
+    var requestPending by remember(paged) { mutableStateOf(true) }
+    val posterTarget = paged.anchor ?: 0
+    LaunchedEffect(paged, loading, posterTarget) {
+        if (!positioned && !loading && paged[posterTarget] != null) {
             grid.scrollToItem(posterTarget)
             positioned = true
         }
     }
-    PrefetchArtwork(model, grid, rows, columns = POSTER_GRID_COLUMNS, channelSpan = 2)
+    LaunchedEffect(paged, positioned) {
+        if (positioned) snapshotFlow { grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index }
+            .filterNotNull().collect { paged.visible(it) }
+    }
+    PrefetchArtwork(model, grid, emptyList(), columns = POSTER_GRID_COLUMNS, channelSpan = 2, paged = paged)
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { wallClockTicks(30_000).collect { now = it } }
     BackHandler(advanced) { closeFilters() }
-    LaunchedEffect(rows, loading) {
-        if (!loading && rows.isEmpty() && kind in listOf("MOVIE", "SERIES") && !advanced) filterButton.requestFocus()
+    LaunchedEffect(paged, count, loading, advanced) {
+        if (!loading && count == 0 && kind in listOf("MOVIE", "SERIES") && !advanced) filterButton.requestFocus()
     }
     val emptyFocus = remember { FocusRequester() }
-    LaunchedEffect(rows, loading) { if (!loading && rows.isEmpty() && kind.isEmpty()) emptyFocus.requestFocus() }
+    LaunchedEffect(paged, count, loading) { if (!loading && count == 0 && kind.isEmpty()) emptyFocus.requestFocus() }
     val panelFocus = remember { FocusRequester() }
     // Keep the filter layer over the content instead of consuming another Column slot.
     Box(Modifier.fillMaxSize()) {
@@ -519,7 +525,7 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
             Row(verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(section, style = LumenType.headline, color = LumenColors.textPrimary)
-                Text("${rows.size}${if (rows.size >= limit) "+" else ""} " + if (kind == "SERIES") "dizi" else "film",
+                Text(if (paged.countLoaded) "$count ${if (kind == "SERIES") "dizi" else "film"}" else "",
                     Modifier.weight(1f), style = LumenType.meta)
                 if (kind == "MOVIE" || kind == "SERIES") {
                     val count = listOf(year, genre, language).count { it.isNotEmpty() } +
@@ -535,14 +541,15 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
             androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
                 columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(POSTER_GRID_COLUMNS),
                 state = grid,
-                modifier = Modifier.weight(1f).onSizeChanged { gridWidth = it.width }.testTag("poster-grid").focusRestorer().focusGroup(),
+                modifier = Modifier.weight(1f).onSizeChanged { gridWidth = it.width }.testTag("poster-grid")
+                    .semantics { pagingWindow = pagingDescription(paged) }.focusRestorer().focusGroup(),
                 // TV safe area plus the title/year below the focusable poster.
                 contentPadding = PaddingValues(top = 8.dp, bottom = 64.dp),
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
                 verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
                 if (loading) loadingCards(224.dp)
-                if (!loading && rows.isEmpty()) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                if (!loading && count == 0) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
                     Column {
                         Text("Eşleşen içerik yok.", color = LumenColors.textSecondary)
                         if (kind.isEmpty()) {
@@ -551,27 +558,25 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
                         }
                     }
                 }
-                items(rows.size, key = { rows[it].id }, span = { index ->
-                    androidx.compose.foundation.lazy.grid.GridItemSpan(if (rows[index].kind == "LIVE") 2 else 1)
+                items(count, key = { it }, span = { index ->
+                    // The skinny type index remains valid after a page's Item rows are evicted.
+                    androidx.compose.foundation.lazy.grid.GridItemSpan(if (paged.isLiveSlot(index)) 2 else 1)
                 }) { index ->
-                    val entry = rows[index]
-                    if (index == posterTarget && positioned && requestPending) LaunchedEffect(Unit) {
+                    val entry = paged[index]
+                    if (entry != null && index == posterTarget && positioned && requestPending && !advanced) LaunchedEffect(Unit) {
                         withFrameNanos { }
                         posterFocus.requestFocus()
                         requestPending = false
                     }
                     val cardModifier = Modifier.fillMaxWidth()
                         .then(if (index == posterTarget) Modifier.focusRequester(posterFocus) else Modifier)
-                        .onFocusChanged { if (it.isFocused) lastPoster = entry.id }
-                    if (entry.kind == "LIVE")
-                        ChannelCard(model, entry, now, { play(entry, rows.filter { it.kind == "LIVE" }) }, { lastPoster = it.id },
-                            modifier = cardModifier, operations = { open(entry) })
-                    else GridPoster(model, entry, open, { lastPoster = it.id }, modifier = cardModifier,
-                        artworkHttp = entry.source in httpSources,
-                        artworkWidth = posterWidth, artworkHeight = posterHeight)
-                }
-                if (rows.size >= limit) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
-                    Button(onClick = { limit += POSTER_PAGE_SIZE }) { Text("Devamını göster") }
+                        .onFocusChanged { if (it.hasFocus) paged.focused(index) }
+                    if (paged.isLiveSlot(index)) ChannelCard(model, entry, now,
+                        { entry?.let { play(it, paged.loaded().filter { it.kind == "LIVE" }) } }, { lastPoster = it.id },
+                        modifier = cardModifier.testTag("poster-slot-$index"), operations = { entry?.let(open) })
+                    else GridPoster(model, entry, open, { lastPoster = it.id },
+                        modifier = cardModifier.testTag("poster-slot-$index"),
+                        artworkHttp = entry?.source in httpSources, artworkWidth = posterWidth, artworkHeight = posterHeight)
                 }
             }
         }
@@ -602,21 +607,23 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
 
 /** Grid captions reserve their space so a focus change never moves the next row. */
 @Composable
-private fun GridPoster(model: LibraryModel, item: Item, open: (Item) -> Unit,
+private fun GridPoster(model: LibraryModel, item: Item?, open: (Item) -> Unit,
     focus: (Item) -> Unit, modifier: Modifier, artworkHttp: Boolean,
     artworkWidth: Int, artworkHeight: Int) {
     var focused by remember { mutableStateOf(false) }
+    LaunchedEffect(item?.id, focused) { if (focused) item?.let(focus) }
     Column(modifier) {
-        FocusCard(onClick = { open(item) }, modifier = Modifier.fillMaxWidth()
-            .semantics { contentDescription = item.title }
-            .onFocusChanged { focused = it.isFocused; if (it.isFocused) focus(item) }) {
-            Poster(model, item, Modifier.fillMaxWidth().aspectRatio(2f / 3f),
+        FocusCard(onClick = { item?.let { focus(it); open(it) } }, modifier = Modifier.fillMaxWidth()
+            .semantics { contentDescription = item?.title ?: "Yükleniyor" }
+            .onFocusChanged { focused = it.isFocused; if (it.isFocused) item?.let(focus) }) {
+            if (item == null) LoadingCard(Modifier.fillMaxWidth().aspectRatio(2f / 3f))
+            else Poster(model, item, Modifier.fillMaxWidth().aspectRatio(2f / 3f),
                 allowHttp = artworkHttp, width = artworkWidth, height = artworkHeight)
         }
         Column(Modifier.padding(top = Spacing.unit).alpha(if (focused) 1f else 0f)) {
-            Text(item.title.displayTitle(), style = LumenType.cardTitle, color = LumenColors.textPrimary,
+            Text(item?.title?.displayTitle().orEmpty(), style = LumenType.cardTitle, color = LumenColors.textPrimary,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(item.year, style = LumenType.meta, maxLines = 1)
+            Text(item?.year.orEmpty(), style = LumenType.meta, maxLines = 1)
         }
     }
 }

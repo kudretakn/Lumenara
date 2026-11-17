@@ -105,6 +105,25 @@ class Repository private constructor(private val context: Context) {
                year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0) =
         hidden.flatMapLatest { library.browse(source, kind, category, query, shelf, limit, year, genre, language, minRating, it) }
 
+    fun browsePage(source: String, kind: String, category: String, query: String, shelf: String,
+        limit: Int, offset: Int, year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0) =
+        hidden.flatMapLatest { library.browsePage(source, kind, category, query, shelf, limit, offset,
+            year, genre, language, minRating, it) }
+
+    fun browseCount(source: String, kind: String, category: String, query: String, shelf: String,
+        year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0) =
+        hidden.flatMapLatest { library.browseTotal(source, kind, category, query, shelf,
+            year, genre, language, minRating, it) }
+
+    suspend fun browseIndex(source: String, kind: String, category: String, query: String, shelf: String,
+        id: String, year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0) =
+        library.browseIndex(source, kind, category, query, shelf, id, year, genre, language, minRating, hidden.first())
+
+    fun browseKinds(source: String, kind: String, category: String, query: String, shelf: String,
+        year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0) =
+        hidden.flatMapLatest { library.browseKinds(source, kind, category, query, shelf,
+            year, genre, language, minRating, it) }
+
     fun shelfCount(source: String, kind: String, shelf: String) =
         hidden.flatMapLatest { library.shelfCount(source, kind, shelf, it) }
 

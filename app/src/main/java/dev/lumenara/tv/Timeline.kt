@@ -21,6 +21,7 @@ import dev.lumenara.data.*
 import java.time.*
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.flowOf
 
 @Composable
 internal fun Timeline(
@@ -32,7 +33,6 @@ internal fun Timeline(
 ) {
     val entry = remember { FocusRequester() }
     var returnChannel by rememberSaveable { mutableStateOf<String?>(null) }
-    var restorePending by remember { mutableStateOf(true) }
     val list = rememberLazyListState()
     LaunchedEffect(Unit) { if (returnChannel == null) { withFrameNanos { }; entry.requestFocus() } }
     var window by rememberSaveable(stateSaver = Saver<ZonedDateTime, Long>(
@@ -44,6 +44,7 @@ internal fun Timeline(
     var selection by remember(window, query) { mutableStateOf<Pair<Item, Slot>?>(null) }
     val restoreId = remember { returnChannel }
     val channels = rememberLivePages(model, source, returnId = restoreId)
+    var restorePending by remember(channels) { mutableStateOf(true) }
     var positioned by remember(channels) { mutableStateOf(false) }
     LaunchedEffect(channels[channels.anchor ?: 0] != null) {
         if (channels[channels.anchor ?: 0] != null) {
@@ -51,7 +52,7 @@ internal fun Timeline(
             Perf.since("category", "category_grid_first_draw")
         }
     }
-    LaunchedEffect(channels.anchor, channels.count, channels[channels.anchor ?: 0]) {
+    LaunchedEffect(channels, channels.anchor, channels.count, channels[channels.anchor ?: 0]) {
         if (!positioned) {
             channels.anchor?.let {
                 if (it < channels.count && channels[it] != null) {
@@ -62,7 +63,8 @@ internal fun Timeline(
         }
     }
     LaunchedEffect(channels, positioned) {
-        if (positioned) snapshotFlow { list.firstVisibleItemIndex }.collect { channels.focused(it) }
+        if (positioned) snapshotFlow { list.layoutInfo.visibleItemsInfo.lastOrNull()?.index }
+            .collect { it?.let(channels::visible) }
     }
     val from = window.toInstant().toEpochMilli()
     val to = window.plusHours(2).toInstant().toEpochMilli()
@@ -129,20 +131,16 @@ internal fun Timeline(
         ) {
             items(channels.count, key = { it }) { index ->
                 val channel = channels[index]
-                if (channel == null) {
-                    Spacer(Modifier.fillMaxWidth().height(35.dp))
-                    return@items
-                }
                 val channelFocus = remember { FocusRequester() }
-                if (channel.id == returnChannel && restorePending && positioned) LaunchedEffect(Unit) {
+                if (channel != null && channel.id == returnChannel && restorePending && positioned) LaunchedEffect(Unit) {
                     withFrameNanos { }; channelFocus.requestFocus(); restorePending = false
                 }
                 val mapping by
-                    remember(channel.id) { model.repo.guide.mapping(channel.id) }
+                    remember(channel?.id) { channel?.let { model.repo.guide.mapping(it.id) } ?: flowOf(null) }
                         .collectAsStateWithLifecycle(null)
                 val slots by
-                    remember(channel.id, mapping, from, query) {
-                            model.repo.guide.guide(
+                    remember(channel?.id, mapping, from, query) {
+                            if (channel == null) flowOf(emptyList<Slot>()) else model.repo.guide.guide(
                                 channel.source,
                                 mapping?.channel ?: channel.tvgId,
                                 searchable(channel.title),
@@ -153,15 +151,15 @@ internal fun Timeline(
                             )
                         }
                         .collectAsStateWithLifecycle(emptyList())
-                if (query.isBlank() || slots.isNotEmpty())
+                if (channel == null || query.isBlank() || slots.isNotEmpty())
                     Row {
                         Surface(
-                            onClick = { returnChannel = channel.id; open(channel) },
+                            onClick = { channel?.let { returnChannel = it.id; open(it) } },
                             modifier = Modifier.focusRequester(channelFocus).width(108.dp).height(35.dp)
                                 .onFocusChanged { if (it.isFocused) channels.focused(index) },
                         ) {
                             Text(
-                                channel.title,
+                                channel?.title ?: "Yükleniyor",
                                 Modifier.padding(5.dp),
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
@@ -176,7 +174,7 @@ internal fun Timeline(
                                     (minOf(to, slot.end) - maxOf(from, slot.start)).toFloat() /
                                         (to - from)
                                 Surface(
-                                    onClick = { selection = channel to slot },
+                                    onClick = { channel?.let { selection = it to slot } },
                                     modifier =
                                         Modifier.onFocusChanged { if (it.isFocused) channels.focused(index) }
                                             .offset(x = maxWidth * left)

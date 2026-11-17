@@ -45,7 +45,6 @@ internal fun LiveScreen(
     var category by rememberSaveable(source) { mutableStateOf<String?>(null) }
     var categoryTitle by rememberSaveable(source) { mutableStateOf("") }
     var query by rememberSaveable(source, category) { mutableStateOf("") }
-    var limit by rememberSaveable(source, category, query) { mutableIntStateOf(LIVE_PAGE_SIZE) }
     var focusedId by rememberSaveable(source) { mutableStateOf<String?>(null) }
     val pages = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -102,30 +101,32 @@ internal fun LiveScreen(
             val provider = category?.removePrefix("provider:")
                 .takeIf { category?.startsWith("provider:") == true }.orEmpty()
             val restoreId = remember(source, category, query) { returnToChannel ?: focusedId }
-            val paged = if (category !in listOf("airing", "recent"))
-                rememberLivePages(model, source, provider, searchable(query),
-                    if (category == "favorite") "favorite" else "", restoreId) else null
-            val rows by remember(source, category, query, limit) {
+            val airingIds by remember(source, category, query) {
                 if (category == "airing") model.repo.nowAiring(source, snapshotFlow { now }, searchable(query))
-                    .onEach { if (query.isBlank()) airingCount = it.size }.flatMapLatest { hits ->
-                    val ids = hits.take(limit).map { it.itemId }
-                    model.repo.liveByIds(source, ids).map { items ->
-                        val byId = items.associateBy { it.id }
-                        ids.mapNotNull { byId[it] }
-                    }
-                } else if (category == "recent") model.repo.recentLive(source).map { rows ->
-                    rows.filter { it.search.contains(searchable(query)) }.take(limit)
+                    .onEach { if (query.isBlank()) airingCount = it.size }.map { hits -> hits.map { it.itemId }.distinct() }
+                else flowOf(emptyList())
+            }.collectAsLoadingState()
+            val paged = when (category) {
+                "airing" -> rememberAiringPages(model, source, query, airingIds, restoreId)
+                "recent" -> null
+                else -> rememberLivePages(model, source, provider, searchable(query),
+                    if (category == "favorite") "favorite" else "", restoreId)
+            }
+            val rows by remember(source, category, query) {
+                if (category == "recent") model.repo.recentLive(source).map { rows ->
+                    rows.filter { it.search.contains(searchable(query)) }
                 } else flowOf(emptyList())
             }.collectAsLoadingState()
             pages.SaveableStateProvider("channels-$category") {
-                LiveChannelGrid(model, categoryTitle, rows, source, now, query, { query = it },
-                    limit, { limit += LIVE_PAGE_SIZE }, returnToChannel ?: focusedId, { item ->
+                LiveChannelGrid(model, categoryTitle, rows, source, now, query, { focusedId = null; query = it },
+                    returnToChannel ?: focusedId, { item ->
                         focusedId = item.id
                         numberSource = item.source
                     }, onChannelFocusRestored, open, play, paged, entries.orEmpty().filter { it.id != "timeline" }) {
                         category = it.id
                         categoryTitle = it.name
                         query = ""
+                        focusedId = null
                     }
             }
         }
@@ -133,12 +134,37 @@ internal fun LiveScreen(
     }
 }
 
+/** Programme discovery keeps only skinny channel IDs; Item/logo rows use the shared window. */
+@Composable
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+private fun rememberAiringPages(model: LibraryModel, source: String, query: String,
+    ids: List<String>?, returnId: String?): WindowPages {
+    val hidden by remember(model.repo) { model.repo.hidden }.collectAsState(initial = null)
+    val state = remember(source, query, hidden) { WindowPages(LIVE_PAGE_SIZE, LIVE_GRID_COLUMNS) }
+    val currentIds by rememberUpdatedState(ids.orEmpty())
+    val restoreOnce = remember { booleanArrayOf(true) }
+    val restoreId = remember(state) {
+        returnId.takeIf { hidden != null && restoreOnce[0] }.also { if (hidden != null) restoreOnce[0] = false }
+    }
+    if (hidden != null && ids != null) rememberWindowPagesDriver(state,
+        page = { first, last -> snapshotFlow { currentIds }.flatMapLatest { all ->
+            val selected = all.drop(first * LIVE_PAGE_SIZE).take((last - first + 1) * LIVE_PAGE_SIZE)
+            if (selected.isEmpty()) flowOf(emptyList()) else model.repo.liveByIds(source, selected).map { rows ->
+                val byId = rows.associateBy { it.id }
+                selected.mapNotNull { byId[it] }
+            }
+        } },
+        total = { snapshotFlow { currentIds.size } },
+        index = { restoreId?.let { currentIds.indexOf(it).coerceAtLeast(0) } ?: 0 })
+    return state
+}
+
 @Composable
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 private fun LiveChannelGrid(model: LibraryModel, title: String, result: List<Item>?,
     source: String, now: Long, query: String, search: (String) -> Unit,
-    limit: Int, more: () -> Unit, returnId: String?, focused: (Item) -> Unit,
-    restored: () -> Unit, open: (Item) -> Unit, play: (Item, List<Item>) -> Unit, paged: LivePages? = null,
+    returnId: String?, focused: (Item) -> Unit,
+    restored: () -> Unit, open: (Item) -> Unit, play: (Item, List<Item>) -> Unit, paged: WindowPages? = null,
     filters: List<CategoryEntry> = emptyList(), filter: (CategoryEntry) -> Unit = {}) {
     val rows = result.orEmpty()
     val loading = if (paged != null) !paged.firstPageLoaded else result == null
@@ -151,7 +177,7 @@ private fun LiveChannelGrid(model: LibraryModel, title: String, result: List<Ite
         }
     }
     // Badges, logo prefetch and EPG must not start whole-catalog work before the cards draw.
-    val numbers = if (paged != null && source.isNotEmpty() && paged.category.isEmpty() &&
+    val numbers = if (paged is LivePages && source.isNotEmpty() && paged.category.isEmpty() &&
         paged.query.isEmpty() && paged.shelf.isEmpty()) {
         paged.pages.flatMap { (page, items) ->
             items.mapIndexed { index, item -> item.id to page * LIVE_PAGE_SIZE + index + 1 }
@@ -199,7 +225,8 @@ private fun LiveChannelGrid(model: LibraryModel, title: String, result: List<Ite
     LaunchedEffect(paged, positioned, requestPending) {
         // Keep the return page pinned until its card has received focus.
         if (paged != null && positioned && !requestPending)
-            snapshotFlow { grid.firstVisibleItemIndex }.collect { paged.focused(it) }
+            snapshotFlow { grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index }
+                .filterNotNull().collect { paged.visible(it) }
     }
     LaunchedEffect(targetReady) {
         if (targetReady) { withFrameNanos { }; withFrameNanos { }; Perf.since("category", "category_grid_first_draw") }
@@ -229,7 +256,8 @@ private fun LiveChannelGrid(model: LibraryModel, title: String, result: List<Ite
             }
             androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
                 androidx.compose.foundation.lazy.grid.GridCells.Fixed(LIVE_GRID_COLUMNS), state = grid,
-                modifier = Modifier.weight(1f).testTag("live-channels").focusRestorer().focusGroup(),
+                modifier = Modifier.weight(1f).testTag("live-channels")
+                    .semantics { if (paged != null) pagingWindow = pagingDescription(paged) }.focusRestorer().focusGroup(),
                 contentPadding = PaddingValues(vertical = Spacing.unit),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -239,28 +267,21 @@ private fun LiveChannelGrid(model: LibraryModel, title: String, result: List<Ite
                 }
                 items(count, key = { it }) { index ->
                     val item = if (paged != null) paged[index] else rows[index]
-                    if (item == null) {
-                        LoadingCard(Modifier.fillMaxWidth().height(60.dp))
-                        return@items
-                    }
-                    if (index == target && positioned && requestPending && !searching) LaunchedEffect(Unit) {
+                    if (item != null && index == target && positioned && requestPending && !searching) LaunchedEffect(Unit) {
                         withFrameNanos { }
                         focus.requestFocus()
                         requestPending = false
                         restored()
                     }
-                    ChannelCard(model, item, now, { Perf.mark("channel"); play(item, paged?.loaded() ?: rows) }, {
+                    ChannelCard(model, item, now, { item?.let { Perf.mark("channel"); play(it, paged?.loaded() ?: rows) } }, {
                         paged?.focused(index); focused(it)
                     },
                         Modifier.fillMaxWidth()
+                            .testTag("live-slot-$index")
+                            .onFocusChanged { if (it.isFocused) paged?.focused(index) }
                             .then(if (index == target) Modifier.focusRequester(focus) else Modifier),
-                        number = numbers[item.id], operations = { open(item) }, compact = true,
-                        categoryName = title, programmes = listOfNotNull(current[item.id]))
-                }
-                if (paged == null && count >= limit) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
-                    FocusCard(more, Modifier.fillMaxWidth()) {
-                        Text("Devamını göster", Modifier.padding(12.dp))
-                    }
+                        number = numbers[item?.id], operations = { item?.let(open) }, compact = true,
+                        categoryName = title, programmes = listOfNotNull(current[item?.id]))
                 }
             }
         }
@@ -283,19 +304,21 @@ private fun LiveChannelGrid(model: LibraryModel, title: String, result: List<Ite
 
 @Composable
 internal fun LiveChannelRow(
-    model: LibraryModel, item: Item, number: Int, now: Long,
+    model: LibraryModel, item: Item?, number: Int, now: Long,
     play: () -> Unit, operations: () -> Unit, focus: () -> Unit,
     modifier: Modifier = Modifier, selected: Boolean = false,
     compactHeight: Dp? = null,
 ) {
+    val row = item ?: Item("", "", "", "", "LIVE", "", "", "", 0, "")
     // LazyColumn bounds subscriptions to composed rows (including its small prefetch window).
-    val slots = liveProgrammes(model, item, now, 86_400_000L)
+    val slots = if (item == null) emptyList() else liveProgrammes(model, item, now, 86_400_000L)
     val current = slots.firstOrNull { now >= it.start && now < it.end }
-    val logo by produceState<String?>(null, item.id, item.logo) { value = model.repo.poster(item) }
+    val logo by produceState<String?>(null, row.id, row.logo) { value = item?.let { model.repo.poster(it) } }
     val interactions = remember { MutableInteractionSource() }
     val isFocused by interactions.collectIsFocusedAsState()
-    ListRow(play, modifier.fillMaxWidth().height(compactHeight ?: 64.dp)
-        .testTag("live-channel-${item.id}").semantics { contentDescription = item.title }
+    LaunchedEffect(item?.id, isFocused) { if (item != null && isFocused) focus() }
+    ListRow({ if (item != null) { focus(); play() } }, modifier.fillMaxWidth().height(compactHeight ?: 64.dp)
+        .testTag("live-channel-${row.id}").semantics { contentDescription = row.title }
         .onPreviewKeyEvent {
             val key = it.nativeKeyEvent
             val ok = key.keyCode in listOf(android.view.KeyEvent.KEYCODE_DPAD_CENTER,
@@ -311,11 +334,11 @@ internal fun LiveChannelRow(
                 else -> false
             }
         }
-        .onFocusChanged { if (it.isFocused) focus() }, selected = selected, interactionSource = interactions) {
+        .onFocusChanged { if (it.isFocused && item != null) focus() }, selected = selected, interactionSource = interactions) {
         Text(number.toString(), Modifier.width(32.dp), style = LumenType.meta)
-        ChannelLogo(model, item, logo, Modifier.size(40.dp, 22.5.dp))
+        ChannelLogo(model, row, logo, Modifier.size(40.dp, 22.5.dp))
         Column(Modifier.weight(1f)) {
-            Text(item.title, style = LumenType.cardTitle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(row.title, style = LumenType.cardTitle, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(Spacing.iconText))
             Text(current?.title.orEmpty(), style = LumenType.meta, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (isFocused && current != null) ProgressLine(
