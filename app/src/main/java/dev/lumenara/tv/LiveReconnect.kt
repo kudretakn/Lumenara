@@ -11,15 +11,21 @@ internal fun liveShouldReconnect(
     preview: Boolean = false,
     multi: Boolean = false,
     playing: Boolean = false,
+    positionAdvanced: Boolean = false,
     unchangedForMs: Long = 0,
 ): Boolean = kind == "LIVE" && !ownStop && !paused && !preview && !multi &&
-    (signal != LivePlaybackSignal.PROGRESS || playing && unchangedForMs >= 8_000)
+    (signal != LivePlaybackSignal.PROGRESS || playing && positionAdvanced && unchangedForMs >= 8_000)
 
-/** An inactive sample clears the deadline, so a pause never counts as a stall. */
-internal data class LiveProgress(val positionMs: Long? = null, val advancedAtMs: Long = 0) {
+/** Arm only after a positive position changes from a prior sample; inactive samples reset tracking. */
+internal data class LiveProgress(
+    val positionMs: Long? = null,
+    val advancedAtMs: Long = 0,
+    val positionAdvanced: Boolean = false,
+) {
     fun sample(position: Long, nowMs: Long, active: Boolean): LiveProgress = when {
         !active -> LiveProgress()
-        positionMs != position -> LiveProgress(position, nowMs)
+        positionMs != position -> LiveProgress(position, nowMs,
+            positionAdvanced || positionMs != null && position > 0)
         else -> this
     }
 
