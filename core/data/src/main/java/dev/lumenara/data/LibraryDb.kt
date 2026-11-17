@@ -327,6 +327,19 @@ interface LibraryDao {
     @Query("SELECT marks.* FROM marks JOIN items USING(id) WHERE items.parent=:id")
     fun episodeMarks(id: String): Flow<List<Mark>>
 
+    // A bounded category projection supplies history visibility without the catalog names scan.
+    // Indexed existence probes retain categoryNames' existing top-level category policy.
+    @Query("""WITH watched AS (
+        SELECT i.id,i.parent,i.kind,i.category FROM marks m CROSS JOIN items i ON i.id=m.id WHERE m.position>0
+        ), parents AS (SELECT DISTINCT parent FROM watched WHERE kind='EPISODE'), names AS (
+        SELECT category FROM watched
+        UNION SELECT i.category FROM parents p JOIN items i ON i.id=p.parent
+        UNION SELECT ep.category FROM parents p CROSS JOIN items ep ON ep.parent=p.parent
+        ) SELECT category FROM names n WHERE EXISTS(
+            SELECT 1 FROM items i INDEXED BY index_items_kind_category_title
+            WHERE i.kind IN ('LIVE','MOVIE','SERIES') AND i.category=n.category)""")
+    fun continueWatchingCategories(): Flow<List<String>>
+
     // Aggregate only marked rows, then choose a representative among eligible history cards.
     // Do not expand history to every version: an unplayed/completed sibling must not replace
     // the version the user can actually resume. parent resolves the remaining-episode probe.

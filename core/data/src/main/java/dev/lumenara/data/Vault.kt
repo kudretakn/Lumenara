@@ -12,7 +12,7 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 internal class Vault(private val context: Context) {
-    private val key: SecretKey by lazy {
+    private val key: SecretKey by lazy { StartupPerf.measure("startup_keystore_key") {
         val alias = "lumenara.catalog.v1"
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         val wrapping =
@@ -36,7 +36,7 @@ internal class Vault(private val context: Context) {
             check(prefs.edit().putString("data-key", seal(wrapping, generated.encoded)).commit())
             generated
         } else SecretKeySpec(open(wrapping, wrapped), "AES")
-    }
+    } }
 
     private fun seal(key: SecretKey, bytes: ByteArray): String {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
