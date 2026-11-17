@@ -70,13 +70,21 @@ class SeriesJourneyTest {
                     assertEquals(listOf(series.id), repo.library.browse(source.id, "SERIES", "", "dizi", "", 10).first().map { it.id })
                     repo.updateMark(episodes.last().id) { it.copy(position = 90) }
                     assertTrue(repo.library.continueWatching(source.id).first().isEmpty())
+                    repo.updateMark(episodes.last().id) { it.copy(position = 10) }
+                    val staleAlias = "${source.id}:stale-episode-alias"
+                    repo.library.redirect(ItemRedirect(staleAlias, episodes.first().id))
                     val refreshed = "#EXTM3U\n#EXTINF:-1 group-title=\"Diziler | Türk\",Dizi Adı S01E02\n${server.url("/series/u/p/123.mkv")}\n"
                     server.enqueue(MockResponse().setBody(refreshed))
                     repo.refresh(source.id)
                     assertEquals(series.id, repo.library.browse(source.id, "SERIES", "", "", "", 10).first().single().id)
                     assertEquals(listOf(episodes.last().id), repo.library.episodeSnapshot(series.id).map { it.id })
                     assertTrue(repo.library.mark(episodes.last().id)?.favorite == true)
+                    assertTrue(repo.library.mark(episodes.last().id)?.listed == true)
+                    assertEquals(10L, repo.library.mark(episodes.last().id)?.position)
+                    assertEquals(listOf(series.id), repo.library.continueWatching(source.id).first().map { it.id })
                     assertNull(repo.library.mark(episodes.first().id))
+                    assertNull(repo.library.item(episodes.first().id))
+                    assertNull(repo.library.redirectedId(staleAlias))
                 }
             } finally {
                 runBlocking { repo.library.snapshot().filter { it.name == name }.forEach { repo.remove(it.id) } }

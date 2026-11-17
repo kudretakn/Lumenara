@@ -626,6 +626,11 @@ class Repository private constructor(private val context: Context) {
             val matches = matchCarryOver(old.filterNot {
                 it.kind == "EPISODE" && it.parent in incomingIds && it.parent !in refreshedParents
             }, incoming)
+            // M3U supplies the complete episode catalog. Missing episodes must be pruned even
+            // when marked; matched locator changes have already carried their state forward.
+            // Xtream episodes are lazy, so absence from its top-level catalog proves nothing.
+            val playlistEpisodes = if (spec.user.isEmpty())
+                old.filter { it.kind == "EPISODE" }.map { it.id }.toSet() else emptySet()
             val commit: suspend () -> Unit = {
                 library.save(source)
                 staged.read { batch ->
@@ -636,10 +641,10 @@ class Repository private constructor(private val context: Context) {
                 val excluded = context.getSharedPreferences("watch_next_state", Context.MODE_PRIVATE)
                     .getStringSet("excluded", emptySet()).orEmpty().toSet()
                 carryRoomState(db, matches.ids, preferenceReferences + excluded)
-                // An unresolved user record is kept for a future/manual retry, never guessed or
-                // erased by cascading catalog pruning. Preserve episode parents along with it.
+                // Keep other unresolved user records for a future/manual retry, including
+                // lazy episode parents, rather than guessing or cascading their removal.
                 val protected = (library.carryProtectedIds(source.id) + preferenceReferences)
-                    .filter { it !in matches.ids && it !in incomingIds }.toMutableSet()
+                    .filter { it !in matches.ids && it !in incomingIds && it !in playlistEpisodes }.toMutableSet()
                 old.filter { it.id in protected && it.parent.isNotBlank() }.forEach { protected += it.parent }
                 protected.removeAll(incomingIds)
                 protected.toList().chunked(900).forEach { library.retainCarryRows(it, token) }

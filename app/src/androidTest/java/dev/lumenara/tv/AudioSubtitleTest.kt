@@ -193,8 +193,13 @@ class AudioSubtitleTest {
                 val delayItem = versions.single { it.title.contains("Dublaj", ignoreCase = true) }
                 screen.waitUntil(5000) { runBlocking { prefs.subtitleDelay(delayItem) } == 300L }
                 assertEquals(0L, runBlocking { prefs.subtitleDelay(versions.single { it.id != delayItem.id }) })
+                // Back closes options first. The startup timeline can still be visible after
+                // reopening cached playback and consumes its own Back before the player exits.
                 screen.back()
-                screen.back()
+                screen.onNodeWithTag("player-options").assertDoesNotExist()
+                repeat(2) {
+                    if (screen.onAllNodesWithContentDescription("Tam ekran oynatıcı").fetchSemanticsNodes().isNotEmpty()) screen.back()
+                }
                 waitFor(hasTestTag("details-content"))
                 screen.onNodeWithTag("details-content").performScrollToIndex(0)
                 select(hasText("Devam et"))
