@@ -323,6 +323,18 @@ internal fun VlcScreen(
             var input: VlcInput? = null
             var engine: MediaPlayer? = null
             var completed = false
+            var ownStop = false
+            var paused = false
+            var reconnectRequested = false
+            var liveProgress = LiveProgress()
+            fun reconnect() {
+                if (reconnectRequested || ownStop) return
+                reconnectRequested = true
+                if (!retry.failed()) {
+                    message = "VLC bu yayını oynatamadı."
+                    panel = true
+                }
+            }
             try {
                 val source = model.repo.library.source(item.source) ?: error("Kaynak kaldırıldı")
                 val address = model.repo.address(item)
@@ -355,7 +367,7 @@ internal fun VlcScreen(
                     // Install it before attaching views, which can start playback.
                     p.setEventListener { event ->
                         playbackScope.launch(Dispatchers.Main.immediate) {
-                            if (p !== player) return@launch
+                            if (ownStop || p !== player) return@launch
                             when (event.type) {
                                 MediaPlayer.Event.Opening -> {
                                     nativePlaying = false
@@ -363,14 +375,19 @@ internal fun VlcScreen(
                                     android.util.Log.d("LumenaraVlc", "playback Opening generation=$mediaGeneration")
                                 }
                                 MediaPlayer.Event.Playing -> {
+                                    paused = false
                                     nativePlaying = true
                                     android.util.Log.d("LumenaraVlc", "playback Playing generation=$mediaGeneration")
-                                    retry.playing()
-                                    message = ""
+                                    if (!reconnectRequested) { retry.playing(); message = "" }
                                     if (!recorded) {
                                         recorded = true
                                         model.started(item)
                                     }
+                                }
+                                MediaPlayer.Event.Paused -> {
+                                    paused = true
+                                    nativePlaying = false
+                                    liveProgress = LiveProgress()
                                 }
                                 MediaPlayer.Event.Vout -> {
                                     if (event.voutCount > 0) Perf.since("channel", "channel_first_frame_vlc")
@@ -381,15 +398,20 @@ internal fun VlcScreen(
                                 }
                                 MediaPlayer.Event.EncounteredError -> {
                                     nativePlaying = false
-                                    if (item.kind != "LIVE" || !retry.failed()) {
+                                    if (item.kind == "LIVE") reconnect()
+                                    else {
                                         message = "VLC bu yayını oynatamadı."
                                         panel = true
                                     }
                                 }
                                 MediaPlayer.Event.EndReached -> {
                                     nativePlaying = false
-                                    completed = true
-                                    model.progress(item, p.length, p.length)
+                                    if (liveShouldReconnect(item.kind, LivePlaybackSignal.END_REACHED,
+                                            ownStop = ownStop, paused = paused)) reconnect()
+                                    if (item.kind != "LIVE") {
+                                        completed = true
+                                        model.progress(item, p.length, p.length)
+                                    }
                                     if (item.kind == "EPISODE") {
                                         fullscreen.finished = group.nextItem(item) != null
                                         episodeEnded()
@@ -398,6 +420,8 @@ internal fun VlcScreen(
                                 MediaPlayer.Event.Stopped -> {
                                     nativePlaying = false
                                     android.util.Log.d("LumenaraVlc", "playback Stopped generation=$mediaGeneration")
+                                    if (liveShouldReconnect(item.kind, LivePlaybackSignal.STOPPED,
+                                            ownStop = ownStop, paused = paused)) reconnect()
                                 }
                             }
                         }
@@ -409,8 +433,19 @@ internal fun VlcScreen(
                     p.play()
                     android.util.Log.d("LumenaraVlc", "playback play requested generation=$mediaGeneration")
                 }
-                wallClockTicks(5000).collect {
-                    if (p.isPlaying) model.progress(item, p.time, p.length)
+                var lastSavedAtMs = 0L
+                wallClockTicks(if (item.kind == "LIVE") 500 else 5000).collect {
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    val playing = p.isPlaying
+                    val time = p.time
+                    liveProgress = liveProgress.sample(time, now,
+                        active = playing && !paused && !reconnectRequested)
+                    if (liveShouldReconnect(item.kind, ownStop = ownStop, paused = paused,
+                            playing = playing, unchangedForMs = liveProgress.unchangedForMs(now))) reconnect()
+                    if (playing && now - lastSavedAtMs >= 5000) {
+                        lastSavedAtMs = now
+                        model.progress(item, time, p.length)
+                    }
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -421,6 +456,8 @@ internal fun VlcScreen(
                     panel = true
                 }
             } finally {
+                // Ignore late native events before closing the input or stopping/releasing it.
+                ownStop = true
                 withContext(NonCancellable) {
                     val p = engine
                     withContext(Dispatchers.Main.immediate) {
