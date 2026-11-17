@@ -32,6 +32,7 @@ import dev.lumenara.player.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -367,7 +368,6 @@ internal fun Playback(
     var subtitleNotice by remember(item.id) { mutableStateOf("") }
     var channelQuery by remember { mutableStateOf("") }
     var category by remember { mutableStateOf("") }
-    var limit by remember { mutableIntStateOf(80) }
     val slots = remember { decoderSlots() }
     val scope = rememberCoroutineScope()
     var moveJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
@@ -560,18 +560,20 @@ internal fun Playback(
         val optionsState = rememberLazyListState()
         LaunchedEffect(panel) { if (!panel) optionsState.scrollToItem(0) }
         if (panel && !subtitleSearch.open) {
-            val candidates by
-                remember(item.source, category, channelQuery, limit) {
-                        model.repo.browse(
-                            item.source,
-                            "LIVE",
-                            category,
-                            dev.lumenara.catalog.searchable(channelQuery),
-                            "",
-                            limit,
-                        )
-                    }
-                    .collectAsStateWithLifecycle(emptyList())
+            val candidates = if (live) rememberCatalogPages(model, item.source, "LIVE",
+                category = category, query = dev.lumenara.catalog.searchable(channelQuery),
+                pageSize = 80, columns = 1) else null
+            LaunchedEffect(candidates) {
+                // Filter/visibility changes deliberately return the options to their first row.
+                optionsState.scrollToItem(0)
+            }
+            LaunchedEffect(candidates, optionsState) {
+                if (candidates != null) snapshotFlow {
+                    optionsState.layoutInfo.visibleItemsInfo.mapNotNull {
+                        (it.key as? String)?.removePrefix("player-channel-slot-")?.toIntOrNull()
+                    }.maxOrNull()
+                }.distinctUntilChanged().collect { index -> index?.let(candidates::visible) }
+            }
             val categories by
                 remember(item.source) { model.repo.categories("LIVE", item.source) }
                     .collectAsStateWithLifecycle(emptyList())
@@ -752,26 +754,33 @@ internal fun Playback(
                             }
                         }
                     }
-                val list =
-                    if (live) candidates else group
-                items(list, key = { it.id }) { channel ->
-                    PlayerOption(
-                        onClick = {
-                            if (channel.id == item.id) panel = false
-                            else {
-                                changeGroup(list)
-                                select(channel)
-                            }
-                        }
-                    ) {
-                        Text(channel.title)
+                if (candidates != null) playerChannelItems(candidates) { channel, rows ->
+                    if (channel.id == item.id) panel = false
+                    else {
+                        changeGroup(rows)
+                        select(channel)
                     }
+                } else items(group, key = { it.id }) { channel ->
+                    PlayerOption(onClick = {
+                        if (channel.id == item.id) panel = false
+                        else { changeGroup(group); select(channel) }
+                    }) { Text(channel.title) }
                 }
-                if (live && candidates.size >= limit)
-                    item { PlayerOption(onClick = { limit += 80 }) { Text("Devamını göster") } }
             }
         }
         SubtitleResults(subtitleSearch, panel, focus)
+    }
+}
+
+/** Shared with options-list device tests; a placeholder keeps the same focusable row. */
+internal fun LazyListScope.playerChannelItems(pages: WindowPages, select: (Item, List<Item>) -> Unit) {
+    items(pages.count, key = { "player-channel-slot-$it" }) { index ->
+        val channel = pages[index]
+        PlayerOption(onClick = { channel?.let { select(it, pages.loaded()) } },
+            modifier = Modifier.testTag("player-channel-slot-$index")
+                .onFocusChanged { if (it.isFocused) pages.focused(index) }) {
+            Text(channel?.title ?: "Yükleniyor")
+        }
     }
 }
 

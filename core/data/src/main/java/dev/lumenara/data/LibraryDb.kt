@@ -143,6 +143,9 @@ interface LibraryDao {
     @RawQuery(observedEntities = [Item::class, Mark::class])
     fun catalogCount(query: SupportSQLiteQuery): Flow<Int>
 
+    @RawQuery(observedEntities = [Item::class, Mark::class])
+    fun catalogKinds(query: SupportSQLiteQuery): Flow<List<String>>
+
     @RawQuery(observedEntities = [Item::class])
     fun catalogCategoryCounts(query: SupportSQLiteQuery): Flow<List<LiveCategoryCount>>
 
@@ -407,6 +410,30 @@ interface LibraryDao {
                year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0, hidden: List<String> = emptyList()): Flow<List<Item>> =
         browseRows(source, kind, category, query, shelf, if (limit == Int.MAX_VALUE) -1 else limit,
             year, genre, language, minRating, hidden).map { rows -> rows.map(Item::displayVersion) }
+
+    fun browsePage(source: String, kind: String, category: String, query: String, shelf: String,
+        limit: Int, offset: Int, year: String = "", genre: String = "", language: String = "",
+        minRating: Double = 0.0, hidden: List<String> = emptyList()): Flow<List<Item>> {
+        val sql = browseQuery(CatalogFilter(source, kind, category, query, shelf, year, genre,
+            language, minRating, hidden), limit, offset)
+        val rows = if (shelf in listOf("favorite", "list", "resume")) markedCatalogRows(sql) else catalogRows(sql)
+        return rows.map { page -> page.map(Item::displayVersion) }
+    }
+
+    fun browseTotal(source: String, kind: String, category: String, query: String, shelf: String,
+        year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0,
+        hidden: List<String> = emptyList()): Flow<Int> = catalogCount(browseCountQuery(
+            CatalogFilter(source, kind, category, query, shelf, year, genre, language, minRating, hidden)))
+
+    fun browseKinds(source: String, kind: String, category: String, query: String, shelf: String,
+        year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0,
+        hidden: List<String> = emptyList()): Flow<List<String>> = catalogKinds(browseKindsQuery(
+            CatalogFilter(source, kind, category, query, shelf, year, genre, language, minRating, hidden)))
+
+    suspend fun browseIndex(source: String, kind: String, category: String, query: String, shelf: String,
+        id: String, year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0,
+        hidden: List<String> = emptyList()): Int? = livePosition(browseIndexQuery(
+            CatalogFilter(source, kind, category, query, shelf, year, genre, language, minRating, hidden), id))
 
     @Query("SELECT * FROM items WHERE id=:id")
     suspend fun item(id: String): Item?

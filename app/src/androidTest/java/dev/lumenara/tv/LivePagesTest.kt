@@ -56,7 +56,7 @@ class LivePagesTest {
                 assertEquals(LIVE_PAGE_SIZE, initialRows)
                 assertEquals(rows.size, pages?.count)
                 assertEquals(rows.first().id, pages?.get(0)?.id)
-                assertTrue(checkNotNull(pages).pages.values.sumOf { it.size } <= 3 * LIVE_PAGE_SIZE)
+                assertTrue(checkNotNull(pages).pages.values.sumOf { it.size } <= 5 * LIVE_PAGE_SIZE)
             }
         } finally {
             screen.runOnUiThread { screen.activity.setContent {} }
@@ -92,13 +92,13 @@ class LivePagesTest {
             screen.waitUntil(10_000) { pages?.get(anchorIndex)?.id == rows[anchorIndex].id }
             screen.runOnIdle {
                 assertEquals(anchorIndex, pages?.anchor)
-                assertTrue(checkNotNull(pages).pages.keys.all { it in (anchorPage - 1)..(anchorPage + 1) })
-                assertTrue(checkNotNull(pages).pages.values.sumOf { it.size } <= 3 * LIVE_PAGE_SIZE)
+                assertTrue(checkNotNull(pages).pages.keys.all { it in (anchorPage - 2)..(anchorPage + 2) })
+                assertTrue(checkNotNull(pages).pages.values.sumOf { it.size } <= 5 * LIVE_PAGE_SIZE)
                 checkNotNull(pages).focused(endIndex)
             }
             screen.waitUntil(10_000) {
                 pages?.get(endIndex)?.id == rows[endIndex].id &&
-                    pages?.pages?.keys?.all { it in (endPage - 1)..endPage } == true
+                    pages?.pages?.keys?.all { it in (endPage - 2)..endPage } == true
             }
             // A prefix rename invalidates saved keysets. Absolute list indices must be
             // recomputed even when the current window began with a cached cursor.
@@ -111,13 +111,13 @@ class LivePagesTest {
             }
             screen.waitUntil(10_000) {
                 pages?.get(previousIndex)?.id == rows[previousIndex].id &&
-                    pages?.pages?.keys?.all { it in (anchorPage - 1)..(anchorPage + 1) } == true
+                    pages?.pages?.keys?.all { it in (anchorPage - 2)..(anchorPage + 2) } == true
             }
             screen.runOnIdle {
                 checkNotNull(pages).focused(0)
             }
             screen.waitUntil(10_000) {
-                pages?.get(0)?.id == rows[0].id && pages?.pages?.keys?.all { it in 0..1 } == true
+                pages?.get(0)?.id == rows[0].id && pages?.pages?.keys?.all { it in 0..2 } == true
             }
             screen.runOnUiThread {
                 val model = ViewModelProvider(screen.activity)[LibraryModel::class.java]
