@@ -12,6 +12,10 @@ import java.util.concurrent.ConcurrentHashMap
 internal object Perf {
     private val marks = ConcurrentHashMap<String, Long>()
     fun mark(name: String) { marks[name] = SystemClock.elapsedRealtime() }
+    fun elapsed(name: String, label: String) {
+        val start = marks[name] ?: return
+        Log.i("LumenaraPerf", "$label ms=${SystemClock.elapsedRealtime() - start}")
+    }
     fun since(name: String, label: String) {
         val start = marks.remove(name) ?: return
         Log.i("LumenaraPerf", "$label ms=${SystemClock.elapsedRealtime() - start}")

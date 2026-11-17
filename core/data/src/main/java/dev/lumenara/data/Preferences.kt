@@ -6,22 +6,39 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 
 private val Context.settings by preferencesDataStore(name = "preferences")
+private val firstSettingsRead = java.util.concurrent.atomic.AtomicBoolean()
 
 class Preferences internal constructor(
     private val store: androidx.datastore.core.DataStore<androidx.datastore.preferences.core.Preferences>,
     private val encrypt: (String) -> String,
     private val decrypt: (String) -> String,
+    private val traceStartup: Boolean = false,
 ) {
     constructor(context: Context) : this(context.applicationContext, Vault(context.applicationContext))
 
-    private constructor(context: Context, vault: Vault) : this(context.settings, vault::encrypt, vault::decrypt)
+    private constructor(context: Context, vault: Vault) : this(context.settings, vault::encrypt, vault::decrypt, true)
 
-    val showAdult = store.data.map { it[booleanPreferencesKey("show_adult")] ?: false }
+    private val data = flow {
+        val start = if (traceStartup) android.os.SystemClock.elapsedRealtime() else 0L
+        var initial = true
+        store.data.collect { settings ->
+            if (initial) {
+                initial = false
+                if (traceStartup && firstSettingsRead.compareAndSet(false, true))
+                    StartupPerf.elapsed("startup_datastore_first_read", start)
+            }
+            emit(settings)
+        }
+    }
+
+    val showAdult = data.map { it[booleanPreferencesKey("show_adult")] ?: false }
         .distinctUntilChanged()
 
     suspend fun setShowAdult(show: Boolean) {
@@ -70,7 +87,7 @@ class Preferences internal constructor(
     }
 
     fun text(key: String, fallback: String = "") =
-        store.data.map { it[stringPreferencesKey(key)] ?: fallback }
+        data.map { it[stringPreferencesKey(key)] ?: fallback }
 
     suspend fun set(key: String, value: String) {
         store.edit { it[stringPreferencesKey(key)] = value }
@@ -113,7 +130,7 @@ class Preferences internal constructor(
         })
     }
 
-    private suspend fun rawSettings(): List<BackupSetting> = store.data.first().asMap()
+    private suspend fun rawSettings(): List<BackupSetting> = data.first().asMap()
         .filterKeys { !it.name.startsWith("update_") }.map { (key, value) ->
         val type = when (value) {
             is String -> "string"
@@ -159,7 +176,7 @@ class Preferences internal constructor(
     }
 
     // Newline encoding preserves recency; DataStore edit makes concurrent updates atomic.
-    val recentLive = store.data.map {
+    val recentLive = data.map {
         it[stringPreferencesKey("recent_live")].orEmpty().lines()
             .filter(String::isNotBlank).distinct().take(20)
     }.distinctUntilChanged()
@@ -173,7 +190,7 @@ class Preferences internal constructor(
     }
 
     fun connections(source: String) =
-        store.data.map {
+        data.map {
             val limit =
                 it[stringPreferencesKey("limit_$source")]?.toIntOrNull()?.coerceIn(1, 4) ?: 1
             val provider = it[stringPreferencesKey("provider_$source")]?.toIntOrNull() ?: 4

@@ -23,11 +23,20 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 
 @Composable
-internal fun LibraryScreen(model: LibraryModel = viewModel()) {
+internal fun LibraryScreen(model: LibraryModel = viewModel(), onFirstDraw: () -> Unit = {}) {
     val sources by model.sources.collectAsStateWithLifecycle()
     val startInSetup by model.startInSetup.collectAsStateWithLifecycle()
     val available = sources ?: return
     val initialSetup = startInSetup ?: return
+    LaunchedEffect(model) {
+        // Frame callbacks run before drawing. The second callback follows a submitted frame.
+        withFrameNanos { }; withFrameNanos { }
+        Perf.since("startup_screen", "startup_screen_first_draw")
+    }
+    LaunchedEffect(model) {
+        model.awaitFirstDraw()
+        onFirstDraw()
+    }
     var section by rememberSaveable {
         mutableStateOf(if (initialSetup) "IPTV Kaynakları" else "Ana Sayfa")
     }
@@ -36,6 +45,15 @@ internal fun LibraryScreen(model: LibraryModel = viewModel()) {
     LaunchedEffect(available) { if (available.none { it.id == scope }) scope = "" }
     var detail by remember { mutableStateOf<Item?>(null) }
     var playing by remember { mutableStateOf<Item?>(null) }
+    val showingHub = section == "Ana Sayfa" && detail == null && playing == null
+    LaunchedEffect(model, showingHub) {
+        // Home releases the gate after its cheap history rows draw. Setup, restored screens
+        // and playback/search intents must release it too, even if Home is never visited.
+        if (!showingHub) {
+            withFrameNanos { }; withFrameNanos { }
+            model.onFirstDraw()
+        }
+    }
     DisposableEffect(playing != null) {
         RefreshGate.playing = playing != null
         onDispose { RefreshGate.playing = false }

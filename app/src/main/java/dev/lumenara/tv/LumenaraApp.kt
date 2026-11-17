@@ -14,15 +14,35 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import dev.lumenara.data.*
 import javax.inject.Singleton
+import kotlinx.coroutines.*
 
 @HiltAndroidApp
-class LumenaraApp : Application(), ImageLoaderFactory {
+class LumenaraApp : Application(), ImageLoaderFactory, androidx.work.Configuration.Provider {
+    private val startupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val watchNextStarted = java.util.concurrent.atomic.AtomicBoolean()
+    override val workManagerConfiguration: androidx.work.Configuration
+        get() {
+            // A worker-only process has no Activity frame. Preserve publishing after background
+            // refreshes too; foreground scheduling first reaches this getter after its draw gate.
+            startWatchNext()
+            return androidx.work.Configuration.Builder().build()
+        }
+
+    internal fun startWatchNext() {
+        if (watchNextStarted.compareAndSet(false, true)) startupScope.launch {
+            Perf.mark("startup_watch_next")
+            WatchNext.get(this@LumenaraApp).start()
+            Perf.since("startup_watch_next", "startup_watch_next_started")
+        }
+    }
+
     @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     override fun onCreate() {
         Perf.mark("startup")
+        Perf.mark("startup_application")
         super.onCreate()
-        WatchNext.get(this).start()
         androidx.media3.common.util.Log.setLogLevel(androidx.media3.common.util.Log.LOG_LEVEL_OFF)
+        Perf.since("startup_application", "startup_application_ready")
     }
 
     @androidx.annotation.OptIn(coil.annotation.ExperimentalCoilApi::class)
@@ -55,7 +75,12 @@ class LumenaraApp : Application(), ImageLoaderFactory {
 object Services {
     @Provides
     @Singleton
-    fun repository(@ApplicationContext context: Context) = Repository.get(context)
+    fun repository(@ApplicationContext context: Context): Repository {
+        Perf.mark("startup_repository")
+        return Repository.get(context).also {
+            Perf.since("startup_repository", "startup_repository_ready")
+        }
+    }
 
     @Provides
     @Singleton

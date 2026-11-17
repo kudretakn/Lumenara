@@ -23,13 +23,23 @@ internal data class Filter(
 @dagger.hilt.android.lifecycle.HiltViewModel
 internal class LibraryModel
 @javax.inject.Inject
-constructor(val repo: Repository, val prefs: Preferences) : androidx.lifecycle.ViewModel() {
+constructor(private val repository: dagger.Lazy<Repository>, val prefs: Preferences) : androidx.lifecycle.ViewModel() {
+    // Recovery must finish before exposing repository state, but never block Hilt/UI creation.
+    val repo: Repository get() = repository.get()
+    private val firstDraw = FirstDrawGate()
+    val firstDrawn = firstDraw.drawn
+    fun onFirstDraw() { firstDraw.onDraw() }
+    suspend fun awaitFirstDraw() = firstDraw.await()
+
     val startInSetup: StateFlow<Boolean?> = MutableStateFlow<Boolean?>(null).also { state ->
-        viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
+        viewModelScope.launch(Dispatchers.IO) {
+            Perf.mark("startup_sources")
             state.value = repo.sourceSnapshot().isEmpty()
+            Perf.since("startup_sources", "startup_sources_ready")
         }
     }.asStateFlow()
-    val sources = repo.library.sources().stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    val sources = flow { emitAll(withContext(Dispatchers.IO) { repo }.library.sources()) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
     val filter = MutableStateFlow(Filter())
     val results =
         filter
@@ -65,15 +75,23 @@ constructor(val repo: Repository, val prefs: Preferences) : androidx.lifecycle.V
     }
 
     init {
-        viewModelScope.launch {
-            repo.schedule(prefs.text("hours", "12").first().toLong(), checkNow = true)
+        viewModelScope.launch(Dispatchers.IO) {
+            awaitFirstDraw()
+            Perf.mark("startup_preferences")
+            val hours = prefs.text("hours", "12").first().toLong()
             val repository = prefs.text("github").first()
+            Perf.since("startup_preferences", "startup_preferences_ready")
+            Perf.mark("startup_schedule")
+            repo.schedule(hours, checkNow = true)
+            Perf.since("startup_schedule", "startup_refresh_scheduled")
             if (repository.isNotEmpty()) {
+                Perf.mark("startup_update")
                 try {
                     checkUpdate(repository, automatic = true)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Exception) {}
+                finally { Perf.since("startup_update", "startup_update_complete") }
             }
         }
     }

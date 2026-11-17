@@ -75,6 +75,7 @@ private fun HubChannelShelf(
     focus: () -> Unit,
 ) {
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    val drawn by model.firstDrawn.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { wallClockTicks(30_000).collect { now = it } }
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
         Text("SON KANAL", style = LumenType.caption, color = LumenColors.textSecondary)
@@ -85,9 +86,10 @@ private fun HubChannelShelf(
             contentPadding = PaddingValues(Spacing.unit),
         ) {
             items(rows, key = { it.id }) { item ->
-                val slots = liveProgrammes(model, item, now)
+                val slots = if (drawn) liveProgrammes(model, item, now) else emptyList()
                 val current = slots.firstOrNull { now >= it.start && now < it.end }
                 val logo by produceState<String?>(null, item.id, item.logo) {
+                    model.awaitFirstDraw()
                     value = model.repo.poster(item)
                 }
                 Column(Modifier.width(150.dp), verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
@@ -110,6 +112,7 @@ private fun HubChannelShelf(
 
 @Composable
 private fun HubResumeShelf(model: LibraryModel, rows: List<Item>, open: (Item) -> Unit, focus: () -> Unit) {
+    val drawn by model.firstDrawn.collectAsStateWithLifecycle()
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
         Text("KALDIĞIN YERDEN DEVAM ET", style = LumenType.caption, color = LumenColors.textSecondary)
         LazyRow(
@@ -118,8 +121,8 @@ private fun HubResumeShelf(model: LibraryModel, rows: List<Item>, open: (Item) -
             contentPadding = PaddingValues(Spacing.unit),
         ) {
             items(rows, key = { it.id }) { item ->
-                val episodes by remember(item.id) {
-                    if (item.kind == "SERIES") model.repo.episodes(item.id) else flowOf(emptyList<Item>())
+                val episodes by remember(item.id, drawn) {
+                    if (drawn && item.kind == "SERIES") model.repo.episodes(item.id) else flowOf(emptyList<Item>())
                 }.collectAsStateWithLifecycle(emptyList())
                 val marks by remember(item.id) {
                     if (item.kind == "SERIES") model.repo.library.episodeMarks(item.id) else flowOf(emptyList<Mark>())
@@ -130,6 +133,7 @@ private fun HubResumeShelf(model: LibraryModel, rows: List<Item>, open: (Item) -
                 }.collectAsStateWithLifecycle(null)
                 val mark = if (item.kind == "SERIES") marks.firstOrNull { it.id == continuing?.id } else observedMark
                 val backdrop by produceState<String?>(null, item.id, item.backdrop, item.logo) {
+                    model.awaitFirstDraw()
                     // Listing backdrops can be absent even when a provider poster is available.
                     value = model.repo.backdrop(item)?.takeIf(String::isNotBlank)
                         ?: model.repo.poster(item)?.takeIf(String::isNotBlank)
@@ -160,6 +164,11 @@ private fun HubResumeShelf(model: LibraryModel, rows: List<Item>, open: (Item) -
 /** Local 16:9 fallback; the shared poster fallback and shared channel cards belong to D1/D3. */
 @Composable
 private fun HubArtwork(model: LibraryModel, item: Item, address: String?, channel: Boolean = false) {
+    val drawn by model.firstDrawn.collectAsStateWithLifecycle()
+    if (!drawn) {
+        Box(Modifier.fillMaxSize().background(LumenColors.surface2))
+        return
+    }
     if (channel) {
         ChannelLogo(model, item, address, Modifier.fillMaxSize())
         return
@@ -183,6 +192,7 @@ private fun HubNavigationCard(
     artworkItem: Item?, click: () -> Unit,
 ) {
     val backdrop by produceState<String?>(null, artworkItem?.id, artworkItem?.backdrop) {
+        model.awaitFirstDraw()
         // Only a real wide image is eligible; never substitute a channel logo or poster.
         value = artworkItem?.let { model.repo.backdrop(it) }
     }
@@ -226,19 +236,50 @@ internal fun Home(
     sourceSelector: @Composable () -> Unit = {},
     navigate: (String) -> Unit,
 ) {
-    val recentResult by remember(source) { model.repo.recentLive(source) }.collectAsLoadingState()
-    val resumeResult by remember(source) { model.repo.continueWatching(source) }.collectAsLoadingState()
+    val recentResult by remember(source) {
+        Perf.mark("startup_hub_recent")
+        model.repo.recentLive(source).onEach {
+            Perf.since("startup_hub_recent", "startup_hub_recent_ready")
+        }
+    }.collectAsLoadingState()
+    val resumeResult by remember(source) {
+        Perf.mark("startup_hub_resume")
+        model.repo.continueWatching(source).onEach {
+            Perf.since("startup_hub_resume", "startup_hub_resume_ready")
+        }
+    }.collectAsLoadingState()
     val recent = recentResult.orEmpty()
     val resume = resumeResult.orEmpty()
+    val drawn by model.firstDrawn.collectAsStateWithLifecycle()
+    val rowsReady = recentResult != null && resumeResult != null
+    var rowsDrawn by remember(source) { mutableStateOf(false) }
+    val loadCounts = drawn && rowsDrawn
     val counts = listOf("LIVE", "MOVIE", "SERIES").map { kind ->
-        val groups by remember(source, kind) { model.repo.categoryCounts(kind, source) }
+        val groups by remember(source, kind, loadCounts) {
+            if (loadCounts) {
+                if (kind == "LIVE") Perf.mark("startup_hub_counts")
+                model.repo.categoryCounts(kind, source)
+            } else emptyFlow()
+        }
             .collectAsLoadingState()
         groups?.sumOf { it.count }
     }
-    LaunchedEffect(counts.all { it != null }) {
-        if (counts.all { it != null }) {
+    LaunchedEffect(Unit) {
+        withFrameNanos { }; withFrameNanos { }
+        Perf.elapsed("startup", "startup_hub_shell_first_draw")
+    }
+    LaunchedEffect(rowsReady) {
+        if (rowsReady) {
             withFrameNanos { }; withFrameNanos { }
             Perf.since("startup", "startup_hub_first_draw")
+            rowsDrawn = true
+            model.onFirstDraw()
+        }
+    }
+    // Keep data-ready and frame timings distinct; counts never gate cards or history rows.
+    LaunchedEffect(counts.all { it != null }) {
+        if (counts.all { it != null }) {
+            Perf.since("startup_hub_counts", "startup_hub_counts_ready")
         }
     }
     val update by model.update.collectAsStateWithLifecycle()
