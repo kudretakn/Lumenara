@@ -1,17 +1,19 @@
 # Durum
 
-Son güncelleme: 16 Kasım 2026 · yerel (Windows) oturum
+Son güncelleme: 16 Kasım 2026 01:10 · yerel (Windows) oturum kapandı
 
-> **Yerel Claude için devir notu.** Başlangıç:
-> ```
-> git fetch --all --prune
-> git switch design/0.5
-> git pull
-> ```
-> Sonra bu dosyayı ve `CLAUDE.md`'yi oku. Çalışma düzeni: sen ekip liderisin; işleri Codex alt ajanlarına (zorluğa göre luna/sol/astra) ve Claude alt ajanlarına (haiku/sonnet/opus) dağıt, kendin kod yazma (yalnız birleştirme çakışması ve tek satırlık mekanik düzeltme).
+> **Sonraki oturum için devir notu.** Başlangıç: `git fetch --all --prune && git switch main && git pull`.
+> - **v0.5.0 yayınlandı** (PR #22 merge `1d1bb86`) ve kullanıcının TV'sine ADB ile kuruldu (16 Kasım 01:05). Kullanıcıdan TV'deki görünüm hakkında geri bildirim al.
+> - Açık PR: `chore/local-device-tests`. İçinde `scripts/local-device-tests.ps1` ve CLAUDE.md'deki "cihaz testleri önce yerelde" kuralı var (kullanıcı kararı). CI yeşilse merge et. Betik emülatörde yarım bir çalıştırmayla denendi, tam tur tamamlanmadı; ilk kullanımda sonucu doğrula.
+> - Çalışma düzeni: sen ekip liderisin. İşleri Codex alt ajanlarına dağıt; kendin kod yazma (yalnız birleştirme çakışması ve mekanik düzeltme).
+> - Kullanıcı istekleri (16 Kasım):
+>   - "Kartlar çok büyük, daha çok şey sığsın" → 0.5.0'da yapıldı (ızgaralar 6/6/8 sütun, kartlar küçüldü).
+>   - Genel ölçek ayarı İSTENMİYOR.
+>   - Devamında daha fazla sıklık isteyebilir.
+> - Yerel worktree'ler `C:\Users\Kudret\Documents\projeler\lumenara-wt\*`. Hepsi birleşti; silinebilir.
 
-## Şu an açık
-- **PR #22 — Tasarım 0.5.0** (dal `design/0.5`). İçerik:
+## Biten (0.5.0)
+- **PR #22 — Tasarım 0.5.0** (dal `design/0.5`, merge edildi). İçerik:
   - D0–D8 (D8 temizlik: `Glass.kt`, `Ink` alias'ı, `NavIcon` ve Unicode glifler kaldırıldı; `SourceGlyphTest`).
   - İlk CI turunda düşen 9 cihaz testinin düzeltmesi. Ayarlar testleri iki sütunlu Ayarlar'a uyarlandı (`openSettingsGroup`). Hub hizası, bölüm görseli 16:9 yuva, `ArtworkFallbackDeviceTest` ana iş parçacığı ağ çağrısı, altyazı paneli odağı düzeltildi.
   - Kullanıcı isteğiyle sık ızgaralar: kategori ve kanal 6 sütun/60 dp kompakt, afiş 8 sütun (`DenseGridTest`).
@@ -98,6 +100,10 @@ Devam yöntemi:
 - Sunucu diski dar (~6 GB boş): her derlemeden sonra build klasörlerini sil.
 
 ## Sıradaki
+0. **İlk iş — kart genişliği (kullanıcı geri bildirimi, 16 Kasım 2026, 0.5.0'ı TV'de gördükten sonra):** "Kartlar yatayda biraz büyüsün; bu sefer de isimler okunmuyor, alan çok küçük olmuş, yazılara yer kalmamış." Kullanıcı başlama demeden başlama.
+   - Hedef: kartları yatayda genişlet ki kategori, kanal ve içerik adları okunabilsin. Dikeydeki sıklık (ekrana sığan satır sayısı) korunsun; yalnız sütun sayısı biraz düşebilir.
+   - Kontrol edilecek yerler: kategori ızgarası (6 sütun, 60 dp), kompakt kanal kartı (6 sütun, logo 40 dp + "numara · ad"), afiş ızgarası (8 sütun, ad yalnız odakta), Hub raf kartları (110 dp), arama sonuçları (110 dp), bölüm kartları (140 dp).
+   - Öneri: kategori ve kanal 6 → 4–5 sütun ya da kanal adı için 2 satır; raf ve arama kartları ~150 dp. Önce TV'den ya da CI'dan ekran görüntüsüyle hangi adların kesildiğini ölç, sonra karar ver.
 1. (bitti) PR #18 → v0.4.0.
 2. Performans 0.4.1 (yukarıda).
 3. Kullanıcı kararı (15 Kasım 2026): U3 yerine sırayla şunlar yapılacak:
