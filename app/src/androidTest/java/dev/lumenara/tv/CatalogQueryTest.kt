@@ -12,6 +12,45 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CatalogQueryTest {
+    @Test fun xtreamMovieCategoryAndAllReturnOneCardWithEveryStreamAvailable() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val db = Room.inMemoryDatabaseBuilder(context, LibraryDb::class.java).build()
+        try {
+            val dao = db.library()
+            dao.save(Source("a", "Xtream", "sealed", false, 0, 0))
+            val fourK = "TR \u27be 4K Filmler"
+            val subtitles = "TR \u27be Altyazılı Filmler"
+            val netflix = "TR \u27be Netflix Filmleri"
+            val rows = listOf(item("dub-hd", "TR: Avatar (2009) HD Dublaj", fourK, year = ""),
+                item("dub-4k", "Avatar 4K Dublaj", fourK, year = ""),
+                item("sub", "Avatar [Altyazılı]", subtitles, year = ""),
+                item("original", "Avatar FHD", netflix, year = ""),
+                item("sequel", "Avatar: Suyun Yolu 4K", fourK, year = ""))
+            // Repeated imports upsert the same primary keys rather than multiplying streams.
+            dao.save(rows)
+            dao.save(rows)
+            dao.assignVersions(rows.versionAssignments())
+            assertEquals(5, dao.count("a"))
+            rows.forEach { dao.save(Mark(it.id, favorite = true)) }
+            for (source in listOf("a", "")) {
+                for (category in listOf("", fourK)) {
+                    val grid = dao.browse(source, "MOVIE", category, "", "", 120).first()
+                    assertEquals(setOf("Avatar", "Avatar: Suyun Yolu"), grid.map { it.title }.toSet())
+                    assertEquals(2, grid.size)
+                    assertEquals(2, dao.browse(source, "MOVIE", category, "", "favorite", 120).first().size)
+                }
+                for (category in listOf(subtitles, netflix)) {
+                    assertEquals("Avatar", dao.browse(source, "MOVIE", category, "", "", 120).first().single().title)
+                }
+            }
+            val card = dao.browse("a", "MOVIE", "", "", "", 120).first().single { it.title == "Avatar" }
+            assertEquals(setOf("dub-hd", "dub-4k", "sub", "original"),
+                dao.versionRows(card.versionKey).map { it.id }.toSet())
+            assertEquals(mapOf(fourK to 2, subtitles to 1, netflix to 1),
+                dao.categoryCounts("MOVIE", "a").first().associate { it.category to it.count })
+        } finally { db.close() }
+    }
+
     private fun item(id: String, title: String, category: String = "Film", kind: String = "MOVIE",
                      source: String = "a", year: String = "2024", language: String = "tr") =
         Item(id, source, title, category, kind, "", "sealed", title.lowercase(), 1, "poster",

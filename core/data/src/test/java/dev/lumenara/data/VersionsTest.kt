@@ -4,6 +4,38 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class VersionsTest {
+    @Test fun avatarRenditionsWithAnOptionalYearShareOneCardAndKeepTheSequelSeparate() {
+        val rows = listOf(item("tr", "TR: Avatar (2009)", year = ""),
+            item("4k", "Avatar 4K", year = ""), item("sub", "Avatar [Altyazılı]", year = ""),
+            item("hd", "[TR] Avatar HD Türkçe Dublaj", year = ""),
+            item("sequel", "Avatar: Suyun Yolu", year = ""))
+        val assigned = rows.versionAssignments()
+        val avatar = assigned.filter { it.id != "sequel" }
+        assertEquals(1, avatar.map { it.versionKey }.distinct().size)
+        assertEquals(1, avatar.count { it.isRepresentative })
+        assertEquals(listOf(0, 1, 2, 3), avatar.map { it.versionRank }.sorted())
+        assertTrue(avatar.all { it.displayTitle == "Avatar" && it.displayYear == "2009" })
+        assertNotEquals(avatar.first().versionKey, assigned.single { it.id == "sequel" }.versionKey)
+        assertEquals(assigned.associateBy { it.id }, rows.reversed().versionAssignments().associateBy { it.id })
+    }
+
+    @Test fun anUndatedVersionDoesNotGuessBetweenDatedRemakesOrConflictingTmdbIds() {
+        val remakes = listOf(item("old", "TR: Film (1999)", year = ""),
+            item("new", "Film (2024) HD", year = ""), item("unknown", "Film 4K", year = ""))
+        assertEquals(3, remakes.versionGroups().size)
+        val conflict = listOf(item("1", "TR: Avatar (2009)", year = "", tmdb = "42"),
+            item("2", "Avatar 4K", year = "", tmdb = "43"), item("3", "Avatar HD", year = ""))
+        assertEquals(3, conflict.versionGroups().size)
+    }
+
+    @Test fun exactStreamPreferenceKeepsSameAudioQualityChoicesAndOldAudioPreferencesWork() {
+        val rows = listOf(item("hd", "Avatar HD Dublaj"), item("4k", "Avatar 4K Dublaj"),
+            item("sub", "Avatar [Altyazılı]"))
+        assertEquals("4k", rows.preferredVersion("id:4k", rows.first()).id)
+        assertEquals("sub", rows.preferredVersion("SUBTITLED", rows.first()).id)
+        assertEquals("hd", rows.preferredVersion("id:removed", rows.first()).id)
+    }
+
     private fun item(id: String, title: String, year: String = "2024", source: String = "provider", tmdb: String = "", kind: String = "MOVIE") =
         Item(id, source, title, "Films", kind, id, "sealed", "$title [tmdb:$tmdb]", 0, "", year = year)
 
