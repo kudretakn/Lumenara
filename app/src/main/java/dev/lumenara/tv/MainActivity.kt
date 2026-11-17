@@ -6,6 +6,10 @@ import android.content.Intent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import dev.lumenara.catalog.searchRequest
 import dev.lumenara.design.LumenaraTheme
 
@@ -45,7 +49,11 @@ class MainActivity : ComponentActivity() {
             handlePlaybackIntent(intent)
         }
         Perf.mark("startup_screen")
-        setContent { LumenaraTheme { LibraryScreen(model, (application as LumenaraApp)::startWatchNext) } }
+        setContent {
+            Box(Modifier.semantics { testTagsAsResourceId = true }) {
+                LumenaraTheme { LibraryScreen(model, (application as LumenaraApp)::startWatchNext) }
+            }
+        }
     }
 
     override fun onNewIntent(intent: Intent) {

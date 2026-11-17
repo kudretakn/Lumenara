@@ -7,3 +7,4 @@ rootProject.name = "Lumenara"
 include(":app", ":core:catalog", ":core:designsystem")
 include(":core:data", ":core:player")
 include(":core:player-vlc")
+include(":baselineprofile")

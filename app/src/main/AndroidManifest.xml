@@ -15,6 +15,9 @@
         <provider android:name="androidx.startup.InitializationProvider"
             android:authorities="${applicationId}.androidx-startup" android:exported="false" tools:node="merge">
             <meta-data android:name="androidx.work.WorkManagerInitializer" tools:node="remove"/>
+            <!-- Keep sideload/update profile installation independent of Play Store delivery. -->
+            <meta-data android:name="androidx.profileinstaller.ProfileInstallerInitializer"
+                android:value="androidx.startup" tools:node="merge"/>
         </provider>
         <receiver android:name=".UpdateInstallReceiver" android:exported="false"/>
         <!-- TV home/search links must return to our existing task, even from another task.
