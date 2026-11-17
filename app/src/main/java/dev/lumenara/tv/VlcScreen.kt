@@ -441,7 +441,8 @@ internal fun VlcScreen(
                     liveProgress = liveProgress.sample(time, now,
                         active = playing && !paused && !reconnectRequested)
                     if (liveShouldReconnect(item.kind, ownStop = ownStop, paused = paused,
-                            playing = playing, unchangedForMs = liveProgress.unchangedForMs(now))) reconnect()
+                            playing = playing, positionAdvanced = liveProgress.positionAdvanced,
+                            unchangedForMs = liveProgress.unchangedForMs(now))) reconnect()
                     if (playing && now - lastSavedAtMs >= 5000) {
                         lastSavedAtMs = now
                         model.progress(item, time, p.length)

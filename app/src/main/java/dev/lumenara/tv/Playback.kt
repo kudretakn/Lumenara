@@ -246,7 +246,8 @@ internal fun Video(
                         progress = progress.sample(engine.currentPosition, now,
                             active = playing && !reconnectRequested)
                         if (liveShouldReconnect(item.kind, paused = !engine.playWhenReady,
-                                playing = playing, unchangedForMs = progress.unchangedForMs(now))) reconnect()
+                                playing = playing, positionAdvanced = progress.positionAdvanced,
+                                unchangedForMs = progress.unchangedForMs(now))) reconnect()
                     }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
