@@ -5,6 +5,9 @@ import android.util.Log
 
 /** Call sites use fixed phase names only, never titles, IDs, credentials or addresses. */
 internal object StartupPerf {
+    fun completed(event: String, millis: Long, total: Long) {
+        Log.i("LumenaraPerf", "$event ms=$millis total=$total")
+    }
     fun duration(event: String, millis: Long) {
         Log.i("LumenaraPerf", "$event ms=$millis")
     }

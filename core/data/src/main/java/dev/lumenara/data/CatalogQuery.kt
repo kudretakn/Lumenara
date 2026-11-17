@@ -46,29 +46,36 @@ internal data class CatalogFilter(
 
 /** The import winner is constant-time; fallback only probes this production's indexed siblings.
  * This preserves filtering before merging, e.g. a safe subtitle row with a hidden dubbed row.
- * Empty versionKey means a legacy row, which must stay independent until refreshed.
+ * Legacy and not-yet-applied rows stay independent until their batch commits.
  */
 internal fun representativePredicate(
     eligible: (String) -> CatalogPredicate,
     filtered: Boolean,
     sameCategory: Boolean = false,
 ): CatalogPredicate {
-    if (!filtered) return CatalogPredicate("i.isRepresentative=1")
+    val pending = pendingVersionPredicate("i")
+    val legacy = "(COALESCE(i.versionKey,'')='' OR $pending)"
+    if (!filtered) return CatalogPredicate("(i.isRepresentative=1 OR $legacy)")
     val candidate = eligible("v")
-    return CatalogPredicate("""(i.isRepresentative=1 OR (i.versionKey!='' AND NOT EXISTS(
+    return CatalogPredicate("""(i.isRepresentative=1 OR $legacy OR (i.versionKey!='' AND NOT EXISTS(
         SELECT 1 FROM items v INDEXED BY index_items_versionKey
         WHERE v.versionKey=i.versionKey AND v.versionRank<i.versionRank
+        AND NOT ${pendingVersionPredicate("v")}
         ${if (sameCategory) "AND v.category=i.category" else ""} AND ${candidate.sql})))""", candidate.args)
 }
+
+// A single primary-key state probe; unfinished legacy keys must never hide another card.
+private fun pendingVersionPredicate(alias: String): String = """EXISTS(
+    SELECT 1 FROM version_backfill_state b WHERE b.id=1
+    AND (b.phase IN ('normalize','resolve') OR (b.phase='apply' AND $alias.id>b.cursor)))"""
 
 private fun browseStatement(filter: CatalogFilter, ordered: Boolean = true, includeSort: Boolean = false,
     projectionOnly: String? = null): CatalogPredicate {
     val eligible = filter.predicate("i")
     val representative = representativePredicate({ filter.predicate(it) }, filter.filtersVersions)
     // EQP: equality on kind/category -> index_items_kind_category_title (all sources), or
-    // source/kind/category -> index_items_source_kind_category_title; otherwise
-    // kind/isRepresentative -> index_items_kind_isRepresentative_title. Filtered all-category
-    // queries use kind/title because fallback cannot constrain isRepresentative. Equal-title id
+    // source/kind/category -> index_items_source_kind_category_title; otherwise kind/title.
+    // The legacy fallback cannot constrain isRepresentative. Equal-title id
     // ordering may use a small right-part temp sort, not a sort of the whole catalog.
     // instr(search, ?) has no index: evaluate during this scan and stop at the visible LIMIT.
     val dedupLive = filter.source.isEmpty() && filter.kind in listOf("", "LIVE") &&
@@ -89,8 +96,9 @@ private fun browseStatement(filter: CatalogFilter, ordered: Boolean = true, incl
         else if (order.isEmpty() && filter.kind.isNotEmpty()) "INDEXED BY " + when {
         filter.source.isNotEmpty() && filter.category.isNotEmpty() -> "index_items_source_kind_category_title"
         filter.category.isNotEmpty() -> "index_items_kind_category_title"
-        filter.filtersVersions -> "index_items_kind_title"
-        else -> "index_items_kind_isRepresentative_title"
+        // Pending legacy rows can have isRepresentative=0, so that column is no longer
+        // an equality constraint. Keep title order streaming throughout the backfill.
+        else -> "index_items_kind_title"
     } else ""
     val args = eligible.args + representative.args
     fun projection(row: String) = projectionOnly ?: if (!includeSort) "i.*" else "i.*," + when (filter.shelf) {

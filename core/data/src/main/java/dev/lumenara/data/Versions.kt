@@ -81,7 +81,7 @@ fun List<Item>.versionAssignments(): List<VersionAssignment> = keyedVersionGroup
 }
 
 /** Only bounded query results need a display projection; grouping is done during import. */
-fun Item.displayVersion(): Item = if (versionKey.isEmpty()) this
+fun Item.displayVersion(): Item = if (versionKey.isEmpty() || displayTitle.isEmpty()) this
     else copy(title = displayTitle, year = displayYear)
 
 fun List<Item>.mergeVersions(): List<Item> = versionGroups().map { versions ->
