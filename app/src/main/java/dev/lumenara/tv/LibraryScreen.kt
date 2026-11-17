@@ -26,13 +26,19 @@ import kotlinx.coroutines.flow.first
 internal fun LibraryScreen(model: LibraryModel = viewModel(), onFirstDraw: () -> Unit = {}) {
     val sources by model.sources.collectAsStateWithLifecycle()
     val startInSetup by model.startInSetup.collectAsStateWithLifecycle()
-    val available = sources ?: return
-    val initialSetup = startInSetup ?: return
-    LaunchedEffect(model) {
-        // Frame callbacks run before drawing. The second callback follows a submitted frame.
-        withFrameNanos { }; withFrameNanos { }
-        Perf.since("startup_screen", "startup_screen_first_draw")
+    // Submit useful content while the IO launch snapshot resolves, rather than an empty
+    // composition. Do not touch the lazy repository or compose the full navigation graph here.
+    if (sources == null || startInSetup == null) {
+        Column(Modifier.fillMaxSize().background(LumenColors.bg)
+            .padding(horizontal = Spacing.screenHorizontal, vertical = Spacing.screenVertical),
+            verticalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
+            LumenaraLogo(showName = true)
+            LoadingCard(Modifier.fillMaxWidth().height(100.dp))
+        }
+        return
     }
+    val available = checkNotNull(sources)
+    val initialSetup = checkNotNull(startInSetup)
     LaunchedEffect(model) {
         model.awaitFirstDraw()
         onFirstDraw()
