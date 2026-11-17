@@ -90,13 +90,13 @@ private fun HubChannelShelf(
                 val logo by produceState<String?>(null, item.id, item.logo) {
                     value = model.repo.poster(item)
                 }
-                Column(Modifier.width(110.dp), verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+                Column(Modifier.width(150.dp), verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
                     HubShelfTile(item, { play(item, rows) }, focus,
                         Modifier.testTag("live-channel-${item.id}")) {
                         HubArtwork(model, item, logo, channel = true)
                     }
                     Text(item.title, style = LumenType.label, color = LumenColors.textPrimary,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text(current?.title.orEmpty(), style = LumenType.meta,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                     if (current != null) ProgressLine(
@@ -129,8 +129,10 @@ private fun HubResumeShelf(model: LibraryModel, rows: List<Item>, open: (Item) -
                     model.repo.library.observeMark(item.id)
                 }.collectAsStateWithLifecycle(null)
                 val mark = if (item.kind == "SERIES") marks.firstOrNull { it.id == continuing?.id } else observedMark
-                val backdrop by produceState<String?>(null, item.id, item.backdrop) {
-                    value = model.repo.backdrop(item)
+                val backdrop by produceState<String?>(null, item.id, item.backdrop, item.logo) {
+                    // Listing backdrops can be absent even when a provider poster is available.
+                    value = model.repo.backdrop(item)?.takeIf(String::isNotBlank)
+                        ?: model.repo.poster(item)?.takeIf(String::isNotBlank)
                 }
                 val episode = continuing?.seriesEpisode()
                 val remaining = mark?.takeIf { it.duration > 0 }?.let {
@@ -138,7 +140,7 @@ private fun HubResumeShelf(model: LibraryModel, rows: List<Item>, open: (Item) -
                 }
                 val caption = listOfNotNull(episode?.let { "S${it.season} · B${it.episode}" }, remaining)
                     .joinToString(" · ").ifBlank { "İzlemeye devam et" }
-                Column(Modifier.width(110.dp), verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+                Column(Modifier.width(180.dp), verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
                     HubShelfTile(item, { open(item) }, focus) {
                         HubArtwork(model, item, backdrop)
                         if ((mark?.duration ?: 0) > 0) ProgressLine(
@@ -147,7 +149,7 @@ private fun HubResumeShelf(model: LibraryModel, rows: List<Item>, open: (Item) -
                         )
                     }
                     Text(item.title, style = LumenType.label, color = LumenColors.textPrimary,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text(caption, style = LumenType.meta, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
@@ -310,10 +312,18 @@ internal fun Home(
                 }
             }
         }
-        if (recentResult == null || resumeResult == null) item {
+        if (recentResult == null) item {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 items(4) {
-                    Box(Modifier.width(110.dp).aspectRatio(16f / 9f)
+                    Box(Modifier.width(150.dp).aspectRatio(16f / 9f)
+                        .background(LumenColors.surface2, RoundedCornerShape(Radii.card)).testTag("list-loading"))
+                }
+            }
+        }
+        if (resumeResult == null) item {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                items(4) {
+                    Box(Modifier.width(180.dp).aspectRatio(16f / 9f)
                         .background(LumenColors.surface2, RoundedCornerShape(Radii.card)).testTag("list-loading"))
                 }
             }

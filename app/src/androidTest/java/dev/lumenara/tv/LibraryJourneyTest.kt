@@ -150,7 +150,7 @@ class LibraryJourneyTest {
                         bounds.top >= hubViewport.top && bounds.bottom <= hubViewport.bottom)
                 }
                 val shelfCard = screen.onNode(recentCard).assertIsDisplayed().fetchSemanticsNode().boundsInRoot
-                assertEquals("Hub raf kartı genişliği", 110f, shelfCard.width / density, 1f)
+                assertEquals("Hub raf kartı genişliği", 150f, shelfCard.width / density, 1f)
                 assertEquals("Hub raf görseli 16:9 kalmalı", 16f / 9f, shelfCard.width / shelfCard.height, .02f)
                 assertTrue("En az bir raf kartı gezinmeyle aynı ilk ekranda tamamen görünmeli",
                     shelfCard.top >= hubViewport.top && shelfCard.bottom <= hubViewport.bottom)
@@ -158,6 +158,11 @@ class LibraryJourneyTest {
                 screen.waitUntil(30_000) { screen.onAllNodes(recentCard and isFocused()).fetchSemanticsNodes().isNotEmpty() }
                 screen.onNodeWithTag("hub").performScrollToNode(hasTestTag("shelf-Kaldığın yerden devam et"))
                 button("75 dk kaldı").assertIsDisplayed()
+                val resumeCard = screen.onNode(hasContentDescription("Gece Treni") and
+                    hasAnyAncestor(hasTestTag("shelf-Kaldığın yerden devam et")))
+                    .assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+                assertEquals("Devam kartı genişliği", 180f, resumeCard.width / density, 1f)
+                assertEquals("Devam görseli 16:9 kalmalı", 16f / 9f, resumeCard.width / resumeCard.height, .02f)
                 capture("home-shelves")
                 listOf("channel-shelf-Son kanal", "shelf-Kaldığın yerden devam et").forEach { tag ->
                     assertEquals("Raflar aynı sol kolonda başlamalı", 48f,
