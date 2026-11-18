@@ -46,10 +46,32 @@ class WindowedGridTest {
             screen.openCategory(if (kind == "LIVE") "Tüm kanallar" else "Tümü")
             screen.waitUntil(10_000) { focused(0) }
             screen.onNodeWithText("Devamını göster").assertDoesNotExist()
+            fun assertHorizontalRow(first: Int) {
+                screen.waitForIdle()
+                val position = screen.onNodeWithTag(tag).fetchSemanticsNode().config[ScrollPositionKey]
+                for (column in 1 until columns) {
+                    screen.dpad(Key.DirectionRight)
+                    screen.waitUntil(10_000) { focused(first + column) }
+                    screen.waitForIdle()
+                    assertEquals("DPAD_RIGHT moved $tag vertically at ${first + column}", position,
+                        screen.onNodeWithTag(tag).fetchSemanticsNode().config[ScrollPositionKey])
+                }
+                for (column in columns - 2 downTo 0) {
+                    screen.dpad(Key.DirectionLeft)
+                    screen.waitUntil(10_000) { focused(first + column) }
+                    screen.waitForIdle()
+                    assertEquals("DPAD_LEFT moved $tag vertically at ${first + column}", position,
+                        screen.onNodeWithTag(tag).fetchSemanticsNode().config[ScrollPositionKey])
+                }
+            }
             val steps = 5 * pageSize / columns
             for (row in 1..steps) {
                 screen.dpad(Key.DirectionDown)
                 screen.waitUntil(10_000) { focused(row * columns) }
+                // Exercise a lower visible row, a page boundary and a distant evicted window.
+                if (row == 2 || row == pageSize / columns + 1 || row == steps) {
+                    assertHorizontalRow(row * columns)
+                }
                 if (row == pageSize / columns + 1) {
                     // The first row past the first page must receive the next DPAD focus.
                     assertTrue(focused(pageSize + columns))
