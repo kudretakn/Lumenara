@@ -36,6 +36,7 @@ class LivePagesTest {
             runBlocking {
                 repo.library.save(Source(source, source, "", false, System.currentTimeMillis(), rows.size))
                 repo.library.save(rows)
+                prepareTestCatalog(repo, source)
             }
             screen.runOnUiThread {
                 val model = ViewModelProvider(screen.activity)[LibraryModel::class.java]
@@ -85,6 +86,7 @@ class LivePagesTest {
             runBlocking {
                 repo.library.save(Source(source, source, "", false, System.currentTimeMillis(), rows.size))
                 repo.library.save(rows)
+                prepareTestCatalog(repo, source)
             }
             var pages: LivePages? = null
             screen.runOnUiThread {
@@ -107,9 +109,15 @@ class LivePagesTest {
             }
             // A prefix rename invalidates saved keysets. Absolute list indices must be
             // recomputed even when the current window began with a cached cursor.
-            runBlocking { repo.library.save(listOf(rows[0].copy(title = "Z renamed"))) }
+            runBlocking {
+                repo.library.save(listOf(rows[0].copy(title = "Z renamed")))
+                prepareTestCatalog(repo, source)
+            }
             screen.waitUntil(10_000) { pages?.get(anchorIndex)?.id == rows[anchorIndex + 1].id }
-            runBlocking { repo.library.save(listOf(rows[0])) }
+            runBlocking {
+                repo.library.save(listOf(rows[0]))
+                prepareTestCatalog(repo, source)
+            }
             screen.waitUntil(10_000) { pages?.get(anchorIndex)?.id == rows[anchorIndex].id }
             screen.runOnIdle {
                 checkNotNull(pages).focused(anchorIndex)

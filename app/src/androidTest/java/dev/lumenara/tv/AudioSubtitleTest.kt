@@ -8,6 +8,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.UiDevice
 import dev.lumenara.data.*
+import dev.lumenara.catalog.displayTitle
 import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
@@ -125,16 +126,18 @@ class AudioSubtitleTest {
                 }
                 assertEquals(1, cards.size)
                 val movie = cards.single()
-                assertEquals(movieTitle, movie.title)
+                // Provider numeric IDs are hidden on cards, while stream identities stay intact.
+                assertEquals(movieTitle.displayTitle(), movie.title)
                 val versions = runBlocking { repo.versions(movie) }
                 assertEquals(2, versions.size)
+                assertTrue(versions.all { it.title.startsWith(movieTitle) })
                 runBlocking {
                     repo.updateMark(movie.id) { it.copy(favorite = true, listed = true, position = 500, duration = 120000, updated = 1) }
                     versions.forEach { assertTrue(repo.library.mark(it.id)!!.favorite); assertTrue(repo.library.mark(it.id)!!.listed) }
                 }
                 screen.openHubCard("Filmler")
                 screen.openCategory("Tümü")
-                val card = hasContentDescription(movieTitle) and hasAnyAncestor(hasTestTag("poster-grid"))
+                val card = hasContentDescription(movieTitle.displayTitle()) and hasAnyAncestor(hasTestTag("poster-grid"))
                 waitFor(card)
                 screen.onAllNodes(card).assertCountEquals(1)
                 select(card)

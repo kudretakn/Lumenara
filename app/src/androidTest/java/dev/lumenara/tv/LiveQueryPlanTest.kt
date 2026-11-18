@@ -56,6 +56,7 @@ class LiveQueryPlanTest {
                     if (n == 400) "Adults" else "News", "LIVE", "", "sealed", title.lowercase(), 1, "")
             }
             dao.save(rows + rows[0].copy(id = "b:0", source = "b"))
+            prepareTestCatalog(db)
             dao.save(Mark(rows[10].id, favorite = true))
             val hidden = listOf("Adults")
             queries.clear()
@@ -63,13 +64,13 @@ class LiveQueryPlanTest {
             val first = dao.livePageAfter("a", "News", "", "", 160, null, hidden = hidden).first()
             val order = dao.liveChannelOrder("a", hidden).first()
             assertEquals(400, order.size)
-            assertEquals("A category open must execute at most three item statements", 3, queries.size)
+            assertEquals("Counts read stored metadata; only the page and explicit order read items", 2, queries.size)
 
             val next = dao.livePageAfter("a", "News", "", "", 160,
-                first.last().let { LiveCursor(it.title, it.id) }, hidden = hidden).first()
+                first.last().let { LiveCursor(it.sortKey, it.id) }, hidden = hidden).first()
             assertEquals(rows.subList(160, 320).map { it.id }, next.map { it.id })
             val previous = dao.livePageAfter("a", "News", "", "", 160,
-                next.first().let { LiveCursor(it.title, it.id) }, backwards = true, hidden = hidden).first()
+                next.first().let { LiveCursor(it.sortKey, it.id) }, backwards = true, hidden = hidden).first()
             assertEquals(first.map { it.id }.reversed(), previous.map { it.id })
             assertEquals(320, dao.liveIndex("a", rows[320].id, "News", hidden = hidden))
             assertNull(dao.liveIndex("a", rows[400].id, hidden = hidden))
@@ -89,18 +90,18 @@ class LiveQueryPlanTest {
             assertTrue(dao.liveNeighbors("a", "", "", "", 80, rows[400].id, hidden = hidden).first().isEmpty())
             assertTrue(dao.liveNeighbors("a", "", "", "", 80, "missing", hidden = hidden).first().isEmpty())
             // Playback holds the old Item title during a catalog refresh. Seek from the DB row.
-            dao.save(listOf(rows[159].copy(title = "Z renamed")))
+            dao.save(listOf(rows[159].copy(title = "Z renamed", sortKey = "z renamed")))
             assertEquals(rows[399].id, dao.liveNeighbors("a", "News", "", "", 80,
                 rows[159].id, backwards = true, hidden = hidden).first().first().id)
 
             // Exercise every optional source/category shape, including P1's new index when present.
             for (source in listOf("", "a")) for (category in listOf("", "News")) {
-                dao.livePageAfter(source, category, "", "", 80, LiveCursor(rows[80].title, rows[80].id), hidden = hidden).first()
+                dao.livePageAfter(source, category, "", "", 80, LiveCursor(rows[80].sortKey, rows[80].id), hidden = hidden).first()
                 dao.livePageAfter(source, category, "channel", "favorite", 80, null, hidden = hidden).first()
                 dao.liveCount(source, category, "", "", hidden).first()
                 dao.liveIndex(source, rows[10].id, category, hidden = hidden)
                 dao.liveChannelOrder(source, hidden).first()
-                assertEquals(listOf(LiveCategoryCount("News", if (source.isEmpty()) 401 else 400)),
+                assertEquals(listOf(LiveCategoryCount("News", if (source.isEmpty()) 401 else 400, "news")),
                     dao.liveCategoryCounts(source, hidden).first())
             }
             for ((sql, args) in queries.toList()) {

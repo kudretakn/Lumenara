@@ -36,8 +36,22 @@ internal open class WindowPages(val pageSize: Int, val columns: Int) {
 internal class CatalogPages(val source: String, val kind: String, val category: String,
     val query: String, val shelf: String, pageSize: Int, columns: Int) : WindowPages(pageSize, columns) {
     private var liveSlots by mutableStateOf(BooleanArray(0))
+    private var slotColumns by mutableStateOf(IntArray(0))
     fun isLiveSlot(index: Int): Boolean = kind == "LIVE" || (liveSlots.getOrNull(index) ?: (get(index)?.kind == "LIVE"))
-    fun slotKinds(kinds: List<String>) { liveSlots = BooleanArray(kinds.size) { kinds[it] == "LIVE" } }
+    fun columnOf(index: Int): Int = when (kind) {
+        "" -> slotColumns.getOrNull(index) ?: 0
+        "LIVE" -> index % (columns / 2) * 2
+        else -> index % columns
+    }
+    fun slotKinds(kinds: List<String>) {
+        liveSlots = BooleanArray(kinds.size) { kinds[it] == "LIVE" }
+        var column = 0
+        slotColumns = IntArray(kinds.size) { index ->
+            val span = if (liveSlots[index]) 2 else 1
+            if (column + span > columns) column = 0
+            column.also { column = (column + span) % columns }
+        }
+    }
     override fun loaded(): List<Item> = if (kind == "LIVE")
         LiveChannelGroup(super.loaded(), source, category, query, shelf) else super.loaded()
 }

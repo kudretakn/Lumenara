@@ -20,7 +20,6 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
-import dev.lumenara.catalog.displayTitle
 import dev.lumenara.catalog.productionName
 import dev.lumenara.data.*
 import dev.lumenara.design.*
@@ -74,7 +73,7 @@ internal fun Details(model: LibraryModel, item: Item, play: (Item, List<Item>) -
 @Composable
 internal fun DetailHeading(item: Item, info: MovieInfo) {
     Column(Modifier.widthIn(max = 560.dp), verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
-        Text(item.title.displayTitle(), style = LumenType.display, color = LumenColors.textPrimary,
+        Text(item.cleanTitle.ifEmpty { item.title }, style = LumenType.display, color = LumenColors.textPrimary,
             maxLines = 2, overflow = TextOverflow.Ellipsis)
         val minutes = info.minutes.toIntOrNull()
         val duration = if (minutes != null && minutes >= 60) "${minutes / 60} sa ${minutes % 60} dk"

@@ -16,7 +16,7 @@ data class VersionBackfillState(
     val total: Long = 0,
 )
 
-@Entity(tableName = "version_backfill_rows", indices = [Index("bucket", "year"), Index("resolvedKey", "audio", "id")])
+@Entity(tableName = "version_backfill_rows", indices = [Index("bucket", "year"), Index("resolvedKey", "audio", "id"), Index("source", "id")])
 data class VersionBackfillRow(
     @PrimaryKey val id: String,
     val source: String,
@@ -40,6 +40,15 @@ interface VersionBackfillDao {
     suspend fun candidates(cursor: String, limit: Int): List<VersionCandidate>
     @Query("SELECT * FROM version_backfill_rows WHERE id>:cursor ORDER BY id LIMIT :limit")
     suspend fun rows(cursor: String, limit: Int): List<VersionBackfillRow>
+    @Query("""SELECT id,source,title,kind,search,year,category FROM items INDEXED BY index_items_source_id
+        WHERE source=:source AND id>:cursor AND (:generation<0 OR generation=:generation)
+        ORDER BY id LIMIT :limit""")
+    suspend fun sourceCandidates(source: String, generation: Long, cursor: String, limit: Int): List<VersionCandidate>
+    @Query("SELECT * FROM version_backfill_rows WHERE source=:source AND id>:cursor ORDER BY id LIMIT :limit")
+    suspend fun sourceRows(source: String, cursor: String, limit: Int): List<VersionBackfillRow>
+    @Query("""DELETE FROM version_backfill_rows WHERE id IN
+        (SELECT id FROM version_backfill_rows WHERE source=:source ORDER BY id LIMIT :limit)""")
+    suspend fun cleanSource(source: String, limit: Int): Int
     // LIMIT 2 is enough to distinguish an unambiguous year/ID from conflicting remakes.
     @Query("SELECT DISTINCT year FROM version_backfill_rows WHERE bucket=:bucket AND year!='' LIMIT 2")
     suspend fun years(bucket: String): List<String>
@@ -65,7 +74,11 @@ interface VersionBackfillDao {
 /** Normalize first so distant batch boundaries cannot split missing-year/TMDB groups.
  * All sibling probes use the small indexed staging rows, never sealed URLs or full Items.
  */
-class VersionBackfill(private val db: LibraryDb) {
+class VersionBackfill(private val db: LibraryDb, private val source: String? = null,
+    private val generation: Long = -1) {
+    // Source refresh owns an outer import transaction: cancellation rolls the entire import
+    // back, so its bounded phase cursor can stay local. Upgrade cursors remain durable.
+    private var refreshState = VersionBackfillState()
     private val work = db.versionBackfill()
 
     /** True means another batch is needed; cancellation rolls back the cursor with its rows. */
@@ -75,13 +88,14 @@ class VersionBackfill(private val db: LibraryDb) {
         var done: VersionBackfillState? = null
         val batchStart = SystemClock.elapsedRealtime()
         val more = db.withTransaction {
-            val state = work.state() ?: return@withTransaction false
+            val state = if (source == null) work.state() ?: return@withTransaction false else refreshState
             if (state.phase == "done") return@withTransaction false
             val start = SystemClock.elapsedRealtime()
             var next = state
             when (state.phase) {
                 "normalize" -> {
-                    val rows = work.candidates(state.cursor, limit)
+                    val rows = if (source == null) work.candidates(state.cursor, limit)
+                        else work.sourceCandidates(source, generation, state.cursor, limit)
                     // Scan the primary key in order, including cheap skips for LIVE/EPISODE.
                     // A kind IN predicate can make old SQLite sort the entire catalog per batch.
                     work.save(rows.filter { it.kind in listOf("MOVIE", "SERIES") }.map { candidate ->
@@ -99,19 +113,21 @@ class VersionBackfill(private val db: LibraryDb) {
                         else state.copy(cursor = rows.last().id, total = state.total + rows.size)
                 }
                 "resolve" -> {
-                    val rows = work.rows(state.cursor, limit)
+                    val rows = if (source == null) work.rows(state.cursor, limit)
+                        else work.sourceRows(source, state.cursor, limit)
                     for (row in rows) {
                         val years = work.years(row.bucket)
                         val year = row.year.ifEmpty { years.singleOrNull().orEmpty() }
                         val ids = work.tmdbIds(row.bucket, year, years.size == 1)
-                        val tmdb = if (ids.size <= 1) ids.firstOrNull().orEmpty() else row.tmdb
+                        val tmdb = if (row.title.isBlank()) row.tmdb
+                            else if (ids.size <= 1) ids.firstOrNull().orEmpty() else row.tmdb
                         // Provider titles can themselves contain '|'. Only the known source
                         // prefix and media-kind field belong to the TMDB namespace.
                         val kind = row.bucket.removePrefix("${row.source}|").substringBefore('|')
                         val prefix = "${row.source}|$kind"
                         val key = when {
                             tmdb.isNotEmpty() -> "$prefix|tmdb:$tmdb"
-                            ids.size > 1 -> row.id
+                            row.title.isBlank() || ids.size > 1 -> row.id
                             else -> "${row.bucket}|$year"
                         }
                         work.resolve(row.id, key)
@@ -120,7 +136,8 @@ class VersionBackfill(private val db: LibraryDb) {
                         else state.copy(cursor = rows.last().id)
                 }
                 "apply" -> {
-                    val rows = work.rows(state.cursor, limit)
+                    val rows = if (source == null) work.rows(state.cursor, limit)
+                        else work.sourceRows(source, state.cursor, limit)
                     db.library().assignVersions(rows.map { row ->
                         val rank = work.rank(row.resolvedKey, row.audio, row.id)
                         VersionAssignment(row.id, row.resolvedKey, rank == 0, row.title,
@@ -129,20 +146,27 @@ class VersionBackfill(private val db: LibraryDb) {
                     next = if (rows.isEmpty()) state.copy(phase = "clean", cursor = "")
                         else state.copy(cursor = rows.last().id)
                 }
-                "clean" -> if (work.clean(limit) == 0) next = state.copy(phase = "done")
+                "clean" -> {
+                    val deleted = if (source == null) work.clean(limit) else work.cleanSource(source, limit)
+                    if (deleted == 0) next = state.copy(phase = "done")
+                }
                 else -> error("Unknown version backfill phase")
             }
             next = next.copy(elapsed = state.elapsed + SystemClock.elapsedRealtime() - start)
-            work.save(next)
+            if (source == null) work.save(next) else refreshState = next
             measured = true
             if (next.phase == "done") done = next
             next.phase != "done"
         }
         if (measured) {
             // Includes the commit; fixed names never contain source or content identifiers.
-            StartupPerf.elapsed("version_backfill_batch", batchStart)
+            if (source == null) StartupPerf.elapsed("version_backfill_batch", batchStart)
+            else StartupPerf.elapsed("refresh_version_batch", batchStart)
         }
-        done?.let { StartupPerf.completed("version_backfill_done", it.elapsed, it.total) }
+        done?.let {
+            if (source == null) StartupPerf.completed("version_backfill_done", it.elapsed, it.total)
+            else StartupPerf.completed("refresh_version_done", it.elapsed, it.total)
+        }
         return more
     }
 }

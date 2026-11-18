@@ -11,6 +11,17 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class CatalogStreamsTest {
+    @Test fun unfilledUpgradeRowsStayHiddenInSafeModeUntilTheirBatchCommits() {
+        val safe = Item("safe", "source", "News", "News", "LIVE", "", "sealed", "news", 1, "")
+        val adult = safe.copy(id = "adult", category = "XXX", isAdult = true)
+        val legacy = safe.copy(id = "legacy", sortKey = "", isAdult = false)
+        val rows = listOf(safe, adult, legacy)
+        assertEquals(listOf(safe), rows.visibleStoredRows(false))
+        assertEquals(rows, rows.visibleStoredRows(true))
+        val filled = legacy.copy(sortKey = "news")
+        assertEquals(listOf(safe, filled), listOf(safe, adult, filled).visibleStoredRows(false))
+    }
+
     private class Catalog {
         val names = MutableStateFlow(listOf("Film", "For Adults"))
         val showAdult = MutableStateFlow(false)

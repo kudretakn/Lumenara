@@ -31,7 +31,7 @@ class LargeCatalogTest {
                         2 -> " (Altyazılı)"
                         else -> ""
                     }
-                    appendLine("#EXTINF:-1 group-title=\"Film\" tvg-logo=\"https://example.invalid/poster/$id.jpg\",Film ${id / 3}$suffix")
+                    appendLine("#EXTINF:-1 group-title=\"Film\" tvg-logo=\"https://example.invalid/poster/$id.jpg\",Film ${id / 3} Hikayesi$suffix")
                     appendLine("https://example.invalid/movie/$id.mp4")
                 }
             }
@@ -130,6 +130,7 @@ class LargeCatalogTest {
                 assertEquals(10000, kotlinx.coroutines.withTimeout(10_000) { order.first { it.size == 10000 } }.size)
                 // New queries obey the hidden list in both the selected row and COUNT prefix.
                 repo.library.save(listOf(numbered.copy(category = "For Adults")))
+                prepareTestCatalog(repo, source.id)
                 assertNull(repo.library.liveIndex(source.id, numbered.id, hidden = listOf("For Adults")))
                 assertEquals(9999, kotlinx.coroutines.withTimeout(10_000) { order.first { it.size == 9999 } }.size)
                 assertEquals(9999, repo.library.liveCount(source.id, "", "", "", listOf("For Adults")).first())

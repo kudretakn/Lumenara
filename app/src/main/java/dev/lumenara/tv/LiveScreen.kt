@@ -169,6 +169,7 @@ private fun LiveChannelGrid(model: LibraryModel, title: String, result: List<Ite
     val rows = result.orEmpty()
     val loading = if (paged != null) !paged.firstPageLoaded else result == null
     val grid = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
+    val gridFocus = rememberGridFocus(grid) { it % LIVE_GRID_COLUMNS }
     var decorationsReady by remember(paged, query) { mutableStateOf(false) }
     LaunchedEffect(paged, query, loading) {
         if (!loading) {
@@ -256,7 +257,7 @@ private fun LiveChannelGrid(model: LibraryModel, title: String, result: List<Ite
             }
             androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
                 androidx.compose.foundation.lazy.grid.GridCells.Fixed(LIVE_GRID_COLUMNS), state = grid,
-                modifier = Modifier.weight(1f).testTag("live-channels")
+                modifier = Modifier.weight(1f).testTag("live-channels").reportScrollPosition(grid).then(gridFocus.modifier)
                     .semantics { if (paged != null) pagingWindow = pagingDescription(paged) }.focusRestorer().focusGroup(),
                 contentPadding = PaddingValues(vertical = Spacing.unit),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -280,6 +281,7 @@ private fun LiveChannelGrid(model: LibraryModel, title: String, result: List<Ite
                             paged?.focused(index); focused(it)
                         },
                             Modifier.fillMaxWidth()
+                                .then(gridFocus.item(index))
                                 .onFocusChanged { if (it.isFocused) paged?.focused(index) }
                                 .then(if (index == target) Modifier.focusRequester(focus) else Modifier),
                             number = numbers[item?.id], operations = { item?.let(open) }, compact = true,

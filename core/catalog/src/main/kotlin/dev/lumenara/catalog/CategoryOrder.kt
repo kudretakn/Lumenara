@@ -33,3 +33,10 @@ fun <T> Iterable<T>.sortedByCategory(name: (T) -> String): List<T> {
     }.sortedWith(compareBy<Ranked<T>> { it.adult }.thenByDescending { it.tr }.thenBy { it.key })
         .map { it.row }
 }
+
+/** Persisted binary key: adult last, TR first, then Turkish collation. */
+fun categorySortKey(name: String): String {
+    val prefix = (if (isAdultCategory(name)) "1" else "0") + (if (isTrCategory(name)) "0" else "1")
+    return prefix + turkishCategories.get().getCollationKey(name).toByteArray()
+        .joinToString("") { byte -> (byte.toInt() and 255).toString(16).padStart(2, '0') }
+}

@@ -224,6 +224,15 @@ class CinemaJourneyTest {
                     }
                 }
             try {
+                // A retry may start with another test's source after a process crash.
+                screen.waitUntil(30_000) {
+                    screen.onAllNodesWithText("Liste adresi gir").fetchSemanticsNodes().isNotEmpty() ||
+                        screen.onAllNodesWithTag("hub").fetchSemanticsNodes().isNotEmpty()
+                }
+                if (screen.onAllNodesWithText("Liste adresi gir").fetchSemanticsNodes().isEmpty()) {
+                    screen.openHubCard("Ayarlar")
+                    select("IPTV Kaynakları")
+                }
                 node("Liste adresi gir").assertExists()
                 capture("cinema-setup")
                 runBlocking {
@@ -244,6 +253,8 @@ class CinemaJourneyTest {
                     repo.guide.slots(listOf(Slot("home-test-guide", "news", now - 60_000,
                         now + 3_600_000, "Günün Haberleri", "", "günün haberleri")))
                     repo.guide.map(Mapping(channel.id, "home-test-guide", "news"))
+                    assertEquals("Imported fixture must resolve its explicit EPG mapping",
+                        "Günün Haberleri", repo.liveNow(listOf(channel), now).first()[channel.id]?.title)
                 }
                 section("Ana Sayfa")
                 waitFor(hasTestTag("hub-Canlı TV") and isFocused())
@@ -263,12 +274,16 @@ class CinemaJourneyTest {
                 screen.onNodeWithTag("hub").performScrollToNode(hasTestTag("channel-shelf-Son kanal"))
                 val recentCard = describedIn("Test Haber", "channel-shelf-Son kanal")
                 waitFor(recentCard)
-                node("Günün Haberleri").assertExists()
-                capture("screens/home-shelves")
                 val recentId = runBlocking { preferences.recentLive.first().first() }
                 runBlocking {
-                    assertEquals("Test Haber", repo.library.liveByIds("", listOf(recentId)).first().single().title)
+                    val recentChannel = repo.library.liveByIds("", listOf(recentId)).first().single()
+                    assertEquals("Test Haber", recentChannel.title)
+                    assertEquals("Returning from playback must retain the mapped programme",
+                        "Günün Haberleri", repo.liveNow(listOf(recentChannel), System.currentTimeMillis())
+                            .first()[recentId]?.title)
                 }
+                node("Günün Haberleri").assertIsDisplayed()
+                capture("screens/home-shelves")
                 section("Filmler")
                 screen.openCategory("Sinema")
                 val movieCard = describedIn("Kadife Gece", "poster-grid")

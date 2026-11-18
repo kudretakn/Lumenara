@@ -49,6 +49,7 @@ class LivePresentationTest {
             runBlocking {
                 repo.library.save(Source(source, source, "", false, System.currentTimeMillis(), rows.size))
                 repo.library.save(rows)
+                prepareTestCatalog(repo, source)
                 repo.guide.put(Feed(feed, source, ""))
                 val now = System.currentTimeMillis()
                 rows.forEach { channel ->
@@ -83,7 +84,8 @@ class LivePresentationTest {
             second.performSemanticsAction(SemanticsActions.RequestFocus)
             second.assertIsFocused()
             val after = second.fetchSemanticsNode().boundsInRoot
-            // The whole 60 dp card scales around its centre, nothing shifts.
+            // Canvas scaling leaves the focus/bring-into-view rectangle unchanged.
+            assertEquals("Focus drawing must not change reported bounds", before, after)
             assertEquals("Focus must not move the card", before.center.x, after.center.x, 1f)
             assertEquals("Focus must not move the card", before.center.y, after.center.y, 1f)
             val density = screen.activity.resources.displayMetrics.density
@@ -125,6 +127,7 @@ class LivePresentationTest {
                 prefs.set(LIVE_HINT_USES, "0")
                 repo.library.save(Source(source, source, "", false, System.currentTimeMillis(), rows.size))
                 repo.library.save(rows)
+                prepareTestCatalog(repo, source)
             }
             screen.runOnUiThread {
                 val model = ViewModelProvider(screen.activity)[LibraryModel::class.java]

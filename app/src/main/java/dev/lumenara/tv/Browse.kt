@@ -29,7 +29,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.*
 import dev.lumenara.data.*
 import dev.lumenara.design.*
-import dev.lumenara.catalog.displayTitle
 import androidx.compose.ui.draw.alpha
 import kotlinx.coroutines.flow.*
 
@@ -37,7 +36,7 @@ import kotlinx.coroutines.flow.*
 internal fun Poster(model: LibraryModel, item: Item, modifier: Modifier,
     allowHttp: Boolean? = null, width: Int = 0, height: Int = 0) {
     val image by produceState<String?>(null, item.id, item.logo) { value = model.repo.poster(item) }
-    Artwork(model, item.copy(title = item.title.displayTitle()), image, modifier, contentScale = ContentScale.Crop,
+    Artwork(model, item.copy(title = item.cleanTitle.ifEmpty { item.title }), image, modifier, contentScale = ContentScale.Crop,
         allowHttp = allowHttp, width = width, height = height)
 }
 
@@ -104,12 +103,14 @@ private fun HubChannelShelf(
                         HubArtwork(model, item, logo, channel = true)
                     }
                     Text(item.title, style = LumenType.label, color = LumenColors.textPrimary,
-                        maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text(current?.title.orEmpty(), style = LumenType.meta,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    if (current != null) ProgressLine(
-                        (now - current.start).toFloat() / (current.end - current.start).coerceAtLeast(1),
-                    )
+                    Box(Modifier.fillMaxWidth().height(3.dp)) {
+                        if (current != null) ProgressLine(
+                            (now - current.start).toFloat() / (current.end - current.start).coerceAtLeast(1),
+                        )
+                    }
                 }
             }
         }
@@ -118,7 +119,10 @@ private fun HubChannelShelf(
 
 @Composable
 private fun HubResumeShelf(model: LibraryModel, rows: List<Item>, open: (Item) -> Unit, focus: () -> Unit) {
-    val hubDetailsReady by model.hubDetailsReady.collectAsStateWithLifecycle()
+    val backgroundReady by model.backgroundReady.collectAsStateWithLifecycle()
+    LaunchedEffect(backgroundReady) {
+        if (backgroundReady) Perf.duration("startup_hub_episode_details_deferred", 0)
+    }
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
         Text("KALDIĞIN YERDEN DEVAM ET", style = LumenType.caption, color = LumenColors.textSecondary)
         LazyRow(
@@ -127,13 +131,17 @@ private fun HubResumeShelf(model: LibraryModel, rows: List<Item>, open: (Item) -
             contentPadding = PaddingValues(Spacing.unit),
         ) {
             items(rows, key = { it.id }) { item ->
-                val episodes by remember(item.id, hubDetailsReady) {
-                    if (hubDetailsReady && item.kind == "SERIES") model.repo.episodes(item.id) else flowOf(emptyList<Item>())
+                val episodes by remember(item.id, backgroundReady) {
+                    if (backgroundReady && item.kind == "SERIES") model.repo.episodes(item.id) else flowOf(emptyList<Item>())
                 }.collectAsStateWithLifecycle(emptyList())
-                val marks by remember(item.id, hubDetailsReady) {
-                    if (hubDetailsReady && item.kind == "SERIES") model.repo.library.episodeMarks(item.id) else flowOf(emptyList<Mark>())
+                val marks by remember(item.id, backgroundReady) {
+                    if (backgroundReady && item.kind == "SERIES") model.repo.library.episodeMarks(item.id) else flowOf(emptyList<Mark>())
                 }.collectAsStateWithLifecycle(emptyList())
-                val continuing = episodes.continueItem(marks)
+                val continuing by produceState<Item?>(null, episodes, marks) {
+                    value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                        episodes.continueItem(marks)
+                    }
+                }
                 val observedMark by remember(item.id) {
                     model.repo.library.observeMark(item.id)
                 }.collectAsStateWithLifecycle(null)
@@ -159,7 +167,7 @@ private fun HubResumeShelf(model: LibraryModel, rows: List<Item>, open: (Item) -
                         )
                     }
                     Text(item.title, style = LumenType.label, color = LumenColors.textPrimary,
-                        maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text(caption, style = LumenType.meta, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
@@ -246,6 +254,16 @@ internal fun Home(
     sourceSelector: @Composable () -> Unit = {},
     navigate: (String) -> Unit,
 ) {
+    val composeReported = remember {
+        Perf.mark("startup_hub_compose")
+        booleanArrayOf(false)
+    }
+    SideEffect {
+        if (!composeReported[0]) {
+            composeReported[0] = true
+            Perf.since("startup_hub_compose", "startup_hub_compose_ready")
+        }
+    }
     LaunchedEffect(model, source) { model.selectHubSource(source) }
     val recentState by model.hubRecent.collectAsStateWithLifecycle()
     val resumeState by model.hubResume.collectAsStateWithLifecycle()
@@ -253,28 +271,16 @@ internal fun Home(
     val resumeResult = resumeState?.takeIf { it.source == source }?.rows
     val recent = recentResult.orEmpty()
     val resume = resumeResult.orEmpty()
-    val hubDetailsReady by model.hubDetailsReady.collectAsStateWithLifecycle()
     val backgroundReady by model.backgroundReady.collectAsStateWithLifecycle()
     val rowsReady = recentResult != null && resumeResult != null
+    var shellDrawn by remember(source) { mutableStateOf(false) }
     var rowsDrawn by remember(source) { mutableStateOf(false) }
-    val loadCounts = hubDetailsReady && rowsDrawn
-    val counts = listOf("LIVE", "MOVIE", "SERIES").map { kind ->
-        val groups by remember(source, kind, loadCounts) {
-            if (loadCounts) {
-                if (kind == "LIVE") Perf.mark("startup_hub_counts")
-                model.repo.categoryCounts(kind, source)
-            } else emptyFlow()
-        }
-            .collectAsLoadingState()
-        groups?.sumOf { it.count }
-    }
+    val totals by model.hubTotals.collectAsStateWithLifecycle()
+    val scopedTotals = totals?.takeIf { it.first == source }?.second
+    val counts = listOf("LIVE", "MOVIE", "SERIES").map { scopedTotals?.getOrDefault(it, 0) }
+    // Capture whether shelves were part of this composition, before draw mutates the state.
+    val shelvesComposed = shellDrawn
     val shellReported = remember { booleanArrayOf(false) }
-    // Keep data-ready and frame timings distinct; counts never gate cards or history rows.
-    LaunchedEffect(counts.all { it != null }) {
-        if (counts.all { it != null }) {
-            Perf.since("startup_hub_counts", "startup_hub_counts_ready")
-        }
-    }
     WarmVlcAfterHubFrame(backgroundReady)
     val update by model.update.collectAsStateWithLifecycle()
     var focused by rememberSaveable { mutableStateOf(lastCard) }
@@ -284,14 +290,15 @@ internal fun Home(
     val target = if (focused in cards) focused else lastCard
     val returnShelf = remember { focused.takeIf { it == "recent" || it == "resume" } }
     var restored by remember { mutableStateOf(false) }
-    LaunchedEffect(recentResult, resumeResult) {
+    LaunchedEffect(recentResult, resumeResult, shellDrawn) {
         if (!restored) {
+            if (returnShelf != null && !shellDrawn) return@LaunchedEffect
             if (returnShelf != null && (recentResult == null || resumeResult == null)) return@LaunchedEffect
             when {
                 returnShelf == "recent" && recent.isNotEmpty() -> list.scrollToItem(3)
                 returnShelf == "resume" && resume.isNotEmpty() -> list.scrollToItem(if (recent.isEmpty()) 3 else 4)
                 returnShelf == null -> {
-                    list.scrollToItem(0)
+                    if (list.firstVisibleItemIndex != 0) list.scrollToItem(0)
                     withFrameNanos { }
                     entry.requestFocus()
                 }
@@ -300,7 +307,7 @@ internal fun Home(
             restored = true
         }
     }
-    LazyColumn(Modifier.fillMaxSize().testTag("hub").focusRestorer().focusGroup().drawWithContent {
+    LazyColumn(Modifier.fillMaxSize().testTag("hub").reportScrollPosition(list).focusRestorer().focusGroup().drawWithContent {
         drawContent()
         if (!shellReported[0]) {
             shellReported[0] = true
@@ -308,7 +315,8 @@ internal fun Home(
         }
         // Observe the populated draw itself. Waiting for two Choreographer callbacks
         // overstates drawing by whole delayed frames when Main is busy composing rows.
-        if (rowsReady && !rowsDrawn) {
+        if (!shellDrawn) shellDrawn = true
+        if (rowsReady && shelvesComposed && !rowsDrawn) {
             Perf.since("startup", "startup_hub_first_draw")
             rowsDrawn = true
             model.onFirstDraw()
@@ -376,10 +384,10 @@ internal fun Home(
                 }
             }
         }
-        if (recent.isNotEmpty()) item(key = "recent-live") {
+        if (shellDrawn && recent.isNotEmpty()) item(key = "recent-live") {
             HubChannelShelf(model, recent, play, { focused = "recent" })
         }
-        if (resume.isNotEmpty()) item(key = "resume") {
+        if (shellDrawn && resume.isNotEmpty()) item(key = "resume") {
             Box(Modifier.padding(top = if (recent.isNotEmpty()) Spacing.cardGap else 0.dp)) {
                 HubResumeShelf(model, resume, open, { focused = "resume" })
             }
@@ -499,6 +507,7 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
     val posterWidth = with(density) { if (gridWidth == 0) 0 else ((gridWidth - (POSTER_GRID_COLUMNS - 1) * Spacing.cardGap.roundToPx()) / POSTER_GRID_COLUMNS).coerceAtLeast(1) }
     val posterHeight = (posterWidth * 1.5f).toInt()
     val grid = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
+    val gridFocus = rememberGridFocus(grid, span = { if (paged.isLiveSlot(it)) 2 else 1 }, column = paged::columnOf)
     val posterFocus = remember { FocusRequester() }
     var positioned by remember(paged) { mutableStateOf(false) }
     var requestPending by remember(paged) { mutableStateOf(true) }
@@ -547,7 +556,7 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
             androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
                 columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(POSTER_GRID_COLUMNS),
                 state = grid,
-                modifier = Modifier.weight(1f).onSizeChanged { gridWidth = it.width }.testTag("poster-grid")
+                modifier = Modifier.weight(1f).onSizeChanged { gridWidth = it.width }.testTag("poster-grid").reportScrollPosition(grid).then(gridFocus.modifier)
                     .semantics { pagingWindow = pagingDescription(paged) }.focusRestorer().focusGroup(),
                 // TV safe area plus the title/year below the focusable poster.
                 contentPadding = PaddingValues(top = 8.dp, bottom = 64.dp),
@@ -575,6 +584,7 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
                         requestPending = false
                     }
                     val cardModifier = Modifier.fillMaxWidth()
+                        .then(gridFocus.item(index))
                         .then(if (index == posterTarget) Modifier.focusRequester(posterFocus) else Modifier)
                         .onFocusChanged { if (it.hasFocus) paged.focused(index) }
                     if (paged.isLiveSlot(index)) ChannelCard(model, entry, now,
@@ -627,9 +637,9 @@ private fun GridPoster(model: LibraryModel, item: Item?, open: (Item) -> Unit,
                 allowHttp = artworkHttp, width = artworkWidth, height = artworkHeight)
         }
         Column(Modifier.padding(top = Spacing.unit).alpha(if (focused) 1f else 0f)) {
-            Text(item?.title?.displayTitle().orEmpty(), style = LumenType.cardTitle, color = LumenColors.textPrimary,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(item?.year.orEmpty(), style = LumenType.meta, maxLines = 1)
+            Text(item?.let { it.cleanTitle.ifEmpty { it.title } }.orEmpty(), style = LumenType.cardTitle, color = LumenColors.textPrimary,
+                minLines = 1, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(item?.year.orEmpty(), style = LumenType.meta, minLines = 1, maxLines = 1)
         }
     }
 }

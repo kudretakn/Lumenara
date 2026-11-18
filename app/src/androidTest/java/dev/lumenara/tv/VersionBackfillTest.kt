@@ -108,6 +108,35 @@ class VersionBackfillTest {
         } finally { db.close() }
     }
 
+    @Test fun sourceRefreshUsesBatchesWithoutChangingAnotherSourcesUpgradeCursorOrStaging() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val db = Room.inMemoryDatabaseBuilder(context, LibraryDb::class.java).build()
+        try {
+            db.library().save(Source("a", "A", "sealed", false, 0, 0))
+            db.library().save(Source("b", "B", "sealed", false, 0, 0))
+            val rows = listOf(row("sub", "Kıyı Altyazılı"), row("dub", "Kıyı (2024) Dublaj", "42"),
+                row("translation", "The Coast", "42"))
+            db.library().save(rows)
+            val saved = VersionBackfillState(phase = "apply", cursor = "other", elapsed = 10, total = 20)
+            db.versionBackfill().save(saved)
+            val staged = VersionBackfillRow("other", "b", "b|MOVIE|other", "Other", "", "", 0)
+            db.versionBackfill().save(listOf(staged))
+            db.withTransaction {
+                val work = VersionBackfill(db, "a", 1)
+                while (work.runBatch(1)) { }
+            }
+            assertEquals(saved, db.versionBackfill().state())
+            assertEquals(listOf(staged), db.versionBackfill().rows("", 500))
+            for (expected in rows.versionAssignments()) {
+                val actual = db.library().item(expected.id)!!
+                assertEquals(expected.versionKey, actual.versionKey)
+                assertEquals(expected.versionRank, actual.versionRank)
+                assertEquals(expected.cleanTitle, actual.cleanTitle)
+                assertEquals(expected.sortKey, actual.sortKey)
+            }
+        } finally { db.close() }
+    }
+
     private fun row(id: String, title: String, tmdb: String = "") = Item(id, "a", title, "Film",
         "MOVIE", "", "sealed", "$title [tmdb:$tmdb]", 1, "")
 }
