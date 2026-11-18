@@ -19,7 +19,7 @@ Son güncelleme: 18 Kasım 2026 03:40 · yerel (Windows) oturum kapandı; sırad
 - **2. (kullanıcı isteği, 18 Kasım; bir sonraki oturumda) Kaydırırken titreme:** "Alt satırlara geçip sağa sola doğru gidince ekran hafifçe titriyor." Izgaralarda (Filmler/Diziler afiş ızgarası öncelikli; Canlı TV ve kategori ızgaralarında da kontrol et) alt satırda DPAD sağ/sol ile gezerken liste birkaç piksel oynuyor. Olası nedenler: yalnız odaktaki afişin altında görünen ad+yıl satırın yüksekliğini değiştiriyor; odak büyütmesi (scale) ile `bringIntoView` her yatay adımda dikey kaydırmayı yeniden hesaplıyor; pencereli sayfalamada yer tutucu ile gerçek kartın yüksekliği farklı; görsel yüklenince kart boyu değişiyor. Kabul: TV'de alt satırlarda sağ/sol gezerken liste dikeyde hiç kıpırdamasın; yalnız satır değişince kaysın. Ayrıntı: `docs/plans/grid-jitter.md`.
 - İzleme kaydı taşımada elle yol (kaynağı silip yenisini ekleyince) yapılmadı.
 - Hız hedefleri: ilk kare < 1,2 sn (sağlandı), Hub tam < 1,5 sn, ilk 15 sn CPU < 5 sn.
-- U3 (ebeveyn kilidi/PIN, kanal sıralama): kullanıcı istemedikçe başlama. Remux testi: kullanıcı "geç" dedi. Baseline profile cihazda ÜRETİLMEYECEK (kullanıcı kararı, 18 Kasım).
+- U3 (ebeveyn kilidi/PIN, kanal sıralama) kullanıcı kararıyla planlardan SİLİNDİ (18 Kasım); önerme, yapma. Remux testi: kullanıcı "geç" dedi. Baseline profile cihazda ÜRETİLMEYECEK (kullanıcı kararı, 18 Kasım).
 - Kontrol: altyazı arama ekranında arkada kitaplık görünmesi, sessiz kanallarda VLC'ye geçiş, canlı yayın yeniden bağlanmanın sahada tetiklenmesi, altyazı gecikmesinin TV'de denenmesi.
 - `scripts/local-device-tests.ps1` RETRIED testi "Tests that never ran" diye yanlış sınıflandırıyor; düzeltilmeli.
 
