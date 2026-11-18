@@ -24,7 +24,7 @@ class CatalogPagingQueryTest {
         val filter = CatalogFilter(source = "provider", kind = "MOVIE", category = "Films")
         val first = browseQuery(filter, 80)
         val distant = browseQuery(filter, 400, 8_000)
-        assertTrue(first.sql.contains("INDEXED BY index_items_source_kind_category_title"))
+        assertTrue(first.sql.contains("INDEXED BY index_items_source_kind_category_sortKey_id"))
         assertTrue(first.sql.endsWith("LIMIT ? OFFSET ?"))
         assertEquals(listOf(80L, 0L), arguments(first).takeLast(2))
         assertEquals(listOf(400L, 8_000L), arguments(distant).takeLast(2))
@@ -44,7 +44,7 @@ class CatalogPagingQueryTest {
             assertTrue(query.sql.contains("v.versionRank<i.versionRank"))
             assertTrue(query.sql.contains("i.category NOT IN (?)"))
         }
-        assertTrue(page.sql.contains("ORDER BY CAST(i.rating AS REAL) DESC,i.title,i.id"))
+        assertTrue(page.sql.contains("ORDER BY CAST(i.rating AS REAL) DESC,i.sortKey,i.id"))
         assertFalse(count.sql.contains("ORDER BY"))
         assertFalse(count.sql.contains("LIMIT"))
         assertTrue(kinds.sql.startsWith("SELECT i.kind"))
@@ -67,7 +67,7 @@ class CatalogPagingQueryTest {
         for (shelf in listOf("recent", "popular", "resume")) {
             val query = browseIndexQuery(CatalogFilter(kind = "MOVIE", shelf = shelf), "saved-id")
             assertTrue(query.sql.contains("i.catalogSort>t.catalogSort"))
-            assertTrue(query.sql.contains("(i.title,i.id)<(t.title,t.id)"))
+            assertTrue(query.sql.contains("(i.sortKey,i.id)<(t.sortKey,t.id)"))
             assertEquals("saved-id", arguments(query).last())
         }
         val query = browseIndexQuery(CatalogFilter(kind = "SERIES"), "saved-id")

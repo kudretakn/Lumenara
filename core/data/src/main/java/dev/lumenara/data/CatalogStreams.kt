@@ -14,12 +14,13 @@ internal class CatalogStreams(
     showAdult: Flow<Boolean>,
     private val scope: CoroutineScope,
     private val traceWork: (String, Long) -> Unit = { _, _ -> },
+    private val preclassified: Boolean = false,
 ) {
     // A null initial value means "not loaded". Emitting an empty list here would briefly expose
     // adult rows and run Hub counts twice before the real hidden list arrives.
     val hidden: Flow<List<String>> = combine(showAdult, categories) { show, names ->
         val start = System.nanoTime()
-        try { if (show) emptyList() else names.filter(::isAdultCategory) }
+        try { if (show) emptyList() else if (preclassified) names else names.filter(::isAdultCategory) }
         finally { traceWork("startup_default_work_hidden_categories", (System.nanoTime() - start) / 1_000_000) }
     }.distinctUntilChanged().stateIn(scope, SharingStarted.Lazily, null).filterNotNull()
 
@@ -39,7 +40,7 @@ internal class CatalogStreams(
             // hidden list reruns SQL; another collector just receives the cached result.
             val groups = if (kind in listOf("LIVE", "MOVIE", "SERIES")) {
                 countsForSource(source).map { rows ->
-                    rows.filter { it.kind == kind }.map { LiveCategoryCount(it.category, it.count) }
+                    rows.filter { it.kind == kind }.map { LiveCategoryCount(it.category, it.count, it.searchKey) }
                 }
             } else hidden.flatMapLatest { counts(kind, source, it) }
             groups.distinctUntilChanged()
@@ -47,3 +48,7 @@ internal class CatalogStreams(
         }
     }
 }
+
+/** Safe visibility while a DDL-only upgrade is still filling derived columns. */
+internal fun List<Item>.visibleStoredRows(showAdult: Boolean): List<Item> =
+    if (showAdult) this else filter { !it.isAdult && it.sortKey.isNotEmpty() }

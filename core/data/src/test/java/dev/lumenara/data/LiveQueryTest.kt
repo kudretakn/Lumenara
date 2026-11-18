@@ -28,14 +28,14 @@ class LiveQueryTest {
         }
     }
 
-    @Test fun adjacentPagesUseTheSameBinaryTitleIdCursorInBothDirections() {
+    @Test fun adjacentPagesUseTheSameStoredSortKeyIdCursorInBothDirections() {
         val filter = CatalogFilter(source = "a", category = "News")
         val cursor = LiveCursor("Same title", "a:80")
         val forward = livePageQuery(filter, 80, cursor)
         val backward = livePageQuery(filter, 80, cursor, backwards = true)
-        assertTrue(forward.sql.contains("(i.title,i.id)>(?,?)"))
-        assertTrue(backward.sql.contains("(i.title,i.id)<(?,?)"))
-        assertTrue(backward.sql.contains("ORDER BY i.title DESC,i.id DESC"))
+        assertTrue(forward.sql.contains("(i.sortKey,i.id)>(?,?)"))
+        assertTrue(backward.sql.contains("(i.sortKey,i.id)<(?,?)"))
+        assertTrue(backward.sql.contains("ORDER BY i.sortKey DESC,i.id DESC"))
         assertFalse(forward.sql.contains("OFFSET"))
         assertFalse(backward.sql.contains("OFFSET"))
         assertEquals(6, forward.argCount) // source, LIVE, category, title, id, limit
@@ -43,17 +43,17 @@ class LiveQueryTest {
 
     @Test fun arbitraryJumpOffsetsOnlyTheLightweightCursor() {
         val sql = livePageQuery(CatalogFilter(source = "a"), 240, offset = 8000).sql
-        assertTrue(sql.contains("(i.title,i.id)>(SELECT a.title,a.id"))
+        assertTrue(sql.contains("(i.sortKey,i.id)>(SELECT a.sortKey,a.id"))
         assertTrue(sql.contains("LIMIT 1 OFFSET ?"))
         assertEquals(1, Regex("OFFSET").findAll(sql).count())
-        assertTrue(sql.contains("INDEXED BY index_items_kind_title"))
+        assertTrue(sql.contains("INDEXED BY index_items_source_kind_sortKey_id"))
         assertFalse(liveChannelOrderQuery(CatalogFilter(source = "a")).sql.contains("ORDER BY i.source"))
     }
 
     @Test fun playbackResolvesTheCurrentTargetInsideTheSeekStatement() {
         val sql = livePageQuery(CatalogFilter(source = "a", hidden = listOf("Adults")), 80,
             targetId = "a:80", backwards = true)
-        assertTrue(sql.sql.contains("(i.title,i.id)<(SELECT t.title,t.id"))
+        assertTrue(sql.sql.contains("(i.sortKey,i.id)<(SELECT t.sortKey,t.id"))
         assertTrue(sql.sql.contains("WHERE t.id=?"))
         assertTrue(sql.sql.contains("t.category NOT IN (?)"))
         assertFalse(sql.sql.contains("a:80"))

@@ -4,6 +4,13 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CategoryOrderTest {
+    @Test fun persistedKeysKeepTheSameOrderAcrossDifferentSourceSubsets() {
+        val names = listOf("TR | XXX", "Spor", "For Adults", "TR: Spor", "Haber", "Çocuk", "Işık", "İzmir")
+        assertEquals(names.sortedWith(categoryOrder), names.sortedBy(::categorySortKey))
+        val stored = names.take(4).associateWith(::categorySortKey) + names.drop(4).associateWith(::categorySortKey)
+        assertEquals(names.sortedWith(categoryOrder), stored.keys.sortedBy { stored.getValue(it) })
+    }
+
     @Test fun batchOrderMatchesComparatorAndReadsEachCategoryOnce() {
         val names = listOf("TR | XXX", "Spor", "For Adults", "TR: Spor", "Haber", "Çocuk", "[TR] Belgesel")
         var reads = 0

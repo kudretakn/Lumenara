@@ -32,8 +32,7 @@ constructor(private val repository: dagger.Lazy<Repository>, val prefs: Preferen
     val firstDrawn = firstDraw.drawn
     fun onFirstDraw() { firstDraw.onDraw() }
     suspend fun awaitFirstDraw() = firstDraw.await()
-    // Visible Hub details can start as soon as the populated rows have drawn. A short
-    // settling delay gives that first frame room to present before the counts query begins.
+    // Cheap visible details may begin after the populated frame; totals start independently.
     val hubDetailsReady = firstDraw.detailsReady
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     // Keep non-visible publishing, scheduling, update checks and native warm-up out of
@@ -71,6 +70,13 @@ constructor(private val repository: dagger.Lazy<Repository>, val prefs: Preferen
             Perf.since("startup_hub_resume", "startup_hub_resume_ready")
         }.map { HubRows(source, it) })
     } }.stateIn(hubScope, SharingStarted.Eagerly, null)
+    val hubTotals = hubSource.flatMapLatest { source -> flow {
+        Perf.mark("startup_hub_counts")
+        emitAll(repo.hubTotals(source).map { rows ->
+            Perf.since("startup_hub_counts", "startup_hub_counts_ready")
+            source to rows.associate { it.kind to it.count }
+        })
+    } }.stateIn(hubScope, SharingStarted.Eagerly, null)
     val filter = MutableStateFlow(Filter())
     val results =
         filter
@@ -107,8 +113,8 @@ constructor(private val repository: dagger.Lazy<Repository>, val prefs: Preferen
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
-            // Backfill is user-visible migration work: never hold it behind backgroundReady.
-            awaitFirstDraw()
+            // DDL opens immediately; catalog upgrades yield the first 15 seconds to the UI.
+            backgroundReady.first { it }
             repo.startVersionBackfill()
         }
         viewModelScope.launch(Dispatchers.IO) {

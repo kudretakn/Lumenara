@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.lumenara.data.LibraryDb
+import dev.lumenara.data.CatalogDerivedBackfill
 import dev.lumenara.data.VersionBackfill
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.first
@@ -30,6 +31,9 @@ class MigrationTest {
 
     @Test
     fun versionElevenAddsCarryIdentitiesWithoutChangingUserState() = verifyUpgrade(11)
+
+    @Test
+    fun versionTwelveOnlyAddsDdlAndKeepsFinishedVersionBackfillFinished() = verifyUpgrade(12)
 
     private fun verifyUpgrade(from: Int) {
         val year = java.util.Calendar.getInstance().apply { timeInMillis = System.currentTimeMillis() }
@@ -80,6 +84,7 @@ class MigrationTest {
                         displayYear='$year',isRepresentative=CASE WHEN id='dub' THEN 1 ELSE 0 END,
                         versionRank=CASE WHEN id='dub' THEN 0 ELSE 1 END WHERE kind='MOVIE'""")
                 }
+                if (from == 12) db.execSQL("INSERT INTO version_backfill_state VALUES (1,'done','',0,0)")
                 if (from >= 7) {
                     db.execSQL("INSERT INTO feeds VALUES ('guide','local','opaque')")
                     db.execSQL("INSERT INTO programmes VALUES ('guide','1',100,200,'Program','Description','program')")
@@ -88,7 +93,7 @@ class MigrationTest {
             }
             val db = Room.databaseBuilder(context, LibraryDb::class.java, name)
                 .addMigrations(LibraryDb.MIGRATION_7_8, LibraryDb.MIGRATION_8_9, LibraryDb.MIGRATION_9_10,
-                    LibraryDb.MIGRATION_10_11, LibraryDb.MIGRATION_11_12).build()
+                    LibraryDb.MIGRATION_10_11, LibraryDb.MIGRATION_11_12, LibraryDb.MIGRATION_12_13).build()
             try {
                 runBlocking {
                     assertEquals(250L, db.library().mark("item")?.position)
@@ -99,10 +104,16 @@ class MigrationTest {
                     assertTrue(db.library().redirects().isEmpty())
                     // Opening Room only changes schema. Every legacy stream is immediately
                     // visible, even when its stale representative flag previously hid it.
-                    assertEquals(2, db.library().browse("local", "MOVIE", "", "", "", 120).first().size)
-                    assertEquals("normalize", db.versionBackfill().state()?.phase)
+                    assertEquals("", old.cleanTitle)
+                    assertEquals("", old.sortKey)
+                    assertTrue(db.derived().categories("local").isEmpty())
+                    assertTrue(db.derived().stats("local").isEmpty())
+                    assertEquals(if (from == 12) 1 else 2, db.library().browse("local", "MOVIE", "", "", "", 120).first().size)
+                    assertEquals(if (from == 12) "done" else "normalize", db.versionBackfill().state()?.phase)
                     val backfill = VersionBackfill(db)
                     while (backfill.runBatch(1)) { /* Deliberately split the two versions. */ }
+                    val derived = CatalogDerivedBackfill(db)
+                    while (derived.runBatch("local", 1)) { }
                     val grouped = db.library().item("dub")!!
                     assertTrue(grouped.versionKey.isNotEmpty())
                     assertEquals("Avatar", grouped.displayTitle)
@@ -131,7 +142,7 @@ class MigrationTest {
                     val columns = buildList { while (cursor.moveToNext()) add(cursor.getString(2)) }
                     assertEquals(listOf("start"), columns)
                 }
-                assertEquals(12, db.openHelper.readableDatabase.version)
+                assertEquals(13, db.openHelper.readableDatabase.version)
                 db.openHelper.readableDatabase.query("SELECT COUNT(*) FROM restore_pending").use { cursor ->
                     assertTrue(cursor.moveToFirst())
                     assertEquals(0, cursor.getInt(0))

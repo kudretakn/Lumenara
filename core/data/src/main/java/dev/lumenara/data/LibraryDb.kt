@@ -1,6 +1,9 @@
 package dev.lumenara.data
 
 import androidx.room.*
+import dev.lumenara.catalog.displayTitle
+import dev.lumenara.catalog.searchable
+import dev.lumenara.catalog.isAdultCategory
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteQuery
@@ -29,16 +32,15 @@ data class Source(
                 onDelete = ForeignKey.CASCADE,
             )
         ],
-    // EQP: source/kind/category equality leaves title ordered; source alone also covers the FK.
-    // kind/category/title covers category counts and selected categories across all sources.
-    // kind/representative/title serves the unfiltered movie/series grid. Keep kind/title for
-    // filtered fallback: the representative OR cannot constrain that index's middle column.
-    // parent serves episodes, progress and orphan checks; versionKey serves bounded sibling probes.
-    // No tvgId index: guide resolution is in Kotlin and multi-source LIVE dedup groups by more than tvgId.
+    // Schema 13 streams stored sortKey/id order for source/kind/category pages.
+    // source/id bounds refresh/backfill batches; channel indexes serve direct number entry.
+    // Keep legacy title indexes for bounded history probes and older migration paths.
     indices = [Index("source", "kind", "category", "title"),
         Index("kind", "category", "title"),
         Index("kind", "isRepresentative", "title"), Index("kind", "title"),
-        Index("parent"), Index("versionKey")],
+        Index("parent"), Index("versionKey"), Index("source", "kind", "sortKey", "id"),
+        Index("kind", "sortKey", "id"), Index("source", "channelNumber"), Index("source", "safeChannelNumber"), Index("source", "id"),
+        Index("source", "kind", "category", "sortKey", "id"), Index("kind", "category", "sortKey", "id")],
 )
 data class Item(
     @PrimaryKey val id: String,
@@ -73,6 +75,11 @@ data class Item(
     @ColumnInfo(defaultValue = "''") val providerId: String = "",
     @ColumnInfo(defaultValue = "''") val tvgName: String = "",
     @ColumnInfo(defaultValue = "''") val tvgGroup: String = "",
+    @ColumnInfo(defaultValue = "''") val cleanTitle: String = title.displayTitle(),
+    @ColumnInfo(defaultValue = "''") val sortKey: String = searchable(cleanTitle),
+    @ColumnInfo(defaultValue = "0") val isAdult: Boolean = isAdultCategory(category),
+    @ColumnInfo(defaultValue = "0") val channelNumber: Int = 0,
+    @ColumnInfo(defaultValue = "0") val safeChannelNumber: Int = 0,
 )
 
 @Entity(
@@ -111,10 +118,12 @@ data class Mark(
 )
 data class Member(@PrimaryKey val id: String, val name: String)
 
-data class LiveCategoryCount(val category: String, val count: Int)
-data class KindCategoryCount(val kind: String, val category: String, val count: Int)
+data class LiveCategoryCount(val category: String, val count: Int, val searchKey: String = "")
+data class KindCategoryCount(val kind: String, val category: String, val count: Int, val searchKey: String = "")
 
 /** Lightweight projection; this is not a persisted entity or schema change. */
+data class VersionMarkGroup(val id: String, val versionKey: String)
+
 data class LiveChannelId(val id: String, val source: String, val title: String = "")
 
 /** Columns needed to group versions; deliberately excludes summaries, cast and playback URLs. */
@@ -190,7 +199,7 @@ interface LibraryDao {
     @RawQuery(observedEntities = [Item::class, Mark::class, VersionBackfillState::class])
     fun catalogKinds(query: SupportSQLiteQuery): Flow<List<String>>
 
-    @RawQuery(observedEntities = [Item::class, VersionBackfillState::class])
+    @RawQuery(observedEntities = [CategoryCount::class])
     fun catalogCategoryCounts(query: SupportSQLiteQuery): Flow<List<LiveCategoryCount>>
 
     @RawQuery(observedEntities = [Item::class, Feed::class, Slot::class, GuideName::class, Mapping::class])
@@ -198,20 +207,25 @@ interface LibraryDao {
 
     fun liveNow(rows: List<Item>, now: Long): Flow<List<LiveNow>> = liveNowRows(liveNowQuery(rows, now))
 
-    @RawQuery(observedEntities = [Item::class, VersionBackfillState::class])
+    @RawQuery(observedEntities = [CategoryCount::class])
     fun catalogKindCategoryCounts(query: SupportSQLiteQuery): Flow<List<KindCategoryCount>>
 
-    @RawQuery(observedEntities = [Item::class, VersionBackfillState::class])
+    @RawQuery(observedEntities = [CategoryCount::class])
     fun catalogCategories(query: SupportSQLiteQuery): Flow<List<String>>
 
     // Visibility only needs names, never representative selection or counts over the catalog.
-    @Query("SELECT DISTINCT category FROM items WHERE kind IN ('LIVE','MOVIE','SERIES') ORDER BY category")
+    @Query("SELECT DISTINCT category FROM category_counts ORDER BY category")
     fun categoryNames(): Flow<List<String>>
+    @Query("SELECT DISTINCT category FROM category_counts WHERE isAdult=1 ORDER BY category")
+    fun adultCategoryNames(): Flow<List<String>>
     suspend fun liveAtOffset(source: String, offset: Int, hidden: List<String> = emptyList()): Item? =
         livePage(source, "", "", "", 1, offset, hidden).first().firstOrNull()
 
     @RawQuery(observedEntities = [Item::class])
     fun liveRows(query: SupportSQLiteQuery): Flow<List<Item>>
+
+    @RawQuery(observedEntities = [CategoryCount::class, CatalogStat::class])
+    fun derivedTotal(query: SupportSQLiteQuery): Flow<Int>
 
     @RawQuery(observedEntities = [Item::class])
     fun liveTotal(query: SupportSQLiteQuery): Flow<Int>
@@ -250,7 +264,11 @@ interface LibraryDao {
         hidden: List<String> = emptyList()): Flow<Int> {
         val sql = liveCountQuery(CatalogFilter(source = source, category = category, query = query,
             shelf = shelf, hidden = hidden))
-        return if (shelf == "favorite") liveFavoriteTotal(sql) else liveTotal(sql)
+        return when {
+            shelf == "favorite" -> liveFavoriteTotal(sql)
+            query.isEmpty() -> derivedTotal(sql)
+            else -> liveTotal(sql)
+        }
     }
 
     suspend fun liveIndex(source: String, id: String, category: String = "", query: String = "",
@@ -349,6 +367,17 @@ interface LibraryDao {
 
     @RawQuery
     suspend fun relatedVersions(query: SupportSQLiteQuery): List<Item>
+
+    @Query("""SELECT id,versionKey FROM items INDEXED BY index_items_source_id
+        WHERE source=:source AND id>:cursor AND kind IN ('MOVIE','SERIES') AND isRepresentative=1
+        ORDER BY id LIMIT :limit""")
+    suspend fun versionMarkGroups(source: String, cursor: String, limit: Int): List<VersionMarkGroup>
+
+    @Query("SELECT m.* FROM items i JOIN marks m ON m.id=i.id WHERE i.versionKey=:key")
+    suspend fun versionGroupMarks(key: String): List<Mark>
+
+    @Query("SELECT id FROM items WHERE versionKey=:key")
+    suspend fun versionGroupIds(key: String): List<String>
 
     @Query("SELECT EXISTS(SELECT 1 FROM items WHERE id=:id)")
     suspend fun exists(id: String): Boolean
@@ -546,8 +575,11 @@ data class ItemRedirect(@PrimaryKey val oldId: String, val newId: String)
             ItemRedirect::class,
             VersionBackfillState::class,
             VersionBackfillRow::class,
+            CatalogDerivedState::class,
+            CategoryCount::class,
+            CatalogStat::class,
         ],
-    version = 12,
+    version = 13,
     exportSchema = true,
     autoMigrations =
         [
@@ -562,8 +594,31 @@ data class ItemRedirect(@PrimaryKey val oldId: String, val newId: String)
 abstract class LibraryDb : RoomDatabase() {
     internal abstract fun restoreJournal(): RestoreDao
     abstract fun versionBackfill(): VersionBackfillDao
+    abstract fun derived(): CatalogDerivedDao
 
     companion object {
+        val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                StartupPerf.measure("migration_12_13") {
+                    db.execSQL("ALTER TABLE items ADD COLUMN cleanTitle TEXT NOT NULL DEFAULT ''")
+                    db.execSQL("ALTER TABLE items ADD COLUMN sortKey TEXT NOT NULL DEFAULT ''")
+                    db.execSQL("ALTER TABLE items ADD COLUMN isAdult INTEGER NOT NULL DEFAULT 0")
+                    db.execSQL("ALTER TABLE items ADD COLUMN channelNumber INTEGER NOT NULL DEFAULT 0")
+                    db.execSQL("ALTER TABLE items ADD COLUMN safeChannelNumber INTEGER NOT NULL DEFAULT 0")
+                    db.execSQL("CREATE INDEX index_items_source_kind_sortKey_id ON items(source,kind,sortKey,id)")
+                    db.execSQL("CREATE INDEX index_items_kind_sortKey_id ON items(kind,sortKey,id)")
+                    db.execSQL("CREATE INDEX index_version_backfill_rows_source_id ON version_backfill_rows(source,id)")
+                    db.execSQL("CREATE INDEX index_items_source_id ON items(source,id)")
+                    db.execSQL("CREATE INDEX index_items_source_kind_category_sortKey_id ON items(source,kind,category,sortKey,id)")
+                    db.execSQL("CREATE INDEX index_items_kind_category_sortKey_id ON items(kind,category,sortKey,id)")
+                    db.execSQL("CREATE INDEX index_items_source_channelNumber ON items(source,channelNumber)")
+                    db.execSQL("CREATE INDEX index_items_source_safeChannelNumber ON items(source,safeChannelNumber)")
+                    db.execSQL("CREATE TABLE IF NOT EXISTS catalog_derived_state (source TEXT NOT NULL, phase TEXT NOT NULL, cursor TEXT NOT NULL, title TEXT NOT NULL, number INTEGER NOT NULL, safeNumber INTEGER NOT NULL, PRIMARY KEY(source), FOREIGN KEY(source) REFERENCES sources(id) ON UPDATE NO ACTION ON DELETE CASCADE)")
+                    db.execSQL("CREATE TABLE IF NOT EXISTS category_counts (source TEXT NOT NULL, kind TEXT NOT NULL, category TEXT NOT NULL, count INTEGER NOT NULL, isAdult INTEGER NOT NULL, sortOrder TEXT NOT NULL, searchKey TEXT NOT NULL, PRIMARY KEY(source,kind,category), FOREIGN KEY(source) REFERENCES sources(id) ON UPDATE NO ACTION ON DELETE CASCADE)")
+                    db.execSQL("CREATE TABLE IF NOT EXISTS catalog_stats (source TEXT NOT NULL, kind TEXT NOT NULL, showAdult INTEGER NOT NULL, count INTEGER NOT NULL, PRIMARY KEY(source,kind,showAdult), FOREIGN KEY(source) REFERENCES sources(id) ON UPDATE NO ACTION ON DELETE CASCADE)")
+                }
+            }
+        }
         val MIGRATION_11_12 = object : Migration(11, 12) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 StartupPerf.measure("migration_11_12") {

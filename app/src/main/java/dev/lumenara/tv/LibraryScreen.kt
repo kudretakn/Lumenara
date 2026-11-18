@@ -255,7 +255,7 @@ private suspend fun uniqueSearchChannel(model: LibraryModel, query: String): Ite
             if (matches.size > 1) return null
         }
         if (rows.size < LIVE_PAGE_SIZE) break
-        after = rows.last().let { LiveCursor(it.title, it.id) }
+        after = rows.last().let { LiveCursor(it.sortKey, it.id) }
     }
     return exactChannelIndex(query, matches.map { it.title })?.let { matches[it] }
 }
