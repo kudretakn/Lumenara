@@ -44,4 +44,4 @@ Kişisel kullanım için Android TV IPTV oynatıcısı (Kotlin, Compose for TV, 
   - Yerel doğrulamada yalnız `:app:test` yetmez; `test --continue` (tüm modüller) çalıştır. `core:designsystem` `SourceGlyphTest` üretim kodunda ✓ ★ ▶ • ← → karakterlerini yasaklar (0.5.2'de regex'teki "→" CI'da düştü); gerekirse `→` kaçışı kullan.
   - Ajan düzeltme bildirdiğinde testi gerçekten çalıştır: Windows altyazı hatasında ajanın ilk tahmini yanlıştı (asıl neden dosya adındaki `:`).
   - GitHub'ın kimliksiz API sınırı (saatte 60 istek, IP başına) sürüm kontrolünü 403 ile düşürebilir; güncelleyici bunu açık mesajla gösterir ve web sayfasından yedek yol dener (0.5.1).
-- Planlar: `docs/UI-REDESIGN.md` (bitti), `docs/USABILITY.md` (U1, S, A, U2, U3), `ROADMAP.md`.
+- Planlar: `docs/UI-REDESIGN.md` (bitti), `docs/USABILITY.md` (U1, S, A, U2), `ROADMAP.md`.

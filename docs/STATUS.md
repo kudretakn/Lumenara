@@ -15,7 +15,7 @@ Son güncelleme: 18 Kasım 2026 01:55 · yerel (Windows) oturum
 - 0.5.5 yayını ve TV doğrulaması.
 - İzleme kaydı taşımada elle yol (kaynağı silip yenisini ekleyince) yapılmadı.
 - Hız hedefleri: ilk kare < 1,2 sn, Hub tam < 1,5 sn sonra, ilk 15 sn CPU < 5 sn — 0.5.5 ölçümüne göre devam.
-- U3 (ebeveyn kilidi/PIN, kanal sıralama): kullanıcı istemedikçe başlama. Remux testi: kullanıcı "geç" dedi. Baseline profile cihazda ÜRETİLMEYECEK (kullanıcı kararı, 18 Kasım).
+- U3 (ebeveyn kilidi/PIN, kanal sıralama) kullanıcı kararıyla planlardan SİLİNDİ (18 Kasım); önerme, yapma. Remux testi: kullanıcı "geç" dedi. Baseline profile cihazda ÜRETİLMEYECEK (kullanıcı kararı, 18 Kasım).
 - Kontrol: altyazı arama ekranında arkada kitaplık görünmesi, sessiz kanallarda VLC'ye geçiş, canlı yayın yeniden bağlanmanın sahada tetiklenmesi.
 - `scripts/local-device-tests.ps1` RETRIED testi "Tests that never ran" diye yanlış sınıflandırıyor; düzeltilmeli.
 
