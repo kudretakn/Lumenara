@@ -49,6 +49,7 @@ class LivePresentationTest {
             runBlocking {
                 repo.library.save(Source(source, source, "", false, System.currentTimeMillis(), rows.size))
                 repo.library.save(rows)
+                prepareTestCatalog(repo, source)
                 repo.guide.put(Feed(feed, source, ""))
                 val now = System.currentTimeMillis()
                 rows.forEach { channel ->
@@ -126,6 +127,7 @@ class LivePresentationTest {
                 prefs.set(LIVE_HINT_USES, "0")
                 repo.library.save(Source(source, source, "", false, System.currentTimeMillis(), rows.size))
                 repo.library.save(rows)
+                prepareTestCatalog(repo, source)
             }
             screen.runOnUiThread {
                 val model = ViewModelProvider(screen.activity)[LibraryModel::class.java]

@@ -32,6 +32,13 @@ data class DerivedCandidate(val id: String, val source: String, val kind: String
 
 @Dao
 interface CatalogDerivedDao {
+    // An unfinished DDL-only upgrade is loading, not an empty catalog. This probe
+    // stays on sources/state; startup must never scan items to decide readiness.
+    @Query("""SELECT NOT EXISTS(SELECT 1 FROM sources s
+        LEFT JOIN catalog_derived_state d ON d.source=s.id
+        WHERE (:source='' OR s.id=:source) AND (d.source IS NULL OR d.phase!='done'))""")
+    fun ready(source: String): Flow<Boolean>
+
     // Sources/state only: a completed catalog never gets rechecked by scanning items.
     @Query("""SELECT s.id FROM sources s LEFT JOIN catalog_derived_state d ON d.source=s.id
         WHERE d.source IS NULL OR d.phase!='done' ORDER BY s.id LIMIT 1""")

@@ -20,7 +20,40 @@ internal suspend fun prepareTestCatalog(db: LibraryDb) {
     }
 }
 
+/** Direct DAO fixtures must publish the same derived data as a repository import.
+ * Use the repository's Room instance so its active flows receive invalidations too.
+ * Reflection stays in androidTest; production must not expose a fixture-only DB API.
+ */
+internal suspend fun prepareTestCatalog(repo: Repository, source: String) {
+    val field = Repository::class.java.getDeclaredField("db").apply { isAccessible = true }
+    val db = field.get(repo) as LibraryDb
+    db.withTransaction {
+        val work = CatalogDerivedBackfill(db)
+        work.reset(source)
+        while (work.runBatch(source)) { }
+    }
+}
+
 class CatalogDerivedTest {
+    @Test fun pendingDerivedCatalogIsLoadingUntilTheLastBatchCommits() = runBlocking {
+        val db = Room.inMemoryDatabaseBuilder(
+            InstrumentationRegistry.getInstrumentation().targetContext, LibraryDb::class.java).build()
+        try {
+            assertTrue(db.derived().ready("").first())
+            db.library().save(Source("pending", "Test", "", false, System.currentTimeMillis(), 1))
+            db.library().save(listOf(Item("channel", "pending", "Channel", "News", "LIVE", "", "", "channel", 1, "")))
+            assertFalse(db.derived().ready("pending").first())
+            assertFalse(db.derived().ready("").first())
+            assertTrue(db.derived().ready("another-source").first())
+            val work = CatalogDerivedBackfill(db)
+            while (work.runBatch("pending", 1)) {
+                assertFalse(db.derived().ready("pending").first())
+            }
+            assertTrue(db.derived().ready("pending").first())
+            assertEquals(1, db.library().liveCount("pending", "", "", "").first())
+        } finally { db.close() }
+    }
+
     @Test fun resumableBatchesKeepVisibilityTotalsCategoryCountsAndNumbersAcrossReopen() = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val name = "catalog-derived-resume"
@@ -81,6 +114,7 @@ class CatalogDerivedTest {
             prepareTestCatalog(db)
             queries.clear()
             assertNull(db.derived().pendingSource())
+            assertTrue(db.derived().ready("").first())
             assertEquals(1000, db.derived().totals("", false).first().single().count)
             assertEquals(1000, db.library().sourceCategoryCounts("").first().single().count)
             db.library().adultCategoryNames().first()

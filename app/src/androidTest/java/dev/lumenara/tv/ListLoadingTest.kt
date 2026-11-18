@@ -56,6 +56,13 @@ class ListLoadingTest {
             screen.onNodeWithText("İçerik yok.").assertDoesNotExist()
             screen.onNodeWithText("Geri").assertDoesNotExist()
             screen.runOnIdle { release.complete(Unit) }
+            // A DB emission is not catalog readiness: an upgrade still has no
+            // category counts until deferred derivation finishes, even for an empty source.
+            screen.waitForIdle()
+            screen.onNodeWithText("İçerik yok.").assertDoesNotExist()
+            screen.onNodeWithText("Geri").assertDoesNotExist()
+            org.junit.Assert.assertTrue(screen.onAllNodesWithTag("list-loading").fetchSemanticsNodes().isNotEmpty())
+            runBlocking { prepareTestCatalog(repo, source) }
             screen.waitUntil(10_000) {
                 screen.onAllNodesWithTag("list-loading").fetchSemanticsNodes().isEmpty()
             }

@@ -38,6 +38,7 @@ class WindowedGridTest {
             runBlocking {
                 repo.library.save(Source(source, source, "", false, System.currentTimeMillis(), rows.size))
                 repo.library.save(rows)
+                prepareTestCatalog(repo, source)
             }
             screen.runOnUiThread {
                 val model = ViewModelProvider(screen.activity)[LibraryModel::class.java]

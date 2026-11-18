@@ -131,6 +131,7 @@ class DenseGridTest {
             runBlocking {
                 repo.library.save(Source(source, source, "", false, System.currentTimeMillis(), rows.size))
                 repo.library.save(rows)
+                prepareTestCatalog(repo, source)
             }
             screen.runOnUiThread {
                 val model = ViewModelProvider(screen.activity)[LibraryModel::class.java]
@@ -167,6 +168,7 @@ class DenseGridTest {
             runBlocking {
                 repo.library.save(Source(source, source, "", false, System.currentTimeMillis(), rows.size))
                 repo.library.save(rows)
+                prepareTestCatalog(repo, source)
             }
             screen.runOnUiThread {
                 val model = ViewModelProvider(screen.activity)[LibraryModel::class.java]
@@ -235,6 +237,7 @@ class DenseGridTest {
             runBlocking {
                 repo.library.save(Source(source, source, "", false, System.currentTimeMillis(), rows.size))
                 repo.library.save(rows)
+                prepareTestCatalog(repo, source)
                 rows.forEachIndexed { index, item ->
                     repo.updateMark(item.id) { it.copy(position = 10, duration = 100, updated = 1000L - index) }
                 }

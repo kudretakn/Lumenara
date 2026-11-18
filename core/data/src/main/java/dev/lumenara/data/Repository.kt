@@ -94,8 +94,14 @@ class Repository private constructor(private val context: Context) {
         StartupPerf.measure("startup_room_recovery") { restoreTransaction.recover() }
     } }
     private val catalogScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val catalog = CatalogStreams(library.adultCategoryNames(), library::categoryCounts,
-        library::sourceCategoryCounts, preferences.showAdult, catalogScope, StartupPerf::duration, preclassified = true)
+    private fun <T> readyCatalog(source: String, read: () -> Flow<T>): Flow<T> =
+        db.derived().ready(source).distinctUntilChanged().flatMapLatest { ready ->
+            if (ready) read() else emptyFlow()
+        }
+    private val catalog = CatalogStreams(library.adultCategoryNames(),
+        { kind, source, hidden -> readyCatalog(source) { library.categoryCounts(kind, source, hidden) } },
+        { source, hidden -> readyCatalog(source) { library.sourceCategoryCounts(source, hidden) } },
+        preferences.showAdult, catalogScope, StartupPerf::duration, preclassified = true)
     val hidden: Flow<List<String>> = catalog.hidden
     private val seriesExpansionCache = SeriesExpansionCache(
         readStamp = { preferences.text("series_expanded_$it").first().toLongOrNull() ?: 0L },
@@ -136,7 +142,7 @@ class Repository private constructor(private val context: Context) {
     fun categoryCounts(kind: String, source: String) = catalog.categoryCounts(kind, source)
     fun categories(kind: String, source: String) = categoryCounts(kind, source).map { groups -> groups.map { it.category } }
     fun liveCategoryCounts(source: String) =
-        hidden.flatMapLatest { library.liveCategoryCounts(source, it) }
+        hidden.flatMapLatest { hidden -> readyCatalog(source) { library.liveCategoryCounts(source, hidden) } }
             .distinctUntilChanged()
     /** A bounded visible page, with no whole-catalog GuideResolver or future schedules. */
     fun liveNow(rows: List<Item>, now: Long): Flow<Map<String, Slot>> = flow {
@@ -219,11 +225,11 @@ class Repository private constructor(private val context: Context) {
     }.flowOn(Dispatchers.IO)
 
     fun hubTotals(source: String): Flow<List<HubTotal>> = preferences.showAdult.flatMapLatest {
-        db.derived().totals(source, it)
+        readyCatalog(source) { db.derived().totals(source, it) }
     }.distinctUntilChanged()
 
     fun liveCount(source: String, category: String = "", query: String = "", shelf: String = "") =
-        hidden.flatMapLatest { library.liveCount(source, category, query, shelf, it) }
+        hidden.flatMapLatest { hidden -> readyCatalog(source) { library.liveCount(source, category, query, shelf, hidden) } }
     suspend fun liveIndex(source: String, id: String, category: String = "", query: String = "", shelf: String = "") =
         library.liveIndex(source, id, category, query, shelf, hidden.first())
     fun episodes(id: String) = hidden.flatMapLatest { library.episodes(id, it) }

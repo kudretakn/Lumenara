@@ -13,14 +13,18 @@ import androidx.tvprovider.media.tv.WatchNextProgram
 import dev.lumenara.data.*
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.StandardTestDispatcher
 import okhttp3.mockwebserver.*
 import okio.Buffer
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 
+@OptIn(ExperimentalTestApi::class)
 class WatchNextDeviceTest {
-    @get:Rule val screen = createEmptyComposeRule()
+    // Queue IO completions for Compose's main-thread clock. The default unconfined
+    // dispatcher can apply the cold deep-link composition on the completing IO worker.
+    @get:Rule val screen = createEmptyComposeRule(StandardTestDispatcher())
 
     private fun published(id: String): WatchNextProgram? {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -47,6 +51,8 @@ class WatchNextDeviceTest {
         val oldExcluded = state.getStringSet("excluded", null)?.toSet()
         val videoRequested = java.util.concurrent.atomic.AtomicReference(java.util.concurrent.CountDownLatch(1))
         val bytes = test.context.assets.open("lumenara-test.mp4").use { it.readBytes() }
+        val engagement = System.currentTimeMillis()
+        val sourceName = "Test · Watch Next ${System.nanoTime()}"
         MockWebServer().use { server ->
             server.dispatcher = object : Dispatcher() {
                 override fun dispatch(request: RecordedRequest): MockResponse {
@@ -69,10 +75,13 @@ class WatchNextDeviceTest {
                 val movie = runBlocking {
                     prefs.set("watch_next", "Açık")
                     prefs.set("engine", "Media3")
-                    repo.add("Test · Watch Next", SourceSpec(server.url("/list").toString(), true))
-                    source = repo.library.snapshot().single { it.name == "Test · Watch Next" }.id
+                    // A killed instrumentation process cannot run finally; clear its fixtures.
+                    repo.library.snapshot().filter { it.name.startsWith("Test · Watch Next") }
+                        .forEach { repo.remove(it.id) }
+                    repo.add(sourceName, SourceSpec(server.url("/list").toString(), true))
+                    source = repo.library.snapshot().single { it.name == sourceName }.id
                     val item = repo.browse(source!!, "MOVIE", "", "", "", 1).first().single()
-                    repo.updateMark(item.id) { it.copy(position = 1_000, duration = 100_000, updated = 1234) }
+                    repo.updateMark(item.id) { it.copy(position = 1_000, duration = 100_000, updated = engagement) }
                     publisher.sync()
                     item
                 }
@@ -80,7 +89,7 @@ class WatchNextDeviceTest {
                 assertEquals(TvContractCompat.WatchNextPrograms.WATCH_NEXT_TYPE_CONTINUE, row.watchNextType)
                 assertEquals(1_000, row.lastPlaybackPositionMillis)
                 assertEquals(100_000, row.durationMillis)
-                assertEquals(1234L, row.lastEngagementTimeUtcMillis)
+                assertEquals(engagement, row.lastEngagementTimeUtcMillis)
                 assertEquals(movie.title, row.title)
                 assertEquals(WatchNextPlayback(movie.id, 1_000), parseWatchNextLink(row.intentUri.toString()))
                 // Resolve the published URI through the manifest, as the TV launcher does.
