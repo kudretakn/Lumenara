@@ -1,6 +1,5 @@
 package dev.lumenara.data
 
-import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.SharingStarted
@@ -11,6 +10,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -29,21 +29,21 @@ class RepositoryTrimTest {
 
         val repository = uninitializedRepository()
         val liveOrders = mutableMapOf("source" to orders)
-        val numberSnapshots = ConcurrentHashMap<String, Any>()
-            .apply { put("source", Any()) }
         setField(repository, "liveOrders", liveOrders)
-        setField(repository, "liveNumberSnapshots", numberSnapshots)
+        // Schema 13 stores channel numbers in Room; only the order-flow cache remains.
 
         val collector = launch { orders.collect {} }
         runCurrent()
         collector.cancelAndJoin()
-        advanceTimeBy(30_000)
+        repository.trim()
+        assertTrue("trim should clear the order-flow cache", liveOrders.isEmpty())
+
+        advanceTimeBy(29_999)
+        runCurrent()
+        assertFalse("trim should preserve the unsubscribe grace period", upstreamStopped)
+        advanceTimeBy(1)
         runCurrent()
         assertTrue("upstream should stop when its last subscriber leaves", upstreamStopped)
-
-        Repository::class.java.getDeclaredMethod("trim").apply { isAccessible = true }.invoke(repository)
-        assertTrue(liveOrders.isEmpty())
-        assertTrue(numberSnapshots.isEmpty())
     }
 
     private fun uninitializedRepository(): Repository {
