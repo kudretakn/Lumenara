@@ -12,6 +12,21 @@ internal fun subtitleCacheFileName(key: String, extension: String): String =
 
 /** Only normalized UTF-8 subtitle files are persisted; API links and credentials are never cached. */
 class SubtitleCache(private val directory: File) {
+    /** Copy before the catalog commits; retain the old cache file if Room rolls back. */
+    @Synchronized internal fun carryKeys(keys: Map<String, String>) {
+        for ((old, new) in keys) for (type in SubtitleType.entries) {
+            val source = File(directory, subtitleCacheFileName(old, type.extension))
+            val target = File(directory, subtitleCacheFileName(new, type.extension))
+            if (old == new || !source.isFile || target.isFile) continue
+            val temporary = File.createTempFile("subtitle-carry-", ".tmp", directory)
+            try {
+                source.copyTo(temporary, overwrite = true)
+                try { Files.move(temporary.toPath(), target.toPath(), ATOMIC_MOVE) }
+                catch (_: IOException) { Files.move(temporary.toPath(), target.toPath()) }
+            } finally { temporary.delete() }
+        }
+    }
+
     @Synchronized fun find(key: String): File? = SubtitleType.entries.map { File(directory, subtitleCacheFileName(key, it.extension)) }
         .firstOrNull { it.isFile }?.also { it.setLastModified(System.currentTimeMillis()) }
     @Synchronized fun save(key: String, bytes: ByteArray, name: String): File {

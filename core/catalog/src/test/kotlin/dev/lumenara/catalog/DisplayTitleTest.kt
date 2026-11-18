@@ -4,6 +4,14 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class DisplayTitleTest {
+    @Test fun removesOrphanYearAndQualityBracketsFromLegacyDisplayTitles() {
+        for (suffix in listOf("(2017", "[2017", "2017)", "[4K", "4K)")) {
+            assertEquals("Bıçak Sırtı", "Bıçak Sırtı $suffix".displayTitle())
+        }
+        assertEquals("Film Yönetmen Kurgusu", "Film (Yönetmen Kurgusu".displayTitle())
+        assertEquals("Film (Yönetmen Kurgusu)", "Film (Yönetmen Kurgusu)".displayTitle())
+    }
+
     @Test fun stripsRepeatedProviderPrefixesAndLongIds() {
         assertEquals("Kıyı (Dublaj)", "[TR] VOD | Kıyı 104439686826 (Dublaj)".displayTitle())
         assertEquals("Kıyı", "Sağlayıcı: Kıyı [123456]".displayTitle())

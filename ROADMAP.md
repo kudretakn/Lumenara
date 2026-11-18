@@ -17,4 +17,4 @@
 - VLC giriş katmanı doğrudan TS ve konumlandırılabilir MP4/MOV/MKV/WebM dosyalarını destekler. HLS/DASH oynatımı Media3 üzerinden yapılır.
 - Altyazı gecikmesi VLC’de, harici dosya/URL seçimi Media3’te sunulur. Çevrimiçi altyazı sağlayıcısı yapılandırılmamıştır.
 - Katalog ve daha önce alınmış bölümler bağlantı kesilince görüntülenebilir. Medya oynatma için sağlayıcıya erişim gerekir.
-- İçerik kimliği kaynak ve yayın adresiyle oluşturulur. Adresini bütünüyle değiştiren sağlayıcılarda eski izleme kaydının yeni öğeye taşınması ayrıca ele alınmalıdır.
+- İçerik kimliği kaynak ve yayın adresiyle oluşturulur. Aynı kaynağın adresi veya hesabı değişince yenileme ve Ayarlar'daki düzenleme, yalnız bire bir eşleşen öğelerin kullanıcı kayıtlarını taşır (şema 12); belirsiz kullanıcı kayıtları korunur. Farklı kaynak satırları arasında isteğe bağlı elle taşıma ve cihaz kabul koşusu kalır.

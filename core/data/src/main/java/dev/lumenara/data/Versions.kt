@@ -4,6 +4,18 @@ import dev.lumenara.catalog.*
 
 private val tmdbMarker = Regex("\\[tmdb:([0-9]+)\\]")
 
+internal data class TmdbMatch(val id: String, val year: String = "")
+
+/** The search marker is the existing persisted TMDB identity; no extra column is needed. */
+internal fun Item.withTmdbMatch(match: TmdbMatch?, authoritative: Boolean = false): Item {
+    match ?: return this
+    val id = match.id.toLongOrNull()?.takeIf { it > 0 }?.toString() ?: return this
+    // A provider's explicit ID wins over a stale metadata file.
+    if (!authoritative && tmdbId().isNotEmpty() && tmdbId() != id) return this
+    return copy(search = tmdbMarker.replace(search, "").trimEnd() + " [tmdb:$id]",
+        year = year.ifEmpty { match.year })
+}
+
 fun Item.tmdbId(): String = tmdbMarker.find(search)?.groupValues?.get(1)?.toLongOrNull()?.takeIf { it > 0 }?.toString().orEmpty()
 fun Item.productionKey(): String = "$source|$kind|${productionName(title, year).key(tmdbId())}"
 // The preference identity stays stable when get_vod_info later supplies a previously unknown ID.
@@ -34,9 +46,14 @@ private fun List<Item>.keyedVersionGroups(): Map<String, List<Item>> {
         .forEach { (titleKey, rows) ->
             val ids = rows.map { it.tmdbId() }.filter { it.isNotBlank() }.distinct()
             rows.forEach { row ->
+                val tmdb = row.tmdbId()
                 val key = if (row.kind !in listOf("MOVIE", "SERIES")) row.id
-                    else if (ids.size <= 1) ids.firstOrNull()?.let { "${row.source}|${row.kind}|tmdb:$it" } ?: titleKey
-                    else row.tmdbId().takeIf { it.isNotBlank() }?.let { "${row.source}|${row.kind}|tmdb:$it" } ?: row.id
+                    // Known IDs are authoritative even across different title/year buckets.
+                    else if (tmdb.isNotEmpty()) "${row.source}|${row.kind}|tmdb:$tmdb"
+                    else if (names.getValue(row.id).title.isBlank()) row.id
+                    else if (ids.size == 1) "${row.source}|${row.kind}|tmdb:${ids.single()}"
+                    else if (ids.isEmpty()) titleKey
+                    else row.id
                 groups.getOrPut(key) { mutableListOf() }.add(row)
             }
         }
@@ -81,14 +98,15 @@ fun List<Item>.versionAssignments(): List<VersionAssignment> = keyedVersionGroup
 }
 
 /** Only bounded query results need a display projection; grouping is done during import. */
-fun Item.displayVersion(): Item = if (versionKey.isEmpty()) this
+fun Item.displayVersion(): Item = if (versionKey.isEmpty() || displayTitle.isEmpty()) this
     else copy(title = displayTitle, year = displayYear)
 
 fun List<Item>.mergeVersions(): List<Item> = versionGroups().map { versions ->
         val representative = versions.minWith(versionOrder)
         if (representative.kind in listOf("MOVIE", "SERIES")) {
             val name = productionName(representative.title, representative.year)
-            representative.copy(title = name.title, year = name.year)
+            val years = versions.map { productionName(it.title, it.year).year }.filter(String::isNotEmpty).distinct()
+            representative.copy(title = name.title, year = name.year.ifEmpty { years.singleOrNull().orEmpty() })
         } else representative
     }
 

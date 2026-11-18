@@ -17,7 +17,7 @@ class PlaylistTest {
                 )
                 .single()
         assertEquals(
-            Listing("Maç, Canlı", "https://example.invalid/live/7", "TV, Spor", "7", Kind.LIVE),
+            Listing("Maç, Canlı", "https://example.invalid/live/7", "TV, Spor", "7", Kind.LIVE, tvgGroup = "TV, Spor"),
             item,
         )
     }

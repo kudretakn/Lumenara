@@ -146,6 +146,7 @@ internal class Xtream(private val spec: SourceSpec) {
                         row["language"].orEmpty(),
                         row["cast"].orEmpty(),
                         tmdbId = row["tmdb_id"] ?: row["tmdb"].orEmpty(),
+                        providerId = id,
                         archive =
                             if (kind == Kind.LIVE && row["tv_archive"] == "1" && zone.isNotBlank())
                                 base
@@ -199,6 +200,7 @@ internal class Xtream(private val spec: SourceSpec) {
 
     fun episodes(info: String, seriesTitle: String): List<Listing> =
         Transport.read(info, spec.allowHttp) { input, _ ->
+            val seriesId = info.toHttpUrl().queryParameter("series_id").orEmpty()
             val seasons =
                 JSONObject(input.reader().readText()).optJSONObject("episodes")
                     ?: return@read emptyList()
@@ -226,6 +228,7 @@ internal class Xtream(private val spec: SourceSpec) {
                                     ?: 0) * 1000,
                                 introStartMs = info?.optLong("intro_start_ms", -1) ?: -1,
                                 introEndMs = info?.optLong("intro_end_ms", -1) ?: -1,
+                                providerId = "$seriesId:$id",
                             )
                         )
                     }

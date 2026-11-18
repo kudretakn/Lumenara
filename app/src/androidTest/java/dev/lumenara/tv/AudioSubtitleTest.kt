@@ -42,6 +42,10 @@ class AudioSubtitleTest {
     private fun optionsScrollTo(matcher: SemanticsMatcher) {
         screen.onNodeWithTag("player-options").performScrollToNode(matcher)
     }
+    private fun assertEngineDelay(us: Long) {
+        // Media3 reports the shift output's applied clock; VLC reads native spuDelay.
+        waitFor(SemanticsMatcher.expectValue(SubtitleEngineDelayUs, us))
+    }
     private fun assertOptionsKeepRemoteFocus() {
         screen.onNodeWithText("Devamını göster").assertDoesNotExist()
         val focusedOption = isFocused() and hasAnyAncestor(hasTestTag("player-options"))
@@ -182,19 +186,40 @@ class AudioSubtitleTest {
                 waitFor(cue)
                 assertEquals(2, searches.get()); assertEquals(1, downloads.get())
                 screen.dpad(Key.Menu)
-                optionsScrollTo(hasText("+0,5 sn"))
-                select(hasText("+0,5 sn"))
-                waitFor(hasText("Altyazı kaydırma · 0.5 sn"))
-                screen.waitUntil(5000) { runBlocking { prefs.text("delay_$key").first() } == "500" }
+                optionsScrollTo(hasTestTag("subtitle-delay-plus-100"))
+                repeat(3) { select(hasTestTag("subtitle-delay-plus-100")) }
+                waitFor(hasText("Altyazı gecikmesi · +0,3 sn"))
+                assertEngineDelay(300_000L)
+                val delayItem = versions.single { it.title.contains("Dublaj", ignoreCase = true) }
+                screen.waitUntil(5000) { runBlocking { prefs.subtitleDelay(delayItem) } == 300L }
+                assertEquals(0L, runBlocking { prefs.subtitleDelay(versions.single { it.id != delayItem.id }) })
+                // Back closes options first. The startup timeline can still be visible after
+                // reopening cached playback and consumes its own Back before the player exits.
+                screen.back()
+                screen.onNodeWithTag("player-options").assertDoesNotExist()
+                repeat(2) {
+                    if (screen.onAllNodesWithContentDescription("Tam ekran oynatıcı").fetchSemanticsNodes().isNotEmpty()) screen.back()
+                }
+                waitFor(hasTestTag("details-content"))
+                screen.onNodeWithTag("details-content").performScrollToIndex(0)
+                select(hasText("Devam et"))
+                waitFor(cue)
+                assertEngineDelay(300_000L)
+                screen.dpad(Key.Menu)
                 optionsScrollTo(hasText("Motor: Media3/VLC"))
                 select(hasText("Motor: Media3/VLC"))
                 waitFor(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "İndirilen altyazı etkin"))
+                assertEngineDelay(300_000L)
                 screen.dpad(Key.Menu)
                 assertOptionsKeepRemoteFocus()
-                optionsScrollTo(hasText("Altyazı gecikmesi · 500 ms"))
-                waitFor(hasText("Altyazı gecikmesi · 500 ms"))
-                select(hasText("−0,5 sn"))
-                waitFor(hasText("Altyazı gecikmesi · 0 ms"))
+                optionsScrollTo(hasTestTag("subtitle-delay-minus-1000"))
+                select(hasTestTag("subtitle-delay-minus-1000"))
+                waitFor(hasText("Altyazı gecikmesi · -0,7 sn"))
+                assertEngineDelay(-700_000L)
+                optionsScrollTo(hasTestTag("subtitle-delay-reset"))
+                select(hasTestTag("subtitle-delay-reset"))
+                waitFor(hasText("Altyazı gecikmesi · +0,0 sn"))
+                assertEngineDelay(0L)
                 screen.back()
                 screen.dpad(Key.DirectionRight)
                 waitFor(hasTestTag("vod-timeline"))

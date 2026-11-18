@@ -18,9 +18,9 @@ class BackupTest {
             BackupSetting("recent_live", "string", id)),
         listOf(BackupSource(source, "Örnek kaynak", SourceSpec("https://provider.invalid", false, "user", "private-password"))),
         listOf(BackupFeed(feed, source, "https://provider.invalid/epg?token=private-token")),
-        listOf(BackupItem(id, source, address, "")),
+        listOf(BackupItem(id, source, address, "", providerId = "17", tvgName = "Channel", tvgGroup = "Group")),
         listOf(Mark(id, favorite = true, listed = true, position = 1234, duration = 5678, updated = 999)),
-        listOf(Mapping(id, feed, "channel-1")), "private-tmdb-token",
+        listOf(Mapping(id, feed, "channel-1")), "private-tmdb-token", listOf(ItemRedirect("old-item", id)),
     )
 
     private fun rejected(bytes: ByteArray, pass: CharArray = password): IllegalArgumentException {
@@ -165,6 +165,17 @@ class BackupTest {
                 .put("type", "string").put("value", "foreign cache"))
         }
         assertEquals(data, BackupCodec.decrypt(bytes, password))
+    }
+
+    @Test fun olderBackupsWithoutCarryIdentityFieldsRemainReadable() {
+        val bytes = malformedPayload { json ->
+            json.remove("redirects")
+            json.getJSONArray("items").getJSONObject(0).apply {
+                remove("providerId"); remove("tvgName"); remove("tvgGroup")
+            }
+        }
+        assertEquals(data.copy(items = listOf(data.items.single().copy(providerId = "", tvgName = "", tvgGroup = "")),
+            redirects = emptyList()), BackupCodec.decrypt(bytes, password))
     }
 
     @Test fun authenticatedMalformedSchemaIsRejectedBeforePreview() {

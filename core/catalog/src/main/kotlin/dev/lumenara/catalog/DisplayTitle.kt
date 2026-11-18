@@ -5,6 +5,7 @@ private val providerPrefix = Regex(
 )
 private val providerId = Regex("""(?<!\d)\d{6,}(?!\d)""")
 private val emptyTitleBrackets = Regex("""\(\s*\)|\[\s*]""")
+private val orphanMetadata = Regex("""(?iu)[\(\[\{]\s*(?:(?:19|20)\d{2}|4K|UHD|FHD|HD|SD|2160p|1080p|720p|480p)\s*$|(?<![\p{L}\p{N}])(?:(?:19|20)\d{2}|4K|UHD|FHD|HD|SD|2160p|1080p|720p|480p)\s*[\)\]\}](?=\s*$)""")
 
 /** Presentation only: keep provider titles and production identities intact in storage. */
 fun String.displayTitle(): String {
@@ -13,8 +14,7 @@ fun String.displayTitle(): String {
         val prefix = providerPrefix.find(clean) ?: break
         clean = clean.removeRange(prefix.range).trim()
     }
-    return clean.replace(providerId, "")
-        .replace(emptyTitleBrackets, "")
+    return balancedTitle(clean.replace(providerId, "").replace(orphanMetadata, "").replace(emptyTitleBrackets, ""))
         .replace(Regex("\\s+"), " ")
         .trim(' ', '-', '–', '·', '|', ':', '_')
 }

@@ -26,13 +26,28 @@ import kotlinx.coroutines.flow.first
 internal fun LibraryScreen(model: LibraryModel = viewModel(), onFirstDraw: () -> Unit = {}) {
     val sources by model.sources.collectAsStateWithLifecycle()
     val startInSetup by model.startInSetup.collectAsStateWithLifecycle()
-    val available = sources ?: return
-    val initialSetup = startInSetup ?: return
-    LaunchedEffect(model) {
-        // Frame callbacks run before drawing. The second callback follows a submitted frame.
-        withFrameNanos { }; withFrameNanos { }
-        Perf.since("startup_screen", "startup_screen_first_draw")
+    val launchPending = sources == null || startInSetup == null
+    var slowLaunch by remember(model) { mutableStateOf(false) }
+    LaunchedEffect(model, launchPending) {
+        if (launchPending) {
+            kotlinx.coroutines.delay(500)
+            slowLaunch = true
+        } else slowLaunch = false
     }
+    // Submit a cheap skeleton immediately; explain a slow migration without touching
+    // the lazy repository or composing the navigation graph before its IO snapshot.
+    if (launchPending) {
+        if (slowLaunch) MigrationLoadingScreen()
+        else Column(Modifier.fillMaxSize().background(LumenColors.bg)
+            .padding(horizontal = Spacing.screenHorizontal, vertical = Spacing.screenVertical),
+            verticalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
+            LumenaraLogo(showName = true)
+            LoadingCard(Modifier.fillMaxWidth().height(100.dp))
+        }
+        return
+    }
+    val available = checkNotNull(sources)
+    val initialSetup = checkNotNull(startInSetup)
     LaunchedEffect(model) {
         model.awaitFirstDraw()
         onFirstDraw()
@@ -120,7 +135,7 @@ internal fun LibraryScreen(model: LibraryModel = viewModel(), onFirstDraw: () ->
         val target = watchNextRequest ?: return@LaunchedEffect
         playJob?.cancel()
         try {
-            val row = model.repo.library.item(target.itemId)
+            val row = model.repo.library.item(model.repo.library.redirectedId(target.itemId) ?: target.itemId)
             val hidden = model.repo.hidden.first()
             if (row != null && row.kind in listOf("MOVIE", "EPISODE") && row.category !in hidden) {
                 val chosen = model.repo.selectedVersion(row)

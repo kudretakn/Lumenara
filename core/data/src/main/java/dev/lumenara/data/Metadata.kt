@@ -2,7 +2,6 @@ package dev.lumenara.data
 
 import android.content.Context
 import android.util.AtomicFile
-import dev.lumenara.catalog.searchable
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -34,6 +33,33 @@ internal class Metadata(private val context: Context, private val vault: Vault) 
     private val prefs = context.getSharedPreferences("metadata", Context.MODE_PRIVATE)
     private val base = "https://api.themoviedb.org/3/".toHttpUrl()
 
+    private var lastRequestAt = 0L
+    private var retryAt = 0L
+    private fun cacheFile(key: String) = File(context.cacheDir, "tmdb/${key.replace(':', '_')}.json")
+
+    /** Cache-only lookup for visible/affected rows; never starts a network/catalog scan. */
+    internal fun cachedMatch(item: Item): TmdbMatch? = runCatching {
+        val file = cacheFile(item.id)
+        if (!file.isFile) return@runCatching null
+        cachedTmdbMatch(item, JSONObject(file.readText()))
+    }.getOrNull()
+    private val matcher = TmdbMatcher(TmdbTransport(::fetch), read = { key ->
+        val file = cacheFile(key)
+        if (file.isFile) runCatching { TmdbCached(JSONObject(file.readText()), file.lastModified()) }
+            .getOrNull() else null
+    }, write = { key, data ->
+        val file = cacheFile(key)
+        file.parentFile?.mkdirs()
+        val atomic = AtomicFile(file)
+        val stream = atomic.startWrite()
+        try {
+            stream.write(data.toString().toByteArray(Charsets.UTF_8))
+            atomic.finishWrite(stream)
+        } catch (error: Exception) {
+            atomic.failWrite(stream)
+            throw error
+        }
+    })
     fun configure(token: String) {
         val edit = prefs.edit()
         if (token.isBlank()) edit.remove("access")
@@ -61,65 +87,11 @@ internal class Metadata(private val context: Context, private val vault: Vault) 
         withContext(Dispatchers.IO) {
             val local = MovieInfo.from(item)
             if (item.kind !in listOf("MOVIE", "SERIES") || !configured()) return@withContext local
-            val file = File(context.cacheDir, "tmdb/${item.id.replace(':','_')}.json")
-            val previous =
-                if (file.isFile) runCatching { JSONObject(file.readText()) }.getOrNull() else null
-            val json =
-                if (
-                    previous != null &&
-                        System.currentTimeMillis() - file.lastModified() < 7L * 86400000
-                )
-                    previous
-                else
-                    try {
-                        val token = prefs.getString("access", null)?.let(vault::decrypt)
-                            ?: BuildConfig.TMDB_READ_TOKEN
-                        if (token.isBlank()) return@withContext local
-                        val type = if (item.kind == "MOVIE") "movie" else "tv"
-                        val yearSuffix =
-                            Regex("""\s*[\[(]((?:19|20)\d\d)[\])]\s*$""").find(item.title)
-                        val year =
-                            item.year.takeIf { it.matches(Regex("(19|20)[0-9]{2}")) }
-                                ?: yearSuffix?.groupValues?.get(1)
-                                ?: return@withContext local
-                        val title =
-                            yearSuffix?.let { item.title.substring(0, it.range.first).trim() }
-                                ?: item.title
-                        val results =
-                            fetch(token, "search/$type", mapOf("query" to title))
-                                .optJSONArray("results") ?: return@withContext local
-                        val match =
-                            (0 until results.length())
-                                .mapNotNull(results::optJSONObject)
-                                .singleOrNull { row ->
-                                    listOf("title", "original_title", "name", "original_name").any {
-                                        searchable(row.optString(it)) == searchable(title)
-                                    } &&
-                                        (row.optString("release_date").ifEmpty {
-                                                row.optString("first_air_date")
-                                            })
-                                            .take(4) == year
-                                } ?: return@withContext local
-                        fetch(
-                                token,
-                                "$type/${match.getInt("id")}",
-                                mapOf("append_to_response" to "credits,videos"),
-                            )
-                            .also { data ->
-                                file.parentFile?.mkdirs()
-                                val atomic = AtomicFile(file)
-                                val stream = atomic.startWrite()
-                                try {
-                                    stream.write(data.toString().toByteArray())
-                                    atomic.finishWrite(stream)
-                                } catch (e: Exception) {
-                                    atomic.failWrite(stream)
-                                    throw e
-                                }
-                            }
-                    } catch (_: java.io.IOException) {
-                        previous ?: return@withContext local
-                    }
+            val token = prefs.getString("access", null)?.let(vault::decrypt)
+                ?: BuildConfig.TMDB_READ_TOKEN
+            if (token.isBlank()) return@withContext local
+            val json = matcher.details(token, item.id, if (item.kind == "MOVIE") "movie" else "tv",
+                item.title, item.year, item.tmdbId()) ?: return@withContext local
             fun names(array: org.json.JSONArray?) =
                 (0 until minOf(8, array?.length() ?: 0))
                     .mapNotNull { array?.optJSONObject(it)?.optString("name") }
@@ -184,12 +156,22 @@ internal class Metadata(private val context: Context, private val vault: Vault) 
             )
         }
 
+    @Synchronized
     private fun fetch(token: String, path: String, query: Map<String, String>): JSONObject {
-        val builder = base.newBuilder().addPathSegments(path).addQueryParameter("language", "tr-TR")
+        val current = System.currentTimeMillis()
+        if (current < retryAt) throw java.io.IOException("TMDB istek sınırı.")
+        val wait = 250L - (android.os.SystemClock.elapsedRealtime() - lastRequestAt)
+        if (wait > 0) Thread.sleep(wait)
+        lastRequestAt = android.os.SystemClock.elapsedRealtime()
+        val builder = base.newBuilder().addPathSegments(path)
         query.forEach { (k, v) -> builder.addQueryParameter(k, v) }
         val request =
             Request.Builder().url(builder.build()).header("Authorization", "Bearer $token").build()
         return Transport.client(false).newCall(request).execute().use {
+            if (it.code == 429) {
+                val seconds = it.header("Retry-After")?.toLongOrNull()?.coerceIn(1, 86400) ?: 60L
+                retryAt = System.currentTimeMillis() + seconds * 1000
+            }
             if (!it.isSuccessful) throw java.io.IOException("TMDB erişim hatası.")
             JSONObject(
                 bounded(checkNotNull(it.body).byteStream(), 2 * 1024 * 1024).reader().readText()

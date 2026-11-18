@@ -3,7 +3,9 @@ package dev.lumenara.tv
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.flow.first
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -31,6 +33,24 @@ class FirstDrawGateTest {
         launch { gate.await(); finished = true }
         runCurrent()
         assertTrue(finished)
+    }
+
+    @Test fun hubDetailsFollowTheFirstDrawAfterOneShortFrameWindow() = runTest {
+        val gate = FirstDrawGate()
+        var ready = false
+        val observer = launch { ready = gate.detailsReady.first() }
+        runCurrent()
+        assertFalse(ready)
+        gate.onDraw()
+        runCurrent()
+        assertFalse(ready)
+        advanceTimeBy(15)
+        runCurrent()
+        assertFalse(ready)
+        advanceTimeBy(1)
+        runCurrent()
+        assertTrue(ready)
+        observer.join()
     }
 
     @Test fun cancellingOneScreenDoesNotReleaseOrCancelOtherWaiters() = runTest {

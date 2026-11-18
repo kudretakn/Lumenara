@@ -93,6 +93,56 @@ class Preferences internal constructor(
         store.edit { it[stringPreferencesKey(key)] = value }
     }
 
+    // Called under the durable restore journal, in the same commit as catalog state migration.
+    internal suspend fun carryItems(ids: Map<String, String>, identities: Map<String, String>): Map<String, String> {
+        val subtitleFiles = linkedMapOf<String, String>()
+        store.edit { target ->
+            val recent = stringPreferencesKey("recent_live")
+            target[recent]?.let { value -> target[recent] = value.lines().map { ids[it] ?: it }
+                .distinct().take(20).joinToString("\n") }
+            val snapshot = target.asMap()
+            for ((key, value) in snapshot) {
+                if (key.name.startsWith("subtitle_delay_")) {
+                    val newName = remapSubtitleDelayKey(key.name, ids) ?: continue
+                    val newKey = stringPreferencesKey(newName)
+                    if (newKey !in snapshot) (value as? String)?.let { target[newKey] = it }
+                    target.remove(key)
+                    continue
+                }
+                val prefix = listOf("version_", "audio_", "text_", "delay_", "sub_", "subtitle_", "engine_", "series_expanded_")
+                    .firstOrNull { key.name.startsWith(it) } ?: continue
+                val identity = key.name.removePrefix(prefix)
+                val replacement = ids[identity] ?: identities[identity] ?: identities.entries.firstOrNull {
+                    identity.startsWith(it.key + "|")
+                }?.let { it.value + identity.removePrefix(it.key) } ?: identity
+                val newKey = stringPreferencesKey(prefix + replacement)
+                if (value is String) {
+                    val newValue = if (value.startsWith("id:")) ids[value.removePrefix("id:")]?.let { "id:$it" } ?: value else value
+                    if (newKey == key || newKey !in snapshot) target[newKey] = newValue
+                    if (prefix == "text_" && value == "downloaded" && newKey != key && newKey !in snapshot)
+                        subtitleFiles[identity] = replacement
+                    if (newKey != key) target.remove(key)
+                }
+            }
+        }
+        return subtitleFiles
+    }
+
+    internal suspend fun carryReferences(rows: List<CarryRow>): Set<String> {
+        val settings = data.first().asMap()
+        val names = settings.keys.map { it.name }.toSet()
+        val chosen = settings.values.filterIsInstance<String>().filter { it.startsWith("id:") }
+            .map { it.removePrefix("id:") }.toSet()
+        val recent = settings[stringPreferencesKey("recent_live")]?.toString().orEmpty().lines().toSet()
+        val parents = rows.associateBy { it.id }
+        val identities = carryProductionIdentities(rows)
+        return rows.filter { row ->
+            val identity = carryPlaybackIdentity(row, identities, parents)
+            row.id in chosen || row.id in recent || listOf("version_", "audio_", "text_", "delay_", "sub_", "subtitle_", "engine_")
+                .any { it + row.id in names || it + identity in names }
+        }.map { it.id }.toSet()
+    }
+
     internal suspend fun backupSettings(): List<BackupSetting> = withContext(Dispatchers.IO) {
         rawSettings().filter { isBackupSetting(it.name) }.map {
             if (it.name.startsWith("secret_") && it.value.isNotEmpty()) it.copy(value = decrypt(it.value)) else it
@@ -106,14 +156,22 @@ class Preferences internal constructor(
         val sourcePattern = sources.keys.takeIf { it.isNotEmpty() }
             ?.joinToString("|") { Regex.escape(it) }?.let { Regex(it) }
         val prepared = settings.filter { isBackupSetting(it.name) }.map { saved ->
-            val name = sourcePattern?.replace(saved.name) { sources.getValue(it.value) } ?: saved.name
+            val name = if (saved.name.startsWith("subtitle_delay_")) {
+                val identity = saved.name.removePrefix("subtitle_delay_").split('|', limit = 2)
+                if (identity.size != 2) return@map null
+                val source = sources[identity[0]] ?: return@map null
+                val item = items[identity[1]] ?: return@map null
+                "subtitle_delay_$source|$item"
+            } else sourcePattern?.replace(saved.name) { sources.getValue(it.value) } ?: saved.name
             val value = when {
                 saved.name == "recent_live" -> saved.value.lines().mapNotNull { items[it] }.distinct().take(20).joinToString("\n")
+                saved.name.startsWith("version_") && saved.value.startsWith("id:") ->
+                    items[saved.value.removePrefix("id:")]?.let { "id:$it" }.orEmpty()
                 saved.name.startsWith("secret_") && saved.value.isNotEmpty() -> encrypt(saved.value)
                 else -> saved.value
             }
             saved.copy(name = name, value = value)
-        }
+        }.filterNotNull()
         require(prepared.map { it.name }.distinct().size == prepared.size) { "Yinelenen ayar adı." }
         replaceSettings(prepared)
     }

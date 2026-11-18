@@ -70,6 +70,9 @@ data class Item(
     @ColumnInfo(defaultValue = "''") val displayYear: String = "",
     // Preferred order within a group permits a filtered/hidden representative to fall back in SQL.
     @ColumnInfo(defaultValue = "0") val versionRank: Int = 0,
+    @ColumnInfo(defaultValue = "''") val providerId: String = "",
+    @ColumnInfo(defaultValue = "''") val tvgName: String = "",
+    @ColumnInfo(defaultValue = "''") val tvgGroup: String = "",
 )
 
 @Entity(
@@ -131,22 +134,63 @@ data class VersionCandidate(
 
 @Dao
 interface LibraryDao {
-    @RawQuery(observedEntities = [Item::class])
+    @Query("""SELECT id,source,title,category,kind,tvgId,year,parent,providerId,tvgName,tvgGroup,
+        CASE WHEN EXISTS(SELECT 1 FROM version_backfill_state b WHERE b.id=1 AND
+            (b.phase IN ('normalize','resolve') OR (b.phase='apply' AND items.id>b.cursor)))
+            THEN id ELSE versionKey END AS versionKey,
+        CASE WHEN :legacy=1 AND providerId='' THEN encryptedUrl ELSE '' END AS legacyUrl FROM items WHERE source=:source""")
+    suspend fun carryRows(source: String, legacy: Boolean = false): List<CarryRow>
+
+    @Query("SELECT * FROM item_redirects")
+    suspend fun redirects(): List<ItemRedirect>
+
+    @Query("SELECT newId FROM item_redirects WHERE oldId=:id")
+    suspend fun redirectedId(id: String): String?
+
+    @Upsert suspend fun redirect(row: ItemRedirect)
+    @Upsert suspend fun saveRedirects(rows: List<ItemRedirect>)
+    @Query("DELETE FROM item_redirects WHERE oldId=newId") suspend fun deleteSelfRedirects()
+
+    @Query("UPDATE item_redirects SET newId=:newId WHERE newId=:oldId")
+    suspend fun redirectTarget(oldId: String, newId: String)
+
+    @Query("SELECT * FROM collections WHERE id=:id")
+    suspend fun member(id: String): Member?
+
+    @Query("SELECT * FROM collections") suspend fun carryMembers(): List<Member>
+
+    @Query("DELETE FROM marks WHERE id=:id") suspend fun deleteMark(id: String)
+    @Query("DELETE FROM collections WHERE id=:id") suspend fun deleteMember(id: String)
+    @Query("DELETE FROM mappings WHERE item=:id") suspend fun deleteMapping(id: String)
+
+    @Query("""SELECT i.id FROM items i WHERE i.source=:source AND (
+        EXISTS(SELECT 1 FROM marks m WHERE m.id=i.id AND (m.favorite=1 OR m.listed=1 OR m.position>0 OR m.updated>0))
+        OR EXISTS(SELECT 1 FROM collections c WHERE c.id=i.id)
+        OR EXISTS(SELECT 1 FROM mappings m WHERE m.item=i.id))""")
+    suspend fun carryProtectedIds(source: String): List<String>
+
+    @Query("UPDATE items SET generation=:generation WHERE id IN (:ids)")
+    suspend fun retainCarryRows(ids: List<String>, generation: Long)
+
+    @Query("""UPDATE items SET generation=:generation,versionKey=id,isRepresentative=1,
+        displayTitle=title,displayYear=year,versionRank=0 WHERE id IN (:ids)""")
+    suspend fun isolateCarryRows(ids: List<String>, generation: Long)
+    @RawQuery(observedEntities = [Item::class, VersionBackfillState::class])
     fun catalogRows(query: SupportSQLiteQuery): Flow<List<Item>>
 
-    @RawQuery(observedEntities = [Item::class, Mark::class])
+    @RawQuery(observedEntities = [Item::class, Mark::class, VersionBackfillState::class])
     fun markedCatalogRows(query: SupportSQLiteQuery): Flow<List<Item>>
 
-    @RawQuery(observedEntities = [Item::class, Member::class])
+    @RawQuery(observedEntities = [Item::class, Member::class, VersionBackfillState::class])
     fun memberCatalogRows(query: SupportSQLiteQuery): Flow<List<Item>>
 
-    @RawQuery(observedEntities = [Item::class, Mark::class])
+    @RawQuery(observedEntities = [Item::class, Mark::class, VersionBackfillState::class])
     fun catalogCount(query: SupportSQLiteQuery): Flow<Int>
 
-    @RawQuery(observedEntities = [Item::class, Mark::class])
+    @RawQuery(observedEntities = [Item::class, Mark::class, VersionBackfillState::class])
     fun catalogKinds(query: SupportSQLiteQuery): Flow<List<String>>
 
-    @RawQuery(observedEntities = [Item::class])
+    @RawQuery(observedEntities = [Item::class, VersionBackfillState::class])
     fun catalogCategoryCounts(query: SupportSQLiteQuery): Flow<List<LiveCategoryCount>>
 
     @RawQuery(observedEntities = [Item::class, Feed::class, Slot::class, GuideName::class, Mapping::class])
@@ -154,10 +198,10 @@ interface LibraryDao {
 
     fun liveNow(rows: List<Item>, now: Long): Flow<List<LiveNow>> = liveNowRows(liveNowQuery(rows, now))
 
-    @RawQuery(observedEntities = [Item::class])
+    @RawQuery(observedEntities = [Item::class, VersionBackfillState::class])
     fun catalogKindCategoryCounts(query: SupportSQLiteQuery): Flow<List<KindCategoryCount>>
 
-    @RawQuery(observedEntities = [Item::class])
+    @RawQuery(observedEntities = [Item::class, VersionBackfillState::class])
     fun catalogCategories(query: SupportSQLiteQuery): Flow<List<String>>
 
     // Visibility only needs names, never representative selection or counts over the catalog.
@@ -221,7 +265,7 @@ interface LibraryDao {
             if (source.isNotEmpty()) rows else rows.groupBy { it.source }.toSortedMap().values.flatten()
         }
 
-    @Query("""SELECT * FROM items WHERE id IN (:ids) AND kind='LIVE'
+    @Query("""SELECT * FROM items INDEXED BY sqlite_autoindex_items_1 WHERE id IN (:ids) AND kind='LIVE'
         AND category NOT IN (:hidden) AND (:source='' OR source=:source)""")
     fun liveByIds(source: String, ids: List<String>, hidden: List<String> = emptyList()): Flow<List<Item>>
 
@@ -293,6 +337,19 @@ interface LibraryDao {
     @androidx.room.Update(entity = Item::class)
     suspend fun assignVersions(rows: List<VersionAssignment>)
 
+    @androidx.room.Update(entity = Item::class)
+    suspend fun assignTmdb(rows: List<TmdbAssignment>)
+
+    @Query("SELECT * FROM items WHERE id IN (:ids) AND kind IN ('MOVIE','SERIES')")
+    suspend fun versionSeeds(ids: List<String>): List<Item>
+
+    // CatalogStage.read has a synchronous callback, already inside the IO import transaction.
+    @Query("SELECT * FROM items WHERE id IN (:ids) AND kind IN ('MOVIE','SERIES')")
+    fun importedVersionSeeds(ids: List<String>): List<Item>
+
+    @RawQuery
+    suspend fun relatedVersions(query: SupportSQLiteQuery): List<Item>
+
     @Query("SELECT EXISTS(SELECT 1 FROM items WHERE id=:id)")
     suspend fun exists(id: String): Boolean
 
@@ -336,34 +393,41 @@ interface LibraryDao {
         SELECT i.id,i.parent,i.kind,i.category FROM marks m CROSS JOIN items i ON i.id=m.id WHERE m.position>0
         ), parents AS (SELECT DISTINCT parent FROM watched WHERE kind='EPISODE'), names AS (
         SELECT category FROM watched
-        UNION SELECT i.category FROM parents p JOIN items i ON i.id=p.parent
-        UNION SELECT ep.category FROM parents p CROSS JOIN items ep ON ep.parent=p.parent
+        UNION SELECT i.category FROM parents p CROSS JOIN items i ON i.id=p.parent
+        UNION SELECT ep.category FROM parents p CROSS JOIN items ep INDEXED BY index_items_parent ON ep.parent=p.parent
         ) SELECT category FROM names n WHERE EXISTS(
             SELECT 1 FROM items i INDEXED BY index_items_kind_category_title
             WHERE i.kind IN ('LIVE','MOVIE','SERIES') AND i.category=n.category)""")
     fun continueWatchingCategories(): Flow<List<String>>
 
-    // Aggregate only marked rows, then choose a representative among eligible history cards.
-    // Do not expand history to every version: an unplayed/completed sibling must not replace
-    // the version the user can actually resume. parent resolves the remaining-episode probe.
+    // HubHistoryQuery's bounded ID selection, with legacy cards isolated until their
+    // resumable backfill batch commits. Observing the state also refreshes phase changes.
     @Query("""WITH history AS (
         SELECT CASE WHEN ep.kind='EPISODE' THEN ep.parent ELSE ep.id END AS cardId, MAX(m.updated) AS activity
         FROM marks m CROSS JOIN items ep ON ep.id=m.id WHERE ep.category NOT IN (:hidden) AND m.position>0 AND
             (ep.kind='EPISODE' OR ep.kind='MOVIE' AND (m.duration<=0 OR m.position<m.duration*0.95))
         GROUP BY cardId
         ), candidates AS (
-        SELECT i.*,history.activity FROM history JOIN items i ON i.id=history.cardId
+        SELECT i.id,CASE WHEN COALESCE(i.versionKey,'')='' OR EXISTS(
+            SELECT 1 FROM version_backfill_state b WHERE b.id=1
+            AND (b.phase IN ('normalize','resolve') OR (b.phase='apply' AND i.id>b.cursor)))
+            THEN i.id ELSE i.versionKey END AS cardKey,
+            i.versionRank,i.isRepresentative,i.versionKey!='' AS hasVersion,MAX(h.activity) AS activity
+        FROM history h CROSS JOIN items i ON i.id=h.cardId
         WHERE i.category NOT IN (:hidden) AND (:source='' OR i.source=:source) AND i.kind IN ('MOVIE','SERIES')
-        AND (i.kind!='SERIES' OR EXISTS(SELECT 1 FROM items ep LEFT JOIN marks m ON m.id=ep.id
-            WHERE ep.category NOT IN (:hidden) AND ep.parent=i.id AND (m.id IS NULL OR m.duration<=0 OR m.position<m.duration*0.90)))
+        AND (i.kind!='SERIES' OR EXISTS(SELECT 1 FROM items ep INDEXED BY index_items_parent
+            LEFT JOIN marks m ON m.id=ep.id WHERE ep.parent=i.id AND ep.category NOT IN (:hidden)
+            AND (m.id IS NULL OR m.duration<=0 OR m.position<m.duration*0.90)))
+        GROUP BY i.id
         ), activity AS (
-        SELECT CASE WHEN versionKey='' THEN id ELSE versionKey END AS cardKey, MAX(activity) AS lastActivity
+        SELECT cardKey,MAX(activity) AS lastActivity,MIN(versionRank) AS bestRank
         FROM candidates GROUP BY cardKey
-        ) SELECT items.* FROM candidates i JOIN items ON items.id=i.id JOIN activity a
-        ON a.cardKey=CASE WHEN i.versionKey='' THEN i.id ELSE i.versionKey END
-        WHERE i.isRepresentative=1 OR (i.versionKey!='' AND NOT EXISTS(
-            SELECT 1 FROM candidates v WHERE v.versionKey=i.versionKey AND v.versionRank<i.versionRank))
-        ORDER BY a.lastActivity DESC,i.id LIMIT 24""")
+        ), selected AS (
+        SELECT c.id,a.lastActivity FROM activity a CROSS JOIN candidates c ON c.cardKey=a.cardKey
+        WHERE c.cardKey=c.id OR c.isRepresentative=1 OR (c.hasVersion AND c.versionRank=a.bestRank)
+        ORDER BY a.lastActivity DESC,c.id LIMIT 24
+        ) SELECT items.* FROM selected CROSS JOIN items ON items.id=selected.id
+        ORDER BY selected.lastActivity DESC,items.id""")
     fun continueWatchingRows(source: String, hidden: List<String> = emptyList()): Flow<List<Item>>
 
     fun continueWatching(source: String, hidden: List<String> = emptyList()): Flow<List<Item>> =
@@ -438,10 +502,13 @@ interface LibraryDao {
     @Query("SELECT * FROM items WHERE id=:id")
     suspend fun item(id: String): Item?
 
-    @Query("SELECT id, source, title, kind, search, year, category FROM items WHERE source=:source AND kind=:kind AND category NOT IN (:hidden)")
-    suspend fun versionCandidates(source: String, kind: String, hidden: List<String> = emptyList()): List<VersionCandidate>
+    @Query("""SELECT id, source, title, kind, search, year, category FROM items WHERE source=:source
+        AND kind=:kind AND category NOT IN (:hidden) AND (:generation<0 OR generation=:generation)""")
+    suspend fun versionCandidates(source: String, kind: String, hidden: List<String> = emptyList(), generation: Long = -1): List<VersionCandidate>
 
-    @Query("SELECT * FROM items WHERE versionKey=:key ORDER BY versionRank")
+    @Query("""SELECT * FROM items WHERE versionKey=:key AND NOT EXISTS(
+        SELECT 1 FROM version_backfill_state b WHERE b.id=1
+        AND (b.phase IN ('normalize','resolve') OR (b.phase='apply' AND items.id>b.cursor))) ORDER BY versionRank""")
     suspend fun versionRows(key: String): List<Item>
 
     fun categories(kind: String, source: String, hidden: List<String> = emptyList()): Flow<List<String>> =
@@ -459,6 +526,11 @@ internal interface RestoreDao {
     @Query("DELETE FROM restore_pending") suspend fun clear()
 }
 
+// Durable aliases also let the TV provider reconcile its external rows after a process restart.
+@Entity(tableName = "item_redirects", indices = [Index("newId")], foreignKeys = [ForeignKey(
+    entity = Item::class, parentColumns = ["id"], childColumns = ["newId"], onDelete = ForeignKey.CASCADE)])
+data class ItemRedirect(@PrimaryKey val oldId: String, val newId: String)
+
 @Database(
     entities =
         [
@@ -471,8 +543,11 @@ internal interface RestoreDao {
             Mapping::class,
             Member::class,
             RestorePending::class,
+            ItemRedirect::class,
+            VersionBackfillState::class,
+            VersionBackfillRow::class,
         ],
-    version = 11,
+    version = 12,
     exportSchema = true,
     autoMigrations =
         [
@@ -486,66 +561,70 @@ internal interface RestoreDao {
 )
 abstract class LibraryDb : RoomDatabase() {
     internal abstract fun restoreJournal(): RestoreDao
+    abstract fun versionBackfill(): VersionBackfillDao
 
     companion object {
-        // Data-only migration: collapse cards immediately, including unrefreshed v7 rows.
-        // Keep every stream, mark, collection and episode ID for the detail version picker.
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                StartupPerf.measure("migration_11_12") {
+                    db.execSQL("ALTER TABLE items ADD COLUMN providerId TEXT NOT NULL DEFAULT ''")
+                    db.execSQL("ALTER TABLE items ADD COLUMN tvgName TEXT NOT NULL DEFAULT ''")
+                    db.execSQL("ALTER TABLE items ADD COLUMN tvgGroup TEXT NOT NULL DEFAULT ''")
+                    db.execSQL("""CREATE TABLE IF NOT EXISTS item_redirects (oldId TEXT NOT NULL,
+                        newId TEXT NOT NULL, PRIMARY KEY(oldId), FOREIGN KEY(newId) REFERENCES items(id) ON UPDATE NO ACTION ON DELETE CASCADE)""")
+                    db.execSQL("CREATE INDEX index_item_redirects_newId ON item_redirects(newId)")
+                    db.execSQL("""CREATE TABLE IF NOT EXISTS version_backfill_state (id INTEGER NOT NULL,
+                        phase TEXT NOT NULL, cursor TEXT NOT NULL, elapsed INTEGER NOT NULL, total INTEGER NOT NULL, PRIMARY KEY(id))""")
+                    db.execSQL("""CREATE TABLE IF NOT EXISTS version_backfill_rows (id TEXT NOT NULL,
+                        source TEXT NOT NULL, bucket TEXT NOT NULL, title TEXT NOT NULL, year TEXT NOT NULL,
+                        tmdb TEXT NOT NULL, audio INTEGER NOT NULL, resolvedKey TEXT NOT NULL, PRIMARY KEY(id))""")
+                    db.execSQL("CREATE INDEX index_version_backfill_rows_bucket_year ON version_backfill_rows(bucket,year)")
+                    db.execSQL("CREATE INDEX index_version_backfill_rows_resolvedKey_audio_id ON version_backfill_rows(resolvedKey,audio,id)")
+                    db.execSQL("""INSERT INTO version_backfill_state (id,phase,cursor,elapsed,total)
+                        SELECT 1,'normalize','',0,0 WHERE EXISTS(SELECT 1 FROM items WHERE kind IN ('MOVIE','SERIES'))""")
+                }
+            }
+        }
+        // v11 changes grouping semantics, not schema. v12 schedules the resumable data work.
+        // In particular, never normalize the catalog while Room holds its open transaction.
         val MIGRATION_10_11 = object : Migration(10, 11) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                val sources = db.query("SELECT id FROM sources").use { cursor ->
-                    buildList { while (cursor.moveToNext()) add(cursor.getString(0)) }
-                }
-                db.compileStatement("""UPDATE items SET versionKey=?,isRepresentative=?,
-                    displayTitle=?,displayYear=?,versionRank=? WHERE id=?""").use { update ->
-                    for (source in sources) for (kind in listOf("MOVIE", "SERIES")) {
-                        val rows = db.query("""SELECT id,source,title,kind,search,year,category
-                            FROM items WHERE source=? AND kind=?""", arrayOf(source, kind)).use { cursor ->
-                            buildList {
-                                while (cursor.moveToNext()) add(VersionCandidate(cursor.getString(0),
-                                    cursor.getString(1), cursor.getString(2), cursor.getString(3),
-                                    cursor.getString(4), cursor.getString(5), cursor.getString(6)).asItem())
-                            }
-                        }
-                        for (row in rows.versionAssignments()) {
-                            update.bindString(1, row.versionKey)
-                            update.bindLong(2, if (row.isRepresentative) 1L else 0L)
-                            update.bindString(3, row.displayTitle)
-                            update.bindString(4, row.displayYear)
-                            update.bindLong(5, row.versionRank.toLong())
-                            update.bindString(6, row.id)
-                            update.executeUpdateDelete()
-                        }
-                    }
-                }
+                StartupPerf.measure("migration_10_11") { /* DDL unchanged. */ }
             }
         }
 
         val MIGRATION_9_10 = object : Migration(9, 10) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("CREATE TABLE IF NOT EXISTS restore_pending (id INTEGER NOT NULL, snapshot TEXT NOT NULL, PRIMARY KEY(id))")
+                StartupPerf.measure("migration_9_10") {
+                    db.execSQL("CREATE TABLE IF NOT EXISTS restore_pending (id INTEGER NOT NULL, snapshot TEXT NOT NULL, PRIMARY KEY(id))")
+                }
             }
         }
 
         val MIGRATION_8_9 = object : Migration(8, 9) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("CREATE INDEX index_items_kind_category_title ON items(kind,category,title)")
-                db.execSQL("CREATE INDEX index_programmes_start ON programmes(start)")
+                StartupPerf.measure("migration_8_9") {
+                    db.execSQL("CREATE INDEX index_items_kind_category_title ON items(kind,category,title)")
+                    db.execSQL("CREATE INDEX index_programmes_start ON programmes(start)")
+                }
             }
         }
 
-        // v8 kept legacy rows visible with defaults; v11 now backfills their grouping keys.
+        // v8 keeps legacy rows visible; v12's post-frame job backfills their grouping keys.
         val MIGRATION_7_8 = object : Migration(7, 8) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("ALTER TABLE items ADD COLUMN versionKey TEXT NOT NULL DEFAULT ''")
-                db.execSQL("ALTER TABLE items ADD COLUMN isRepresentative INTEGER NOT NULL DEFAULT 1")
-                db.execSQL("ALTER TABLE items ADD COLUMN displayTitle TEXT NOT NULL DEFAULT ''")
-                db.execSQL("ALTER TABLE items ADD COLUMN displayYear TEXT NOT NULL DEFAULT ''")
-                db.execSQL("ALTER TABLE items ADD COLUMN versionRank INTEGER NOT NULL DEFAULT 0")
-                db.execSQL("DROP INDEX IF EXISTS index_items_source")
-                db.execSQL("CREATE INDEX index_items_source_kind_category_title ON items(source,kind,category,title)")
-                db.execSQL("CREATE INDEX index_items_kind_isRepresentative_title ON items(kind,isRepresentative,title)")
-                db.execSQL("CREATE INDEX index_items_parent ON items(parent)")
-                db.execSQL("CREATE INDEX index_items_versionKey ON items(versionKey)")
+                StartupPerf.measure("migration_7_8") {
+                    db.execSQL("ALTER TABLE items ADD COLUMN versionKey TEXT NOT NULL DEFAULT ''")
+                    db.execSQL("ALTER TABLE items ADD COLUMN isRepresentative INTEGER NOT NULL DEFAULT 1")
+                    db.execSQL("ALTER TABLE items ADD COLUMN displayTitle TEXT NOT NULL DEFAULT ''")
+                    db.execSQL("ALTER TABLE items ADD COLUMN displayYear TEXT NOT NULL DEFAULT ''")
+                    db.execSQL("ALTER TABLE items ADD COLUMN versionRank INTEGER NOT NULL DEFAULT 0")
+                    db.execSQL("DROP INDEX IF EXISTS index_items_source")
+                    db.execSQL("CREATE INDEX index_items_source_kind_category_title ON items(source,kind,category,title)")
+                    db.execSQL("CREATE INDEX index_items_kind_isRepresentative_title ON items(kind,isRepresentative,title)")
+                    db.execSQL("CREATE INDEX index_items_parent ON items(parent)")
+                    db.execSQL("CREATE INDEX index_items_versionKey ON items(versionKey)")
+                }
             }
         }
     }

@@ -19,7 +19,7 @@ fun createPlayer(
     profile: String = "Dengeli",
     subtitleUri: android.net.Uri? = null,
     automaticRetries: Boolean = true,
-    subtitleDelayUs: java.util.concurrent.atomic.AtomicLong = java.util.concurrent.atomic.AtomicLong(),
+    subtitleShiftOutput: SubtitleShiftOutput? = null,
     live: Boolean = false,
     httpAllowed: () -> Boolean = { allowHttp },
     permittedSubtitle: () -> android.net.Uri? = { subtitleUri },
@@ -52,16 +52,10 @@ fun createPlayer(
     val defaultRenderers = androidx.media3.exoplayer.DefaultRenderersFactory(context)
         .setEnableDecoderFallback(true)
     val renderers = androidx.media3.exoplayer.RenderersFactory { handler, video, audio, text, metadata ->
+        subtitleShiftOutput?.connect(text)
         defaultRenderers.createRenderers(handler, video, audio, text, metadata).map { renderer ->
-            if (renderer.trackType == androidx.media3.common.C.TRACK_TYPE_TEXT)
-                object : androidx.media3.exoplayer.ForwardingRenderer(renderer) {
-                    override fun getDurationToProgressUs(positionUs: Long, elapsedRealtimeUs: Long): Long =
-                        super.getDurationToProgressUs(positionUs - subtitleDelayUs.get(), elapsedRealtimeUs)
-
-                    override fun render(positionUs: Long, elapsedRealtimeUs: Long) {
-                        super.render(positionUs - subtitleDelayUs.get(), elapsedRealtimeUs)
-                    }
-                }
+            if (renderer.trackType == androidx.media3.common.C.TRACK_TYPE_TEXT && subtitleShiftOutput != null)
+                ShiftedTextRenderer(subtitleShiftOutput)
             else renderer
         }.toTypedArray()
     }

@@ -19,6 +19,8 @@ internal data class Filter(
     val rating: Double = 0.0,
 )
 
+internal data class HubRows(val source: String, val rows: List<Item>)
+
 @OptIn(ExperimentalCoroutinesApi::class)
 @dagger.hilt.android.lifecycle.HiltViewModel
 internal class LibraryModel
@@ -30,6 +32,17 @@ constructor(private val repository: dagger.Lazy<Repository>, val prefs: Preferen
     val firstDrawn = firstDraw.drawn
     fun onFirstDraw() { firstDraw.onDraw() }
     suspend fun awaitFirstDraw() = firstDraw.await()
+    // Visible Hub details can start as soon as the populated rows have drawn. A short
+    // settling delay gives that first frame room to present before the counts query begins.
+    val hubDetailsReady = firstDraw.detailsReady
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    // Keep non-visible publishing, scheduling, update checks and native warm-up out of
+    // the startup/remote-input window.
+    val backgroundReady = flow {
+        awaitFirstDraw()
+        delay(20_000)
+        emit(true)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     val startInSetup: StateFlow<Boolean?> = MutableStateFlow<Boolean?>(null).also { state ->
         viewModelScope.launch(Dispatchers.IO) {
@@ -40,6 +53,24 @@ constructor(private val repository: dagger.Lazy<Repository>, val prefs: Preferen
     }.asStateFlow()
     val sources = flow { emitAll(withContext(Dispatchers.IO) { repo }.library.sources()) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    private val hubScope = CoroutineScope(viewModelScope.coroutineContext + Dispatchers.IO)
+    private val hubSource = MutableStateFlow("")
+    fun selectHubSource(source: String) { hubSource.value = source }
+    // Start the bounded history reads with the launch snapshot. Starting collectAsState
+    // inside Home queues their subscriptions behind its expensive first compose/measure.
+    // The source travels with the result so changing scope never flashes the old shelf.
+    val hubRecent = hubSource.flatMapLatest { source -> flow {
+        Perf.mark("startup_hub_recent")
+        emitAll(repo.recentLive(source).onEach {
+            Perf.since("startup_hub_recent", "startup_hub_recent_ready")
+        }.map { HubRows(source, it) })
+    } }.stateIn(hubScope, SharingStarted.Eagerly, null)
+    val hubResume = hubSource.flatMapLatest { source -> flow {
+        Perf.mark("startup_hub_resume")
+        emitAll(repo.continueWatching(source).onEach {
+            Perf.since("startup_hub_resume", "startup_hub_resume_ready")
+        }.map { HubRows(source, it) })
+    } }.stateIn(hubScope, SharingStarted.Eagerly, null)
     val filter = MutableStateFlow(Filter())
     val results =
         filter
@@ -76,7 +107,12 @@ constructor(private val repository: dagger.Lazy<Repository>, val prefs: Preferen
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
+            // Backfill is user-visible migration work: never hold it behind backgroundReady.
             awaitFirstDraw()
+            repo.startVersionBackfill()
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            backgroundReady.first { it }
             Perf.mark("startup_preferences")
             val hours = prefs.text("hours", "12").first().toLong()
             val repository = prefs.text("github").first()

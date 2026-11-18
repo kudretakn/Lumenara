@@ -15,11 +15,27 @@ import dagger.hilt.components.SingletonComponent
 import dev.lumenara.data.*
 import javax.inject.Singleton
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 @HiltAndroidApp
 class LumenaraApp : Application(), ImageLoaderFactory, androidx.work.Configuration.Provider {
     private val startupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val watchNextStarted = java.util.concurrent.atomic.AtomicBoolean()
+    private val artworkStarted = java.util.concurrent.atomic.AtomicBoolean()
+    private val artworkReady = MutableStateFlow(false)
+    internal val hubArtworkReady = artworkReady.asStateFlow()
+
+    internal fun prepareHubArtwork() {
+        if (artworkStarted.compareAndSet(false, true)) startupScope.launch {
+            Perf.mark("startup_image_loader")
+            // Disk-cache journal, OkHttp/TLS and decoder initialization must not happen in
+            // AsyncImage's first Main-thread composition. Hub callers wait for this result.
+            imageLoader
+            Perf.since("startup_image_loader", "startup_image_loader_ready")
+            artworkReady.value = true
+        }
+    }
     override val workManagerConfiguration: androidx.work.Configuration
         get() {
             // A worker-only process has no Activity frame. Preserve publishing after background
@@ -30,6 +46,7 @@ class LumenaraApp : Application(), ImageLoaderFactory, androidx.work.Configurati
 
     internal fun startWatchNext() {
         if (watchNextStarted.compareAndSet(false, true)) startupScope.launch {
+            delay(20_000)
             Perf.mark("startup_watch_next")
             WatchNext.get(this@LumenaraApp).start()
             Perf.since("startup_watch_next", "startup_watch_next_started")
@@ -39,10 +56,18 @@ class LumenaraApp : Application(), ImageLoaderFactory, androidx.work.Configurati
     @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     override fun onCreate() {
         Perf.mark("startup")
+        Perf.mark("startup_first_frame")
         Perf.mark("startup_application")
         super.onCreate()
         androidx.media3.common.util.Log.setLogLevel(androidx.media3.common.util.Log.LOG_LEVEL_OFF)
         Perf.since("startup_application", "startup_application_ready")
+        val cpuAtStart = android.os.Process.getElapsedCpuTime()
+        val wallAtStart = android.os.SystemClock.elapsedRealtime()
+        startupScope.launch {
+            delay(15_000)
+            Perf.duration("startup_cpu_first_15s", android.os.Process.getElapsedCpuTime() - cpuAtStart)
+            Perf.duration("startup_cpu_sample_window", android.os.SystemClock.elapsedRealtime() - wallAtStart)
+        }
     }
 
     @androidx.annotation.OptIn(coil.annotation.ExperimentalCoilApi::class)

@@ -16,11 +16,31 @@ private val dubbedTag = Regex("\\b(?:(?:tr|turkce)\\s+)?dublaj\\b")
 private val subtitledTag = Regex("\\b(?:altyazili|(?:tr\\s+)?altyazi)\\b")
 private val versionTags = Regex("(?iu)\\b(?:(?:tr|türkçe|turkce)\\s+)?dublaj\\b|\\b(?:altyazılı|altyazili|(?:tr\\s+)?altyazı|(?:tr\\s+)?altyazi)\\b")
 private val productionYear = Regex("\\b(?:19|20)\\d{2}\\b")
+private val bracketedProductionYear = Regex("""[\(\[\{]\s*((?:19|20)\d{2})\s*[\)\]\}]?|(?<![\p{L}\p{N}])((?:19|20)\d{2})\s*[\)\]\}]""")
+private val latestProductionYear = java.time.Year.now().value + 1
 private val emptyDelimiters = Regex("""\(\s*\)|\[\s*\]""")
 private val whitespace = Regex("\\s+")
 // Only explicit provider/language prefixes are identity noise; a subtitle after ':' is a title.
 private val productionPrefix = Regex("""(?iu)^(?:\[\s*(?:TR|TUR|TÜRKÇE|TURKCE|VOD|IPTV)\s*]\s*|(?:TR|TUR|TÜRKÇE|TURKCE|VOD|IPTV)\s*[:|\-–]\s*)""")
 private val qualityTags = Regex("""(?iu)(?<![\p{L}\p{N}])(?:4K|UHD|FHD|HD|SD|2160p|1080p|720p|480p)(?![\p{L}\p{N}])""")
+
+/** Drop orphan delimiters without discarding meaningful text or balanced title subtitles. */
+internal fun balancedTitle(value: String): String {
+    val opens = mutableListOf<Pair<Char, Int>>()
+    val remove = mutableSetOf<Int>()
+    value.forEachIndexed { index, char ->
+        when (char) {
+            '(', '[', '{' -> opens.add(char to index)
+            ')', ']', '}' -> {
+                val opening = when (char) { ')' -> '('; ']' -> '['; else -> '{' }
+                if (opens.lastOrNull()?.first == opening) opens.removeAt(opens.lastIndex)
+                else remove.add(index)
+            }
+        }
+    }
+    remove.addAll(opens.map { it.second })
+    return value.filterIndexed { index, _ -> index !in remove }
+}
 
 fun productionName(title: String, year: String = ""): ProductionName {
     val folded = searchable(title)
@@ -29,17 +49,26 @@ fun productionName(title: String, year: String = ""): ProductionName {
         subtitledTag.containsMatchIn(folded) -> AudioVersion.SUBTITLED
         else -> AudioVersion.ORIGINAL
     }
-    val resolvedYear = productionYear.find(year)?.value ?: productionYear.find(title)?.value.orEmpty()
     var clean = qualityTags.replace(versionTags.replace(title, ""), "")
         .replace(emptyDelimiters, "").trim()
+    // A release annotation outranks numeric words in a title (Blade Runner 2049 (2017)).
+    val annotatedYear = bracketedProductionYear.findAll(clean).lastOrNull()?.let {
+        it.groupValues[1].ifEmpty { it.groupValues[2] }
+    }.orEmpty()
+    val trailingYear = productionYear.findAll(clean).lastOrNull()?.takeIf {
+        clean.substring(0, it.range.first).any(Char::isLetter) &&
+            clean.substring(it.range.last + 1).all { char -> char.isWhitespace() || char in "-_|/" } &&
+            it.value.toInt() <= latestProductionYear
+    }?.value.orEmpty()
+    val resolvedYear = productionYear.find(year)?.value ?: annotatedYear.ifEmpty { trailingYear }
     while (true) {
         val prefix = productionPrefix.find(clean) ?: break
         clean = clean.removeRange(prefix.range).trim()
     }
     if (resolvedYear.isNotEmpty()) clean = productionYear.replace(clean) { if (it.value == resolvedYear) "" else it.value }
-    clean = clean.replace(emptyDelimiters, "").replace(whitespace, " ")
-        .trim(' ', '-', '·', '|', '/', ':', '.', '_', '(', ')', '[', ']')
-    return ProductionName(clean.ifBlank { title }, resolvedYear, version)
+    clean = balancedTitle(clean.replace(emptyDelimiters, "")).replace(whitespace, " ")
+        .trim(' ', '-', '·', '|', '/', ':', '.', '_')
+    return ProductionName(clean, resolvedYear, version)
 }
 
 enum class SubtitleType(val extension: String, val mime: String) {

@@ -10,12 +10,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.*
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -76,6 +78,11 @@ private fun HubChannelShelf(
 ) {
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val drawn by model.firstDrawn.collectAsStateWithLifecycle()
+    // Home needs only the current programme. The general card store reads and sorts
+    // every future slot for each composed channel, which is wasted work on this shelf.
+    val programmes by remember(rows, now, drawn) {
+        if (drawn) model.repo.liveNow(rows, now) else flowOf(emptyMap())
+    }.collectAsStateWithLifecycle(emptyMap())
     LaunchedEffect(Unit) { wallClockTicks(30_000).collect { now = it } }
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
         Text("SON KANAL", style = LumenType.caption, color = LumenColors.textSecondary)
@@ -86,8 +93,7 @@ private fun HubChannelShelf(
             contentPadding = PaddingValues(Spacing.unit),
         ) {
             items(rows, key = { it.id }) { item ->
-                val slots = if (drawn) liveProgrammes(model, item, now) else emptyList()
-                val current = slots.firstOrNull { now >= it.start && now < it.end }
+                val current = programmes[item.id]
                 val logo by produceState<String?>(null, item.id, item.logo) {
                     model.awaitFirstDraw()
                     value = model.repo.poster(item)
@@ -112,7 +118,7 @@ private fun HubChannelShelf(
 
 @Composable
 private fun HubResumeShelf(model: LibraryModel, rows: List<Item>, open: (Item) -> Unit, focus: () -> Unit) {
-    val drawn by model.firstDrawn.collectAsStateWithLifecycle()
+    val hubDetailsReady by model.hubDetailsReady.collectAsStateWithLifecycle()
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
         Text("KALDIĞIN YERDEN DEVAM ET", style = LumenType.caption, color = LumenColors.textSecondary)
         LazyRow(
@@ -121,11 +127,11 @@ private fun HubResumeShelf(model: LibraryModel, rows: List<Item>, open: (Item) -
             contentPadding = PaddingValues(Spacing.unit),
         ) {
             items(rows, key = { it.id }) { item ->
-                val episodes by remember(item.id, drawn) {
-                    if (drawn && item.kind == "SERIES") model.repo.episodes(item.id) else flowOf(emptyList<Item>())
+                val episodes by remember(item.id, hubDetailsReady) {
+                    if (hubDetailsReady && item.kind == "SERIES") model.repo.episodes(item.id) else flowOf(emptyList<Item>())
                 }.collectAsStateWithLifecycle(emptyList())
-                val marks by remember(item.id) {
-                    if (item.kind == "SERIES") model.repo.library.episodeMarks(item.id) else flowOf(emptyList<Mark>())
+                val marks by remember(item.id, hubDetailsReady) {
+                    if (hubDetailsReady && item.kind == "SERIES") model.repo.library.episodeMarks(item.id) else flowOf(emptyList<Mark>())
                 }.collectAsStateWithLifecycle(emptyList())
                 val continuing = episodes.continueItem(marks)
                 val observedMark by remember(item.id) {
@@ -165,7 +171,9 @@ private fun HubResumeShelf(model: LibraryModel, rows: List<Item>, open: (Item) -
 @Composable
 private fun HubArtwork(model: LibraryModel, item: Item, address: String?, channel: Boolean = false) {
     val drawn by model.firstDrawn.collectAsStateWithLifecycle()
-    if (!drawn) {
+    val artworkReady by (LocalContext.current.applicationContext as LumenaraApp)
+        .hubArtworkReady.collectAsStateWithLifecycle()
+    if (!drawn || !artworkReady) {
         Box(Modifier.fillMaxSize().background(LumenColors.surface2))
         return
     }
@@ -191,13 +199,15 @@ private fun HubNavigationCard(
     modifier: Modifier, compact: Boolean, loading: Boolean, update: Boolean,
     artworkItem: Item?, click: () -> Unit,
 ) {
+    val artworkReady by (LocalContext.current.applicationContext as LumenaraApp)
+        .hubArtworkReady.collectAsStateWithLifecycle()
     val backdrop by produceState<String?>(null, artworkItem?.id, artworkItem?.backdrop) {
         model.awaitFirstDraw()
         // Only a real wide image is eligible; never substitute a channel logo or poster.
         value = artworkItem?.let { model.repo.backdrop(it) }
     }
     FocusCard(click, modifier, focusedScale = Motion.hubFocusScale) {
-        if (!compact && backdrop != null) {
+        if (!compact && backdrop != null && artworkReady) {
             Box(Modifier.fillMaxSize().clip(RoundedCornerShape(Radii.card))) {
                 Artwork(model, artworkItem, backdrop, Modifier.align(Alignment.CenterEnd).fillMaxHeight().fillMaxWidth(.6f),
                     contentScale = ContentScale.Crop, role = "backdrop")
@@ -236,24 +246,18 @@ internal fun Home(
     sourceSelector: @Composable () -> Unit = {},
     navigate: (String) -> Unit,
 ) {
-    val recentResult by remember(source) {
-        Perf.mark("startup_hub_recent")
-        model.repo.recentLive(source).onEach {
-            Perf.since("startup_hub_recent", "startup_hub_recent_ready")
-        }
-    }.collectAsLoadingState()
-    val resumeResult by remember(source) {
-        Perf.mark("startup_hub_resume")
-        model.repo.continueWatching(source).onEach {
-            Perf.since("startup_hub_resume", "startup_hub_resume_ready")
-        }
-    }.collectAsLoadingState()
+    LaunchedEffect(model, source) { model.selectHubSource(source) }
+    val recentState by model.hubRecent.collectAsStateWithLifecycle()
+    val resumeState by model.hubResume.collectAsStateWithLifecycle()
+    val recentResult = recentState?.takeIf { it.source == source }?.rows
+    val resumeResult = resumeState?.takeIf { it.source == source }?.rows
     val recent = recentResult.orEmpty()
     val resume = resumeResult.orEmpty()
-    val drawn by model.firstDrawn.collectAsStateWithLifecycle()
+    val hubDetailsReady by model.hubDetailsReady.collectAsStateWithLifecycle()
+    val backgroundReady by model.backgroundReady.collectAsStateWithLifecycle()
     val rowsReady = recentResult != null && resumeResult != null
     var rowsDrawn by remember(source) { mutableStateOf(false) }
-    val loadCounts = drawn && rowsDrawn
+    val loadCounts = hubDetailsReady && rowsDrawn
     val counts = listOf("LIVE", "MOVIE", "SERIES").map { kind ->
         val groups by remember(source, kind, loadCounts) {
             if (loadCounts) {
@@ -264,25 +268,14 @@ internal fun Home(
             .collectAsLoadingState()
         groups?.sumOf { it.count }
     }
-    LaunchedEffect(Unit) {
-        withFrameNanos { }; withFrameNanos { }
-        Perf.elapsed("startup", "startup_hub_shell_first_draw")
-    }
-    LaunchedEffect(rowsReady) {
-        if (rowsReady) {
-            withFrameNanos { }; withFrameNanos { }
-            Perf.since("startup", "startup_hub_first_draw")
-            rowsDrawn = true
-            model.onFirstDraw()
-        }
-    }
+    val shellReported = remember { booleanArrayOf(false) }
     // Keep data-ready and frame timings distinct; counts never gate cards or history rows.
     LaunchedEffect(counts.all { it != null }) {
         if (counts.all { it != null }) {
             Perf.since("startup_hub_counts", "startup_hub_counts_ready")
         }
     }
-    WarmVlcAfterHubFrame(counts.all { it != null })
+    WarmVlcAfterHubFrame(backgroundReady)
     val update by model.update.collectAsStateWithLifecycle()
     var focused by rememberSaveable { mutableStateOf(lastCard) }
     val entry = remember { FocusRequester() }
@@ -307,7 +300,20 @@ internal fun Home(
             restored = true
         }
     }
-    LazyColumn(Modifier.fillMaxSize().testTag("hub").focusRestorer().focusGroup(), state = list,
+    LazyColumn(Modifier.fillMaxSize().testTag("hub").focusRestorer().focusGroup().drawWithContent {
+        drawContent()
+        if (!shellReported[0]) {
+            shellReported[0] = true
+            Perf.elapsed("startup", "startup_hub_shell_first_draw")
+        }
+        // Observe the populated draw itself. Waiting for two Choreographer callbacks
+        // overstates drawing by whole delayed frames when Main is busy composing rows.
+        if (rowsReady && !rowsDrawn) {
+            Perf.since("startup", "startup_hub_first_draw")
+            rowsDrawn = true
+            model.onFirstDraw()
+        }
+    }, state = list,
         contentPadding = PaddingValues(bottom = Spacing.shelfGap),
         verticalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
         item {
@@ -355,16 +361,16 @@ internal fun Home(
             }
         }
         if (recentResult == null) item {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                items(4) {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                repeat(4) {
                     Box(Modifier.width(150.dp).aspectRatio(16f / 9f)
                         .background(LumenColors.surface2, RoundedCornerShape(Radii.card)).testTag("list-loading"))
                 }
             }
         }
         if (resumeResult == null) item {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                items(4) {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                repeat(4) {
                     Box(Modifier.width(180.dp).aspectRatio(16f / 9f)
                         .background(LumenColors.surface2, RoundedCornerShape(Radii.card)).testTag("list-loading"))
                 }
