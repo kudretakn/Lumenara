@@ -1,5 +1,11 @@
 # Lumenara sürüm kaydı
 
+## 0.5.6 · 18 Kasım 2026
+
+- Açılış hızı: katalogdan türetilen her şey (temiz başlıklar, sıralama ve arama anahtarları, sürüm grupları, +18 sınıfı, kategori sırası ve sayımları, Hub toplamları, kanal numaraları) liste yenilenirken bir kez hesaplanıp saklanıyor; açılışta yalnız hazır sonuç okunuyor. Veritabanı şeması 13 (hafif geçiş, mevcut satırlar arka planda doldurulur).
+- Ana ekran sayımları beklemeden çiziliyor; açılışta tüm katalogda çalışan iş kalmadı.
+- Izgaralarda alt satırlarda sağa sola gidince oluşan hafif titreme giderildi (odak sınırları sabit, başlık alanı ayrılmış).
+
 ## 0.5.5 · 18 Kasım 2026
 
 - Altyazı gecikmesi: oynatıcı seçeneklerinden 100 ms ya da 1 sn adımlarla ±10 sn; anında uygulanır, film/bölüm ve sürüm başına saklanır, yedeğe girer.
