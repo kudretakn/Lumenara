@@ -36,6 +36,7 @@ import coil.decode.DataSource
 import coil.request.SuccessResult
 import coil.request.CachePolicy
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import java.io.IOException
@@ -178,6 +179,8 @@ internal fun PrefetchArtwork(model: LibraryModel, grid: LazyGridState, rows: Lis
     val context = LocalContext.current
     val sources by model.sources.collectAsStateWithLifecycle()
     LaunchedEffect(grid, rows, sources, columns, channelSpan, paged) {
+        model.backgroundReady.first { it }
+        Perf.duration("startup_artwork_prefetch_deferred", 0)
         snapshotFlow {
             val visible = grid.layoutInfo.visibleItemsInfo
             val lastRow = visible.filter { it.row >= 0 }.maxOfOrNull { it.row }

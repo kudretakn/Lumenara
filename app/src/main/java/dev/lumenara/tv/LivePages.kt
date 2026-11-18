@@ -56,7 +56,7 @@ internal fun rememberLivePages(model: LibraryModel, source: String, category: St
                     for (page in first..last) {
                         val item = window.rows.getOrNull((page - first + 1) * LIVE_PAGE_SIZE - 1)
                         if (item != null) state.boundaries[page + 1] = LiveWindowCursor(
-                            LiveCursor(item.title, item.id), window.revision, window.hidden)
+                            LiveCursor(item.sortKey, item.id), window.revision, window.hidden)
                     }
                     window.rows
                 }

@@ -90,8 +90,10 @@ internal class Metadata(private val context: Context, private val vault: Vault) 
             val token = prefs.getString("access", null)?.let(vault::decrypt)
                 ?: BuildConfig.TMDB_READ_TOKEN
             if (token.isBlank()) return@withContext local
-            val json = matcher.details(token, item.id, if (item.kind == "MOVIE") "movie" else "tv",
-                item.title, item.year, item.tmdbId()) ?: return@withContext local
+            val json = StartupPerf.measure("tmdb_visible_details") {
+                matcher.details(token, item.id, if (item.kind == "MOVIE") "movie" else "tv",
+                    item.title, item.year, item.tmdbId())
+            } ?: return@withContext local
             fun names(array: org.json.JSONArray?) =
                 (0 until minOf(8, array?.length() ?: 0))
                     .mapNotNull { array?.optJSONObject(it)?.optString("name") }

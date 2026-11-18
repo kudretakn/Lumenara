@@ -955,4 +955,4 @@ internal fun PlaybackSection(title: String) {
 
 /** Clean only the visible title; production identity and version selection stay intact. */
 internal fun playbackDisplayTitle(item: Item): String =
-    dev.lumenara.catalog.productionName(item.title, item.year).title.displayTitle().ifBlank { "Video" }
+    item.cleanTitle.ifBlank { item.title }.ifBlank { "Video" }

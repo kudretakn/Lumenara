@@ -85,6 +85,8 @@ data class VersionAssignment(
     val displayTitle: String,
     val displayYear: String,
     val versionRank: Int,
+    val cleanTitle: String = displayTitle.displayTitle(),
+    val sortKey: String = searchable(cleanTitle),
 )
 
 fun List<Item>.versionAssignments(): List<VersionAssignment> = keyedVersionGroups().flatMap { (key, rows) ->
@@ -98,8 +100,11 @@ fun List<Item>.versionAssignments(): List<VersionAssignment> = keyedVersionGroup
 }
 
 /** Only bounded query results need a display projection; grouping is done during import. */
-fun Item.displayVersion(): Item = if (versionKey.isEmpty() || displayTitle.isEmpty()) this
-    else copy(title = displayTitle, year = displayYear)
+fun Item.displayVersion(): Item = when {
+    cleanTitle.isNotEmpty() -> copy(title = cleanTitle, year = displayYear.ifEmpty { year })
+    versionKey.isNotEmpty() && displayTitle.isNotEmpty() -> copy(title = displayTitle, year = displayYear)
+    else -> this
+}
 
 fun List<Item>.mergeVersions(): List<Item> = versionGroups().map { versions ->
         val representative = versions.minWith(versionOrder)

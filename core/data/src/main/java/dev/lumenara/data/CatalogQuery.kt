@@ -73,8 +73,8 @@ private fun browseStatement(filter: CatalogFilter, ordered: Boolean = true, incl
     projectionOnly: String? = null): CatalogPredicate {
     val eligible = filter.predicate("i")
     val representative = representativePredicate({ filter.predicate(it) }, filter.filtersVersions)
-    // EQP: equality on kind/category -> index_items_kind_category_title (all sources), or
-    // source/kind/category -> index_items_source_kind_category_title; otherwise kind/title.
+    // EQP: equality on kind/category -> index_items_kind_category_sortKey_id (all sources), or
+    // source/kind/category -> index_items_source_kind_category_sortKey_id; otherwise kind/title.
     // The legacy fallback cannot constrain isRepresentative. Equal-title id
     // ordering may use a small right-part temp sort, not a sort of the whole catalog.
     // instr(search, ?) has no index: evaluate during this scan and stop at the visible LIMIT.
@@ -94,11 +94,12 @@ private fun browseStatement(filter: CatalogFilter, ordered: Boolean = true, incl
     // source/category index then sort every category. Pin the streaming index for title grids.
     val index = if (filter.shelf == "recent") "NOT INDEXED" // reverse rowid scan stops at LIMIT
         else if (order.isEmpty() && filter.kind.isNotEmpty()) "INDEXED BY " + when {
-        filter.source.isNotEmpty() && filter.category.isNotEmpty() -> "index_items_source_kind_category_title"
-        filter.category.isNotEmpty() -> "index_items_kind_category_title"
+        filter.source.isNotEmpty() && filter.category.isNotEmpty() -> "index_items_source_kind_category_sortKey_id"
+        filter.category.isNotEmpty() -> "index_items_kind_category_sortKey_id"
         // Pending legacy rows can have isRepresentative=0, so that column is no longer
         // an equality constraint. Keep title order streaming throughout the backfill.
-        else -> "index_items_kind_title"
+        filter.source.isNotEmpty() -> "index_items_source_kind_sortKey_id"
+        else -> "index_items_kind_sortKey_id"
     } else ""
     val args = eligible.args + representative.args
     fun projection(row: String) = projectionOnly ?: if (!includeSort) "i.*" else "i.*," + when (filter.shelf) {
@@ -115,13 +116,13 @@ private fun browseStatement(filter: CatalogFilter, ordered: Boolean = true, incl
             UNION ALL
             SELECT i.*,i.rowid AS catalogRow FROM items i
             WHERE ${eligible.sql} AND ${representative.sql} AND i.kind='LIVE' $grouping
-            ) i ${if (ordered) "ORDER BY ${order.replace("i.rowid", "i.catalogRow")}i.title,i.id" else ""}""",
+            ) i ${if (ordered) "ORDER BY ${order.replace("i.rowid", "i.catalogRow")}i.sortKey,i.id" else ""}""",
             args + args)
     }
     return CatalogPredicate("""SELECT ${projection("i.rowid")} FROM items i $index
         ${if (filter.shelf == "resume") "LEFT JOIN marks m ON m.id=i.id" else ""}
         WHERE ${eligible.sql} AND ${representative.sql} $grouping
-        ${if (ordered) "ORDER BY ${order}i.title,i.id" else ""}""", args)
+        ${if (ordered) "ORDER BY ${order}i.sortKey,i.id" else ""}""", args)
 }
 
 /** The same indexed statement for a bounded page, without allocating preceding Item rows. */
@@ -146,43 +147,36 @@ internal fun browseKindsQuery(filter: CatalogFilter): SimpleSQLiteQuery {
 internal fun browseIndexQuery(filter: CatalogFilter, id: String): SimpleSQLiteQuery {
     val statement = browseStatement(filter, ordered = false, includeSort = true)
     val before = if (filter.shelf in listOf("resume", "recent", "popular"))
-        "(i.catalogSort>t.catalogSort OR (i.catalogSort=t.catalogSort AND (i.title,i.id)<(t.title,t.id)))"
-        else "(i.title,i.id)<(t.title,t.id)"
+        "(i.catalogSort>t.catalogSort OR (i.catalogSort=t.catalogSort AND (i.sortKey,i.id)<(t.sortKey,t.id)))"
+        else "(i.sortKey,i.id)<(t.sortKey,t.id)"
     return SimpleSQLiteQuery("""SELECT (SELECT COUNT(*) FROM (${statement.sql}) i WHERE $before)
         FROM (${statement.sql}) t WHERE t.id=? LIMIT 1""", (statement.args + statement.args + id).toTypedArray())
 }
 
 internal fun categoryCountsQuery(filter: CatalogFilter, categoriesOnly: Boolean = false): SimpleSQLiteQuery {
-    val eligible = filter.predicate("i", includeEpisodes = true)
-    // A production may have versions in multiple provider categories. Count it once in EACH
-    // category, choosing that category's first eligible version, just as browsing it does.
-    val representative = representativePredicate({ filter.predicate(it, includeEpisodes = true) }, true, sameCategory = true)
-    val select = if (categoriesOnly) "SELECT DISTINCT i.category" else "SELECT i.category,COUNT(*) AS count"
-    // Fixed kind leaves category ordered, even when source="". No whole-table scan or GROUP BY
-    // temp tree; a source-specific request uses the existing source/kind/category/title index.
-    val index = if (filter.kind.isEmpty()) "" else "INDEXED BY " +
-        if (filter.source.isEmpty()) "index_items_kind_category_title" else "index_items_source_kind_category_title"
-    return SimpleSQLiteQuery("""$select FROM items i $index WHERE ${eligible.sql} AND ${representative.sql}
-        ${if (categoriesOnly) "" else "GROUP BY i.category"} ORDER BY i.category""",
-        (eligible.args + representative.args).toTypedArray())
+    val parts = mutableListOf("1=1")
+    val args = mutableListOf<Any>()
+    if (filter.source.isNotEmpty()) { parts += "source=?"; args += filter.source }
+    if (filter.kind.isNotEmpty()) { parts += "kind=?"; args += filter.kind }
+    if (filter.hidden.isNotEmpty()) {
+        parts += "category NOT IN (${filter.hidden.joinToString { "?" }})"
+        args.addAll(filter.hidden)
+    }
+    val select = if (categoriesOnly) "category" else "category,SUM(count) AS count,MIN(searchKey) AS searchKey"
+    return SimpleSQLiteQuery("SELECT $select FROM category_counts WHERE ${parts.joinToString(" AND ")} " +
+        "GROUP BY category ORDER BY MIN(sortOrder),category", args.toTypedArray())
 }
 
-/** One ordered pass supplies the three Hub totals and their category screens, leaving room for
- * Hub's two history shelves within the four-statement startup budget (names + counts + shelves).
- */
 internal fun sourceCategoryCountsQuery(source: String, hidden: List<String>): SimpleSQLiteQuery {
-    val filter = CatalogFilter(source = source, hidden = hidden)
-    val eligible = filter.predicate("i", includeEpisodes = true)
-    val representative = representativePredicate({ alias ->
-        val candidate = filter.predicate(alias, includeEpisodes = true)
-        CatalogPredicate("${candidate.sql} AND $alias.kind=i.kind", candidate.args)
-    }, true, sameCategory = true)
-    val index = if (source.isEmpty()) "index_items_kind_category_title" else "index_items_source_kind_category_title"
-    // kind IN probes are ordered by kind/category in either index, so grouping needs no temp tree.
-    return SimpleSQLiteQuery("""SELECT i.kind,i.category,COUNT(*) AS count FROM items i INDEXED BY $index
-        WHERE i.kind IN ('LIVE','MOVIE','SERIES') AND ${eligible.sql} AND ${representative.sql}
-        GROUP BY i.kind,i.category ORDER BY i.kind,i.category""",
-        (eligible.args + representative.args).toTypedArray())
+    val args = mutableListOf<Any>()
+    val parts = mutableListOf("1=1")
+    if (source.isNotEmpty()) { parts += "source=?"; args += source }
+    if (hidden.isNotEmpty()) {
+        parts += "category NOT IN (${hidden.joinToString { "?" }})"
+        args.addAll(hidden)
+    }
+    return SimpleSQLiteQuery("SELECT kind,category,SUM(count) AS count,MIN(searchKey) AS searchKey FROM category_counts WHERE " +
+        parts.joinToString(" AND ") + " GROUP BY kind,category ORDER BY kind,MIN(sortOrder),category", args.toTypedArray())
 }
 
 internal fun shelfCountQuery(filter: CatalogFilter): SimpleSQLiteQuery {

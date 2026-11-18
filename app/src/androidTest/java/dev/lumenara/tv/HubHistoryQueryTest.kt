@@ -110,6 +110,7 @@ class HubHistoryQueryTest {
                 dao.save(Mark(it, position = 10, duration = 100, updated = now))
             }
             dao.save(Mark("completed", position = 100, duration = 100, updated = now))
+            prepareTestCatalog(db)
             val historyNames = dao.continueWatchingCategories().first()
             assertEquals(setOf("Film", "XXX", "For Adults"), historyNames.toSet())
             // Match categoryNames' existing top-level category policy, including odd provider data.

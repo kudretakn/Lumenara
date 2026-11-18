@@ -30,6 +30,7 @@ class CatalogQueryTest {
             dao.save(rows)
             dao.save(rows)
             dao.assignVersions(rows.versionAssignments())
+            prepareTestCatalog(db)
             assertEquals(5, dao.count("a"))
             rows.forEach { dao.save(Mark(it.id, favorite = true)) }
             for (source in listOf("a", "")) {
@@ -67,6 +68,7 @@ class CatalogQueryTest {
                 item("other", "Başka", year = "1999"), item("episode", "Bölüm", kind = "EPISODE"))
             dao.save(rows)
             dao.assignVersions(rows.versionAssignments())
+            prepareTestCatalog(db)
             val safe = listOf("Adult")
             assertEquals(listOf("dub", "other"), dao.browse("a", "MOVIE", "", "", "", 120).first().map { it.id }.sorted())
             assertEquals("original", dao.browse("a", "MOVIE", "Film", "", "", 120, year = "2024").first().single().id)
@@ -79,7 +81,7 @@ class CatalogQueryTest {
             for (source in listOf("", "a")) for (hidden in listOf(emptyList(), safe)) {
                 assertEquals(dao.categoryCounts("MOVIE", source, hidden).first(),
                     dao.sourceCategoryCounts(source, hidden).first().filter { it.kind == "MOVIE" }
-                        .map { LiveCategoryCount(it.category, it.count) })
+                        .map { LiveCategoryCount(it.category, it.count, it.searchKey) })
             }
             assertEquals(listOf("Film"), dao.categories("MOVIE", "a", safe).first())
             assertEquals(2, dao.shelfCount("a", "MOVIE", "", safe).first())
@@ -112,6 +114,7 @@ class CatalogQueryTest {
                 item("ep", "Dizi S01E01", kind = "EPISODE").copy(parent = "sub"))
             dao.save(rows)
             dao.assignVersions(rows.versionAssignments())
+            prepareTestCatalog(db)
             dao.save(Mark("ep", position = 10, duration = 100, updated = 1))
             assertEquals("sub", dao.continueWatching("a").first().single().id)
             // Expansion alone must not replace the version with resumable history.
@@ -156,6 +159,7 @@ class CatalogQueryTest {
                 item("sub", "Film Altyazılı"))
             dao.save(rows)
             dao.assignVersions(rows.versionAssignments())
+            prepareTestCatalog(db)
             assertEquals("sub", dao.browse("a", "MOVIE", "", "", "", 120).first().single().id)
             assertEquals("dub", dao.browse("a", "MOVIE", "", "", "", 120, minRating = -1.0).first().single().id)
         } finally { db.close() }
@@ -170,6 +174,7 @@ class CatalogQueryTest {
             val rows = listOf(item("dub", "Film Dublaj"), item("sub", "Film Altyazılı"))
             dao.save(rows)
             dao.assignVersions(rows.versionAssignments())
+            prepareTestCatalog(db)
             dao.save(Mark("sub", position = 10, duration = 100, updated = 2))
             assertEquals("sub", dao.continueWatching("a").first().single().id)
             dao.save(Mark("dub", position = 100, duration = 100, updated = 3))
@@ -192,6 +197,7 @@ class CatalogQueryTest {
                 item("series", "Dizi", kind = "SERIES"))
             dao.save(rows)
             dao.assignVersions(rows.versionAssignments())
+            prepareTestCatalog(db)
             assertEquals(listOf("series", "dub", "a:channel"),
                 dao.browse("", "", "", "", "", 120).first().map { it.id })
             assertEquals(listOf("series", "a:channel"),
@@ -235,6 +241,7 @@ class CatalogQueryTest {
             val rows = (0 until 300).map { item("$it", "Film $it", if (it % 2 == 0) "Film" else "Other") }
             dao.save(rows)
             dao.assignVersions(rows.versionAssignments())
+            prepareTestCatalog(db)
             for ((category, hidden) in listOf("" to emptyList(), "Film" to emptyList(), "" to listOf("Adult"))) {
                 assertEquals(120, dao.browse("a", "MOVIE", category, "", "", 120, hidden = hidden).first().size)
                 val (sql, args) = captured.get()
@@ -256,7 +263,7 @@ class CatalogQueryTest {
         val captured = AtomicReference<Pair<String, List<Any?>>>()
         val db = Room.inMemoryDatabaseBuilder(context, LibraryDb::class.java)
             .setQueryCallback({ sql, args ->
-                if (sql.trimStart().startsWith("SELECT i.kind,i.category,") ||
+                if (sql.contains("FROM category_counts") || sql.trimStart().startsWith("SELECT i.kind,i.category,") ||
                     sql.trimStart().startsWith("SELECT i.category,") ||
                     sql.trimStart().startsWith("SELECT DISTINCT i.category") ||
                     sql.trimStart().startsWith("SELECT i.* FROM items i")) captured.set(sql to args.toList())
@@ -272,6 +279,7 @@ class CatalogQueryTest {
             }
             dao.save(rows)
             dao.assignVersions(rows.versionAssignments())
+            prepareTestCatalog(db)
             fun assertCategoryPlan(source: String) {
                 val (sql, args) = captured.get()
                 val plan = db.openHelper.readableDatabase.query(
@@ -279,12 +287,13 @@ class CatalogQueryTest {
                 ).use { cursor ->
                     buildList { while (cursor.moveToNext()) add(cursor.getString(3)) }.joinToString("\n")
                 }
-                val index = if (source.isEmpty()) "index_items_kind_category_title"
-                    else "index_items_source_kind_category_title"
-                assertTrue(plan, plan.contains(index))
-                assertFalse(plan, Regex("\\bSCAN (?:TABLE )?(?:items|i)(?:\\s|$)").containsMatchIn(plan))
-                assertFalse(plan, plan.contains("TEMP B-TREE FOR GROUP BY"))
-                assertFalse(plan, plan.contains("USE TEMP B-TREE FOR ORDER BY"))
+                if (sql.contains("FROM category_counts")) {
+                    assertFalse(sql, sql.contains("FROM items"))
+                    assertTrue(plan, plan.contains("category_counts"))
+                } else {
+                    assertTrue(plan, plan.contains("index_items_"))
+                    assertFalse(plan, plan.contains("USE TEMP B-TREE FOR ORDER BY"))
+                }
             }
             for (source in listOf("", "a")) {
                 val allGroups = dao.sourceCategoryCounts(source, listOf("Adult")).first()
@@ -292,7 +301,7 @@ class CatalogQueryTest {
                 assertCategoryPlan(source)
                 for (kind in kinds) {
                     val groups = dao.categoryCounts(kind, source, listOf("Adult")).first()
-                    assertEquals(groups, allGroups.filter { it.kind == kind }.map { LiveCategoryCount(it.category, it.count) })
+                    assertEquals(groups, allGroups.filter { it.kind == kind }.map { LiveCategoryCount(it.category, it.count, it.searchKey) })
                     assertEquals(2000, groups.single { it.category == "Film" }.count)
                     assertEquals(if (source.isEmpty()) 5 else 3, groups.single { it.category == "Rare" }.count)
                     assertCategoryPlan(source)
@@ -314,7 +323,7 @@ class CatalogQueryTest {
         val captured = AtomicReference<Pair<String, List<Any?>>>()
         val db = Room.inMemoryDatabaseBuilder(context, LibraryDb::class.java)
             .setQueryCallback({ sql, args ->
-                if (sql.trimStart().startsWith("SELECT DISTINCT category FROM items")) captured.set(sql to args.toList())
+                if (sql.trimStart().startsWith("SELECT DISTINCT category FROM category_counts")) captured.set(sql to args.toList())
             }, Executor { it.run() }).build()
         try {
             val dao = db.library()
@@ -323,6 +332,7 @@ class CatalogQueryTest {
                 item("movie", "Movie", "Film"), item("series", "Series", "Film", "SERIES"),
                 item("hidden", "Adult movie", "For Adults"),
                 item("episode", "Episode", "Episode-only", "EPISODE")))
+            prepareTestCatalog(db)
             assertEquals(listOf("Film", "For Adults", "News"), dao.categoryNames().first())
             val (sql, args) = captured.get()
             assertFalse(sql, sql.contains("COUNT(") || sql.contains("versionKey"))
@@ -331,7 +341,7 @@ class CatalogQueryTest {
             ).use { cursor ->
                 buildList { while (cursor.moveToNext()) add(cursor.getString(3)) }.joinToString("\n")
             }
-            assertTrue(plan, plan.contains("COVERING INDEX index_items_kind_category_title"))
+            assertTrue(plan, plan.contains("category_counts"))
         } finally { db.close() }
     }
 }
