@@ -41,8 +41,8 @@ interface CatalogDerivedDao {
     @Upsert suspend fun save(state: CatalogDerivedState)
     @Upsert suspend fun save(rows: List<CategoryCount>)
     @Upsert suspend fun stats(rows: List<CatalogStat>)
-    @Update(entity = Item::class) suspend fun derive(rows: List<DerivedAssignment>)
-    @Update(entity = Item::class) suspend fun channels(rows: List<ChannelAssignment>)
+    @androidx.room.Update(entity = Item::class) suspend fun derive(rows: List<DerivedAssignment>)
+    @androidx.room.Update(entity = Item::class) suspend fun channels(rows: List<ChannelAssignment>)
     @Query("DELETE FROM category_counts WHERE source=:source") suspend fun clearCategories(source: String)
     @Query("DELETE FROM catalog_stats WHERE source=:source") suspend fun clearStats(source: String)
     @Query("SELECT * FROM category_counts WHERE source=:source") suspend fun categories(source: String): List<CategoryCount>
