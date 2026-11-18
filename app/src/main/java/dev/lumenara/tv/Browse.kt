@@ -507,6 +507,7 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
     val posterWidth = with(density) { if (gridWidth == 0) 0 else ((gridWidth - (POSTER_GRID_COLUMNS - 1) * Spacing.cardGap.roundToPx()) / POSTER_GRID_COLUMNS).coerceAtLeast(1) }
     val posterHeight = (posterWidth * 1.5f).toInt()
     val grid = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
+    val gridFocus = rememberGridFocus(grid, span = { if (paged.isLiveSlot(it)) 2 else 1 }, column = paged::columnOf)
     val posterFocus = remember { FocusRequester() }
     var positioned by remember(paged) { mutableStateOf(false) }
     var requestPending by remember(paged) { mutableStateOf(true) }
@@ -555,7 +556,7 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
             androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
                 columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(POSTER_GRID_COLUMNS),
                 state = grid,
-                modifier = Modifier.weight(1f).onSizeChanged { gridWidth = it.width }.testTag("poster-grid").reportScrollPosition(grid)
+                modifier = Modifier.weight(1f).onSizeChanged { gridWidth = it.width }.testTag("poster-grid").reportScrollPosition(grid).then(gridFocus.modifier)
                     .semantics { pagingWindow = pagingDescription(paged) }.focusRestorer().focusGroup(),
                 // TV safe area plus the title/year below the focusable poster.
                 contentPadding = PaddingValues(top = 8.dp, bottom = 64.dp),
@@ -583,6 +584,7 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
                         requestPending = false
                     }
                     val cardModifier = Modifier.fillMaxWidth()
+                        .then(gridFocus.item(index))
                         .then(if (index == posterTarget) Modifier.focusRequester(posterFocus) else Modifier)
                         .onFocusChanged { if (it.hasFocus) paged.focused(index) }
                     if (paged.isLiveSlot(index)) ChannelCard(model, entry, now,

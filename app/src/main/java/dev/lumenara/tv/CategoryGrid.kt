@@ -49,6 +49,7 @@ internal fun CategoryGrid(title: String, entries: List<CategoryEntry>?, choose: 
     var searching by rememberSaveable(title) { mutableStateOf(false) }
     var query by rememberSaveable(title) { mutableStateOf("") }
     val grid = rememberLazyGridState()
+    val gridFocus = rememberGridFocus(grid) { it % CATEGORY_COLUMNS }
     val focus = remember { FocusRequester() }
     val searchButton = remember { FocusRequester() }
     val searchField = remember { FocusRequester() }
@@ -116,7 +117,7 @@ internal fun CategoryGrid(title: String, entries: List<CategoryEntry>?, choose: 
         }
         LazyVerticalGrid(GridCells.Fixed(CATEGORY_COLUMNS), state = grid,
             modifier = Modifier.fillMaxWidth().weight(1f)
-                .testTag("category-grid").reportScrollPosition(grid).focusGroup(),
+                .testTag("category-grid").reportScrollPosition(grid).then(gridFocus.modifier).focusGroup(),
             contentPadding = PaddingValues(top = Spacing.unit, bottom = Spacing.shelfGap),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -139,6 +140,7 @@ internal fun CategoryGrid(title: String, entries: List<CategoryEntry>?, choose: 
                     query = ""
                     choose(entry)
                 }, modifier = Modifier.fillMaxWidth().height(60.dp).testTag("category-${entry.name}")
+                    .then(gridFocus.item(index))
                     .semantics { contentDescription = if (entry.countKnown) "${entry.name} · ${entry.count}" else entry.name }
                     .then(if (index == target) Modifier.focusRequester(focus) else Modifier)
                     .onFocusChanged { if (it.isFocused) last = entry.id }) {

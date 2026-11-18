@@ -87,7 +87,8 @@ class WindowedGridTest {
             }
             for (row in steps - 1 downTo 0) {
                 screen.dpad(Key.DirectionUp)
-                screen.waitUntil(10_000) { focused(row * columns) }
+                screen.waitUntil(conditionDescription = "UP to ${row * columns} in $kind grid; keep the column across off-screen rows",
+                    timeoutMillis = 10_000) { focused(row * columns) }
             }
             screen.waitUntil(10_000) { window()[0] == 0 }
             assertTrue("Evicted first row is re-queried with focus intact", focused(0))

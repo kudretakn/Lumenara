@@ -117,6 +117,10 @@ class DenseGridTest {
             }
         }
         assertTrue("DOWN must still scroll", position().substringBefore(':').toInt() > 0)
+        for (row in 39 downTo 0) {
+            screen.dpad(Key.DirectionUp)
+            screen.waitUntil(10_000) { focused(row * 4) }
+        }
     }
 
     @Test fun channelsFitFourColumnsAndSixRowsInsideSafeArea() {
