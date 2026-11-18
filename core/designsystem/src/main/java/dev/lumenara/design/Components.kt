@@ -21,7 +21,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.progressBarRangeInfo
@@ -41,7 +41,7 @@ object FocusCardDefaults {
     val secondaryContentColor = LumenColors.textSecondary
 }
 
-/** Scale is a centred drawing transform: focus never changes a grid's layout. */
+/** Canvas-only scale keeps both layout and focus/bring-into-view bounds stationary. */
 @Composable
 fun FocusCard(
     onClick: () -> Unit,
@@ -66,21 +66,21 @@ fun FocusCard(
         enabled = enabled,
         interactionSource = interactions,
         modifier = modifier
-            .graphicsLayer {
-                scaleX = 1f + (focusedScale - 1f) * focus
-                scaleY = scaleX
-            }
             .drawWithContent {
-                drawContent()
-                // Outside the fill, with no gap; drawing does not affect measurement.
-                val width = Motion.focusRingWidth.toPx()
-                drawRoundRect(
-                    color = LumenColors.focus.copy(alpha = focus),
-                    topLeft = Offset(-width / 2, -width / 2),
-                    size = Size(size.width + width, size.height + width),
-                    cornerRadius = CornerRadius(Radii.card.toPx() + width / 2),
-                    style = Stroke(width),
-                )
+                // A graphicsLayer also transforms the bounds reported by the focus node.
+                // Canvas scaling affects pixels only, so horizontal focus cannot re-scroll a row.
+                scale(1f + (focusedScale - 1f) * focus) {
+                    this@drawWithContent.drawContent()
+                    // Outside the fill, with no gap; drawing does not affect measurement.
+                    val width = Motion.focusRingWidth.toPx()
+                    drawRoundRect(
+                        color = LumenColors.focus.copy(alpha = focus),
+                        topLeft = Offset(-width / 2, -width / 2),
+                        size = Size(size.width + width, size.height + width),
+                        cornerRadius = CornerRadius(Radii.card.toPx() + width / 2),
+                        style = Stroke(width),
+                    )
+                }
             },
         shape = ClickableSurfaceDefaults.shape(shape),
         scale = flatScale(),

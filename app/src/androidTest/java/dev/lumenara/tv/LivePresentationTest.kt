@@ -83,7 +83,8 @@ class LivePresentationTest {
             second.performSemanticsAction(SemanticsActions.RequestFocus)
             second.assertIsFocused()
             val after = second.fetchSemanticsNode().boundsInRoot
-            // The whole 60 dp card scales around its centre, nothing shifts.
+            // Canvas scaling leaves the focus/bring-into-view rectangle unchanged.
+            assertEquals("Focus drawing must not change reported bounds", before, after)
             assertEquals("Focus must not move the card", before.center.x, after.center.x, 1f)
             assertEquals("Focus must not move the card", before.center.y, after.center.y, 1f)
             val density = screen.activity.resources.displayMetrics.density

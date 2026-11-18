@@ -116,7 +116,7 @@ internal fun CategoryGrid(title: String, entries: List<CategoryEntry>?, choose: 
         }
         LazyVerticalGrid(GridCells.Fixed(CATEGORY_COLUMNS), state = grid,
             modifier = Modifier.fillMaxWidth().weight(1f)
-                .testTag("category-grid").focusGroup(),
+                .testTag("category-grid").reportScrollPosition(grid).focusGroup(),
             contentPadding = PaddingValues(top = Spacing.unit, bottom = Spacing.shelfGap),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)) {

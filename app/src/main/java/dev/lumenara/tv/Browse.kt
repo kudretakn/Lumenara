@@ -103,12 +103,14 @@ private fun HubChannelShelf(
                         HubArtwork(model, item, logo, channel = true)
                     }
                     Text(item.title, style = LumenType.label, color = LumenColors.textPrimary,
-                        maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text(current?.title.orEmpty(), style = LumenType.meta,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    if (current != null) ProgressLine(
-                        (now - current.start).toFloat() / (current.end - current.start).coerceAtLeast(1),
-                    )
+                    Box(Modifier.fillMaxWidth().height(3.dp)) {
+                        if (current != null) ProgressLine(
+                            (now - current.start).toFloat() / (current.end - current.start).coerceAtLeast(1),
+                        )
+                    }
                 }
             }
         }
@@ -165,7 +167,7 @@ private fun HubResumeShelf(model: LibraryModel, rows: List<Item>, open: (Item) -
                         )
                     }
                     Text(item.title, style = LumenType.label, color = LumenColors.textPrimary,
-                        maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text(caption, style = LumenType.meta, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
@@ -305,7 +307,7 @@ internal fun Home(
             restored = true
         }
     }
-    LazyColumn(Modifier.fillMaxSize().testTag("hub").focusRestorer().focusGroup().drawWithContent {
+    LazyColumn(Modifier.fillMaxSize().testTag("hub").reportScrollPosition(list).focusRestorer().focusGroup().drawWithContent {
         drawContent()
         if (!shellReported[0]) {
             shellReported[0] = true
@@ -553,7 +555,7 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
             androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
                 columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(POSTER_GRID_COLUMNS),
                 state = grid,
-                modifier = Modifier.weight(1f).onSizeChanged { gridWidth = it.width }.testTag("poster-grid")
+                modifier = Modifier.weight(1f).onSizeChanged { gridWidth = it.width }.testTag("poster-grid").reportScrollPosition(grid)
                     .semantics { pagingWindow = pagingDescription(paged) }.focusRestorer().focusGroup(),
                 // TV safe area plus the title/year below the focusable poster.
                 contentPadding = PaddingValues(top = 8.dp, bottom = 64.dp),
@@ -634,8 +636,8 @@ private fun GridPoster(model: LibraryModel, item: Item?, open: (Item) -> Unit,
         }
         Column(Modifier.padding(top = Spacing.unit).alpha(if (focused) 1f else 0f)) {
             Text(item?.let { it.cleanTitle.ifEmpty { it.title } }.orEmpty(), style = LumenType.cardTitle, color = LumenColors.textPrimary,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(item?.year.orEmpty(), style = LumenType.meta, maxLines = 1)
+                minLines = 1, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(item?.year.orEmpty(), style = LumenType.meta, minLines = 1, maxLines = 1)
         }
     }
 }

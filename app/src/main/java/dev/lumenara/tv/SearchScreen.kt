@@ -175,7 +175,7 @@ internal fun SearchScreen(
                 }
             }
         }
-        LazyColumn(Modifier.weight(1f).testTag("search-results").focusRestorer().focusGroup(), state = resultsState,
+        LazyColumn(Modifier.weight(1f).testTag("search-results").reportScrollPosition(resultsState).focusRestorer().focusGroup(), state = resultsState,
             contentPadding = PaddingValues(bottom = Spacing.unit), verticalArrangement = Arrangement.spacedBy(Spacing.shelfGap)) {
             if (query.isBlank() && recentSearches.isEmpty()) item {
                 Text("Kanal, film veya dizi ara", style = LumenType.meta)
@@ -356,7 +356,7 @@ private fun SearchResultCard(model: LibraryModel, item: Item?, slot: String,
             }
         }
         Text(item?.title ?: " ", Modifier.padding(top = 8.dp), style = LumenType.label,
-            maxLines = 2, overflow = TextOverflow.Ellipsis)
+            minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis)
         Text(item?.let { it.year.ifBlank { it.category } } ?: " ", style = LumenType.meta,
             maxLines = 1, overflow = TextOverflow.Ellipsis)
     }

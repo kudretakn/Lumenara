@@ -256,7 +256,7 @@ private fun LiveChannelGrid(model: LibraryModel, title: String, result: List<Ite
             }
             androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
                 androidx.compose.foundation.lazy.grid.GridCells.Fixed(LIVE_GRID_COLUMNS), state = grid,
-                modifier = Modifier.weight(1f).testTag("live-channels")
+                modifier = Modifier.weight(1f).testTag("live-channels").reportScrollPosition(grid)
                     .semantics { if (paged != null) pagingWindow = pagingDescription(paged) }.focusRestorer().focusGroup(),
                 contentPadding = PaddingValues(vertical = Spacing.unit),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
