@@ -1,22 +1,26 @@
 ﻿# Durum
 
-Son güncelleme: 18 Kasım 2026 01:55 · yerel (Windows) oturum
+Son güncelleme: 18 Kasım 2026 03:40 · yerel (Windows) oturum kapandı; sıradaki iş "Sıradaki işler" 1
 
 > **Başlangıç:** `git fetch --all --prune && git switch main && git pull`, sonra bu dosyayı ve `CLAUDE.md`'yi oku.
 > **Çalışma düzeni (18 Kasım 2026, kullanıcı kararı):** sen ekip liderisin. Yalnız **Codex** ajanları kullan (`gpt-6-luna` basit, `gpt-6.1-sol` orta/zor, `gpt-6-astra` çok zor); Claude alt ajanı açma (inceleme ve log analizi de Codex'e). Kendin kod yazma (yalnız birleştirme çakışması ve tek satırlık mekanik düzeltme). Kullanıcıyla Türkçe, kısa konuş; commit ve PR metinleri İngilizce.
 
 ## Şu an
-- **PR `release/0.5.5` → v0.5.5:** altyazı gecikmesi (100 ms/1 sn, ±10 sn, öğe+sürüm başına), izleme kaydını taşıma (kaynak adresi/şifresi değişince; şema 12), TMDB alternatif başlık araması, hafif migration + arka planda kaldığı yerden devam eden sürüm anahtarı doldurma ("Lumenara güncelleniyor…" ekranı), hızlı Hub (indeksli son kanal/devam sorguları, sayımlar ilk çizimden hemen sonra, ağır işler 20 sn sonra), TMDB kimliğiyle film gruplama ve yarım parantezli başlık düzeltmesi. Yerelde tüm modül testleri, lint, debug + release APK ve emülatörde 92/92 cihaz testi geçti. CI yeşilse merge → `v0.5.5` → TV'ye kur → ilk açılış (migration 11→12 artık hafif olmalı), Hub süreleri, 4K Filmler'de tek "Avatar" ve altyazı gecikmesini TV'de doğrula.
-- **TV'de v0.5.4 kurulu** (18 Kasım 02:16). 0.5.4 TV ölçümü: güncelleme sonrası ilk açılış 57 sn boş ekran (10→11 migration, 0.5.5'te giderildi); normal soğuk açılış: ilk kare 2,5 sn, Hub tam 4,6 sn, son kanallar 1,9 sn, devam 3,0 sn, sayımlar 1,3 sn, ilk 15 sn CPU ~16 sn (0.5.3'te ~32 sn); "Tüm kanallar" 1,9 sn (0.5.3: 7,3 sn). Kaydırdıkça yükleme TV'de çalışıyor. 4K Filmler'de "Avatar" hâlâ iki kart (yıl 2009 / yıl boş, ikisi de TMDB 7.9) → 0.5.5'te TMDB kimliğiyle gruplama.
+- **Son sürüm v0.5.5** (18 Kasım 03:24, PR #29) ve **TV'de kurulu** (03:25). Açık iş PR'ı yok.
+- 0.5.5 TV ölçümü (Mi Box 4, 39.682 içerik):
+  - Güncelleme sonrası ilk açılış: `migration_11_12` 16 ms, `room_open` 212 ms, ilk kare 0,82 sn (0.5.4: 57 sn boş ekran). Sürüm anahtarı doldurma arka planda ~80 parti × 0,3–2,4 sn ≈ 45 sn, ekranı bekletmedi.
+  - Normal soğuk açılış: ilk kare 0,69 sn (0.5.4: 2,5), son kanallar 0,28 sn (1,9), devam 0,30 sn (3,0), **Hub tam çizim 3,2 sn** (4,6), **sayımlar 2,6 sn** (1,3), **ilk 12 sn CPU ≈ 23–24 sn** (0.5.4: ~16 sn).
+  - 4K Filmler'de "Avatar" hâlâ iki kart (yıl 2009 / yıl boş). **Kullanıcı kararı (18 Kasım): "Avatar kalabilir, sıkıntı yok"** — kopya film konusu kapandı, tanılama raporu eklenmeyecek.
 - v0.5.4 (PR #28), v0.5.3 (PR #27), v0.5.2 (PR #26) yayında.
-- Temizlik yapıldı (18 Kasım, kullanıcı onayı): 46 birleşmiş uzak dal, 22 worktree, 31 yerel dal silindi; yedek `lumenara-wt-backup-2026-11-18`. `local-backup-2026-11-14` dalı birleşmemiş, dokunulmadı.
+- Temizlik yapıldı (18 Kasım, kullanıcı onayı): 46 birleşmiş uzak dal, 22 worktree, 31 yerel dal silindi; yedek `lumenara-wt-backup-2026-11-18`. `local-backup-2026-11-14` dalı birleşmemiş, dokunulmadı. Windows'ta çalışma klasörü: `lumenara-wt\_work` (doğrulama/yayın betikleri: `verify.ps1`, `ship.ps1`).
 
 ## Sıradaki işler
-- 0.5.5 yayını ve TV doğrulaması.
+- **1. (kullanıcı: "yapılacak olarak ekle, bir sonraki oturumda yapacağım", 18 Kasım) 0.5.6 açılış hızı:** **Ana ilke (kullanıcı kararı, 18 Kasım): IPTV listesi zaten TV'de (Room) duruyor; ondan türetilen her şey (temiz başlık/sıralama anahtarı, sürüm grupları, +18 sınıfı, kategori sırası ve sayımları, Hub toplamları, arama anahtarları, kanal numaraları) liste yenilenirken bir kez hesaplanıp saklansın, açılışta yalnız hazır sonuç okunsun. Gerekirse şema 12→13 (yalnız DDL), mevcut satırlar arka planda parça parça doldurulur.** (a) Hub verisi 0,3 sn'de hazır ama Hub 3,2 sn'de çiziliyor — çizimi neyin beklettiğini bul (sayımlar, görseller, `rowsDrawn` kapısı, iskelet); (b) ilk 12 sn CPU 0.5.4'e göre ~%50 arttı (16 → 23–24 sn) — 0.5.5'te gelen TMDB alternatif başlık eşleştirmesi (`TmdbMatcher.kt`), TMDB kimliğiyle sürüm yenileme (`VersionRefresh.kt`), izleme kaydı taşıma, backfill kontrolleri; hiçbiri açılışta tüm katalogda çalışmamalı; (c) sayımlar 1,3 → 2,6 sn. Codex istemi hazır: `docs/plans/startup-cpu-0.5.6.md` (gpt-6.1-sol high). Boş worktree `lumenara-wt\cpu-055` (dal `perf/cpu-055`, origin/main) açık.
+- **2. (kullanıcı isteği, 18 Kasım; bir sonraki oturumda) Kaydırırken titreme:** "Alt satırlara geçip sağa sola doğru gidince ekran hafifçe titriyor." Izgaralarda (Filmler/Diziler afiş ızgarası öncelikli; Canlı TV ve kategori ızgaralarında da kontrol et) alt satırda DPAD sağ/sol ile gezerken liste birkaç piksel oynuyor. Olası nedenler: yalnız odaktaki afişin altında görünen ad+yıl satırın yüksekliğini değiştiriyor; odak büyütmesi (scale) ile `bringIntoView` her yatay adımda dikey kaydırmayı yeniden hesaplıyor; pencereli sayfalamada yer tutucu ile gerçek kartın yüksekliği farklı; görsel yüklenince kart boyu değişiyor. Kabul: TV'de alt satırlarda sağ/sol gezerken liste dikeyde hiç kıpırdamasın; yalnız satır değişince kaysın. Ayrıntı: `docs/plans/grid-jitter.md`.
 - İzleme kaydı taşımada elle yol (kaynağı silip yenisini ekleyince) yapılmadı.
-- Hız hedefleri: ilk kare < 1,2 sn, Hub tam < 1,5 sn sonra, ilk 15 sn CPU < 5 sn — 0.5.5 ölçümüne göre devam.
+- Hız hedefleri: ilk kare < 1,2 sn (sağlandı), Hub tam < 1,5 sn, ilk 15 sn CPU < 5 sn.
 - U3 (ebeveyn kilidi/PIN, kanal sıralama) kullanıcı kararıyla planlardan SİLİNDİ (18 Kasım); önerme, yapma. Remux testi: kullanıcı "geç" dedi. Baseline profile cihazda ÜRETİLMEYECEK (kullanıcı kararı, 18 Kasım).
-- Kontrol: altyazı arama ekranında arkada kitaplık görünmesi, sessiz kanallarda VLC'ye geçiş, canlı yayın yeniden bağlanmanın sahada tetiklenmesi.
+- Kontrol: altyazı arama ekranında arkada kitaplık görünmesi, sessiz kanallarda VLC'ye geçiş, canlı yayın yeniden bağlanmanın sahada tetiklenmesi, altyazı gecikmesinin TV'de denenmesi.
 - `scripts/local-device-tests.ps1` RETRIED testi "Tests that never ran" diye yanlış sınıflandırıyor; düzeltilmeli.
 
 ## TV ölçümleri (17 Kasım 2026, Mi Box 4, v0.5.0, Wi-Fi)
