@@ -6,18 +6,18 @@ Son güncelleme: 18 Kasım 2026 01:55 · yerel (Windows) oturum
 > **Çalışma düzeni (18 Kasım 2026, kullanıcı kararı):** sen ekip liderisin. Yalnız **Codex** ajanları kullan (`gpt-6-luna` basit, `gpt-6.1-sol` orta/zor, `gpt-6-astra` çok zor); Claude alt ajanı açma (inceleme ve log analizi de Codex'e). Kendin kod yazma (yalnız birleştirme çakışması ve tek satırlık mekanik düzeltme). Kullanıcıyla Türkçe, kısa konuş; commit ve PR metinleri İngilizce.
 
 ## Şu an
-- **PR `release/0.5.4` → v0.5.4:** kaydırdıkça yükleme ("Devamını göster" kalktı; Filmler/Diziler/Canlı/Ara/oynatıcı listesi, en fazla 5 sayfa bellekte), aynı filmin sürümleri tek kart (şema 11), açılışta tüm katalog işi kaldırıldı (EPG yalnız görünen sayfa), Baseline Profile (elle yazılmış + kütüphane profilleri; kullanıcı kararı: cihazda profil üretme YOK), oynatıcıya kompozisyondan erişim kaldırıldı (`PlayerUiState`, wrong-thread çökmesi). Yerelde: tüm modül testleri, lint, debug + release APK geçti; emülatörde 83 PASS + 1 RETRIED (FullscreenTest, bilinen). CI yeşilse merge → `v0.5.4` → TV'ye kur → açılış, "Tüm kanallar", film tekilliği ve kaydırarak yüklemeyi TV'de doğrula.
-- **Hazır: `release/0.5.5`** (worktree `lumenara-wt\rel-055`, 0.5.4 üzerine): TMDB alternatif başlık araması, altyazı gecikmesi (100 ms/1 sn, ±10 sn, öğe+sürüm başına), izleme kaydını taşıma (kaynak adresi/şifresi değişince; şema 12). Birleştirildi, henüz derlenmedi/test edilmedi. 0.5.4 merge olunca `main` ile güncelle, doğrula, PR.
-- **TV'de v0.5.3 kurulu** (18 Kasım 00:15). 0.5.3 ölçümü: Hub tam çizim 4,4–7,3 sn, ilk kare 2,4–4,3 sn, "Tüm kanallar" açılışta 7,3 sn / 45 sn boşta sonra 2,3 sn; açılıştan sonraki 20 sn'de ~32 sn CPU (DefaultDispatch 15 sn) → 0.5.4'te giderildi, yeniden ölç.
-- v0.5.3 (PR #27), v0.5.2 (PR #26) yayında.
+- **PR `release/0.5.5` → v0.5.5:** altyazı gecikmesi (100 ms/1 sn, ±10 sn, öğe+sürüm başına), izleme kaydını taşıma (kaynak adresi/şifresi değişince; şema 12), TMDB alternatif başlık araması, hafif migration + arka planda kaldığı yerden devam eden sürüm anahtarı doldurma ("Lumenara güncelleniyor…" ekranı), hızlı Hub (indeksli son kanal/devam sorguları, sayımlar ilk çizimden hemen sonra, ağır işler 20 sn sonra), TMDB kimliğiyle film gruplama ve yarım parantezli başlık düzeltmesi. Yerelde tüm modül testleri, lint, debug + release APK ve emülatörde 92/92 cihaz testi geçti. CI yeşilse merge → `v0.5.5` → TV'ye kur → ilk açılış (migration 11→12 artık hafif olmalı), Hub süreleri, 4K Filmler'de tek "Avatar" ve altyazı gecikmesini TV'de doğrula.
+- **TV'de v0.5.4 kurulu** (18 Kasım 02:16). 0.5.4 TV ölçümü: güncelleme sonrası ilk açılış 57 sn boş ekran (10→11 migration, 0.5.5'te giderildi); normal soğuk açılış: ilk kare 2,5 sn, Hub tam 4,6 sn, son kanallar 1,9 sn, devam 3,0 sn, sayımlar 1,3 sn, ilk 15 sn CPU ~16 sn (0.5.3'te ~32 sn); "Tüm kanallar" 1,9 sn (0.5.3: 7,3 sn). Kaydırdıkça yükleme TV'de çalışıyor. 4K Filmler'de "Avatar" hâlâ iki kart (yıl 2009 / yıl boş, ikisi de TMDB 7.9) → 0.5.5'te TMDB kimliğiyle gruplama.
+- v0.5.4 (PR #28), v0.5.3 (PR #27), v0.5.2 (PR #26) yayında.
 - Temizlik yapıldı (18 Kasım, kullanıcı onayı): 46 birleşmiş uzak dal, 22 worktree, 31 yerel dal silindi; yedek `lumenara-wt-backup-2026-11-18`. `local-backup-2026-11-14` dalı birleşmemiş, dokunulmadı.
 
 ## Sıradaki işler
-- 0.5.4 yayını ve TV doğrulaması; ardından 0.5.5.
+- 0.5.5 yayını ve TV doğrulaması.
 - İzleme kaydı taşımada elle yol (kaynağı silip yenisini ekleyince) yapılmadı.
-- U3 (ebeveyn kilidi/PIN, kanal sıralama): kullanıcı istemedikçe başlama. Remux testi: kullanıcı "geç" dedi.
-- Kontrol: altyazı arama ekranında arkada kitaplık görünmesi (büyük olasılıkla D5'te düzeldi), sessiz kanallarda VLC'ye geçiş, canlı yayın yeniden bağlanmanın sahada tetiklenmesi.
-- Yerel doğrulama betiği "Tests that never ran" diye RETRIED testi yanlış sınıflandırıyor (`scripts/local-device-tests.ps1` Strip/never-ran kontrolü); düzeltilmeli.
+- Hız hedefleri: ilk kare < 1,2 sn, Hub tam < 1,5 sn sonra, ilk 15 sn CPU < 5 sn — 0.5.5 ölçümüne göre devam.
+- U3 (ebeveyn kilidi/PIN, kanal sıralama): kullanıcı istemedikçe başlama. Remux testi: kullanıcı "geç" dedi. Baseline profile cihazda ÜRETİLMEYECEK (kullanıcı kararı, 18 Kasım).
+- Kontrol: altyazı arama ekranında arkada kitaplık görünmesi, sessiz kanallarda VLC'ye geçiş, canlı yayın yeniden bağlanmanın sahada tetiklenmesi.
+- `scripts/local-device-tests.ps1` RETRIED testi "Tests that never ran" diye yanlış sınıflandırıyor; düzeltilmeli.
 
 ## TV ölçümleri (17 Kasım 2026, Mi Box 4, v0.5.0, Wi-Fi)
 - Bellek (PSS): Hub boşta 72 MB, 10.645 kanallı ızgara 90 MB, canlı (VLC) 87 MB, 4K film 109 MB. Sorun yok.
