@@ -58,19 +58,31 @@ class ImportStallTest {
         assertTrue(cache.root.listFiles()!!.isEmpty())
     }
 
-    @Test fun earlyBurstDoesNotHideLaterTrickle() = MockWebServer().use { server ->
-        server.enqueue(MockResponse().setBody("x".repeat(100)).throttleBody(1, 40, TimeUnit.MILLISECONDS))
-        val started = System.nanoTime()
-        // A small threshold lets the first window pass; the following window must still fail.
-        val error = runCatching {
-            Transport.download(server.url("/").toString(), true, cache.root,
-                stallWindowMillis = 200, stallMinimumBytes = 6,
-                progress = { if (it == 0L) Thread.sleep(250) }).close()
-        }.exceptionOrNull()
-        assertTrue(error is SourceFailure)
-        assertTrue(error!!.message!!.contains("zaman aşımına"))
-        assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) >= 450)
-        assertTrue(cache.root.listFiles()!!.isEmpty())
+    @Test fun earlyBurstThenLaterTrickleFails() {
+        var now = 0L
+        val stall = Transport.DownloadStall(100, 10) { now }
+        stall.received(10)
+        now = TimeUnit.MILLISECONDS.toNanos(50)
+        stall.received(1)
+        now = TimeUnit.MILLISECONDS.toNanos(100)
+        val error = runCatching { stall.received(1) }.exceptionOrNull()
+        assertTrue(error is java.io.InterruptedIOException)
+    }
+
+    @Test fun steadyThroughputNeverFailsAcrossWindows() {
+        var now = 0L
+        val stall = Transport.DownloadStall(100, 10) { now }
+        repeat(6) {
+            now += TimeUnit.MILLISECONDS.toNanos(50)
+            stall.received(10)
+        }
+    }
+
+    @Test fun stallDoesNotFailBeforeFirstWindow() {
+        var now = 0L
+        val stall = Transport.DownloadStall(100, 10) { now }
+        now = TimeUnit.MILLISECONDS.toNanos(99)
+        stall.received(1)
     }
 
     @Test fun heldRepositoryMutexPreventsAnyNetworkRequest() = runTest {

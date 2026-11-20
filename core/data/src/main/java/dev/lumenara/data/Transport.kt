@@ -182,26 +182,30 @@ object Transport {
     }
 
     /** Check a rolling window, so an early burst cannot hide a later trickle. */
-    private class DownloadStall(windowMillis: Long, private val minimumBytes: Long) {
+    internal class DownloadStall(
+        windowMillis: Long,
+        private val minimumBytes: Long,
+        private val now: () -> Long = System::nanoTime,
+    ) {
         private val windowNanos = TimeUnit.MILLISECONDS.toNanos(windowMillis)
-        private val started = System.nanoTime()
+        private val started = now()
         private val arrivals = ArrayDeque<Pair<Long, Int>>()
         private var bytes = 0L
 
         fun received(count: Int) {
-            val now = System.nanoTime()
-            while (arrivals.isNotEmpty() && now - arrivals.first.first >= windowNanos) {
+            val currentTime = now()
+            while (arrivals.isNotEmpty() && currentTime - arrivals.first.first >= windowNanos) {
                 bytes -= arrivals.removeFirst().second
             }
             if (count > 0) {
-                arrivals.addLast(now to count)
+                arrivals.addLast(currentTime to count)
                 bytes += count
             }
             // Retain only enough recent arrivals to establish the minimum throughput.
             while (arrivals.isNotEmpty() && bytes - arrivals.first.second >= minimumBytes) {
                 bytes -= arrivals.removeFirst().second
             }
-            if (now - started >= windowNanos && bytes < minimumBytes)
+            if (currentTime - started >= windowNanos && bytes < minimumBytes)
                 throw java.io.InterruptedIOException("Download stalled")
         }
     }
