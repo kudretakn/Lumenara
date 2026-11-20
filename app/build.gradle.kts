@@ -27,6 +27,14 @@ baselineProfile {
     mergeIntoMain = true
     dexLayoutOptimization = true
 }
+androidComponents {
+    finalizeDsl { extension ->
+        // The profile plugin copies release's manifest path onto its generated build type.
+        // Restore the collection-only overlay after that copy; release stays untouched.
+        extension.sourceSets.getByName("nonMinifiedRelease").manifest
+            .srcFile("src/nonMinifiedRelease/AndroidManifest.xml")
+    }
+}
 dependencies {
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     baselineProfile(project(":baselineprofile"))

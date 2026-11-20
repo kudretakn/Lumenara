@@ -1,0 +1,6 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- Collection-only bridge: never packaged in debug or release APKs. -->
+        <receiver android:name=".BaselineProfileFixtureReceiver" android:exported="true"/>
+    </application>
+</manifest>
