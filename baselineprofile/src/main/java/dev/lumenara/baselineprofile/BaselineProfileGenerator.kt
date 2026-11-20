@@ -1,6 +1,7 @@
 package dev.lumenara.baselineprofile
 
 import android.graphics.Bitmap
+import android.os.Bundle
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.benchmark.macro.junit4.BaselineProfileRule
@@ -203,10 +204,8 @@ class BaselineProfileGenerator {
         // Match LibraryJourneyTest: focus + remote OK, not a touchscreen tap on TV Surface.
         activate("setup-add-m3u")
         requireNode(By.text("Yöntemi değiştir"), "M3U form after Liste adresi gir")
-        reveal("source-setup", "setup-name")
-        requireNode(By.desc("Liste adı").clazz("android.widget.EditText"), "Liste adı field").text = "Baseline Profile fixture"
-        reveal("source-setup", "setup-address")
-        requireNode(By.desc("Liste adresi").clazz("android.widget.EditText"), "Liste adresi field").text = address
+        setFieldText("setup-name", "Baseline Profile fixture")
+        setFieldText("setup-address", address)
         reveal("source-setup", "setup-advanced")
         activate("setup-advanced")
         reveal("source-setup", "setup-http-compat")
@@ -263,6 +262,52 @@ class BaselineProfileGenerator {
     private fun requireNode(selector: BySelector, description: String): UiObject2 =
         device.wait(Until.findObject(selector), timeout) ?: fail("$description unavailable: $selector")
 
+    private fun setFieldText(tag: String, value: String) {
+        reveal("source-setup", tag)
+        val root = instrumentation.uiAutomation.rootInActiveWindow ?: fail("No active window for $tag")
+        // LibraryJourneyTest uses hasSetTextAction(), not class + contentDescription.
+        // Compose may export the description separately from the editable node.
+        val field = try { findEditable(root, tag) } finally { root.recycle() }
+            ?: fail("No ACTION_SET_TEXT node in $tag")
+        try {
+            if (!field.isFocused && !field.performAction(AccessibilityNodeInfo.ACTION_FOCUS)) {
+                fail("Could not focus editable field $tag")
+            }
+            // Set text directly, without clicking/OK (which opens the TV IME).
+            // A blind Back to dismiss an IME could instead close the manual form.
+            val arguments = Bundle().apply {
+                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value)
+            }
+            if (!field.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)) {
+                fail("ACTION_SET_TEXT rejected for $tag")
+            }
+        } finally { field.recycle() }
+        val ownText = By.res(tag).text(value)
+        val childText = By.res(tag).hasDescendant(By.text(value))
+        val deadline = SystemClock.uptimeMillis() + timeout
+        while (SystemClock.uptimeMillis() < deadline) {
+            if (device.hasObject(ownText) || device.hasObject(childText)) return
+            SystemClock.sleep(100)
+        }
+        fail("Text replacement did not reach $tag")
+    }
+
+    private fun findEditable(
+        node: AccessibilityNodeInfo,
+        tag: String,
+        insideField: Boolean = false,
+    ): AccessibilityNodeInfo? {
+        val inside = insideField || node.viewIdResourceName == tag
+        if (inside && node.isEnabled && node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_SET_TEXT }) {
+            return AccessibilityNodeInfo.obtain(node)
+        }
+        repeat(node.childCount) { index ->
+            val child = node.getChild(index) ?: return@repeat
+            try { findEditable(child, tag, inside)?.let { return it } } finally { child.recycle() }
+        }
+        return null
+    }
+
     private fun reveal(container: String, tag: String, direction: Direction = Direction.DOWN) {
         val deadline = SystemClock.uptimeMillis() + timeout
         repeat(12) {
@@ -296,10 +341,26 @@ class BaselineProfileGenerator {
     }
 
     private fun fail(message: String): Nothing {
-        val directory = File(instrumentation.context.getExternalFilesDir(null), "baseline-failures")
-        directory.mkdirs()
-        val dump = File(directory, "window-${SystemClock.uptimeMillis()}.xml")
-        runCatching { device.dumpWindowHierarchy(dump) }
-        throw AssertionError("$message. UI hierarchy: ${dump.absolutePath}")
+        val output = InstrumentationRegistry.getArguments().getString("additionalTestOutputDir")
+            ?.takeIf { it.isNotBlank() }?.let { File(it) }
+            ?: instrumentation.context.getExternalFilesDir(null)
+        val directory = File(output, "baseline-failures")
+        val stem = "window-${SystemClock.uptimeMillis()}"
+        val dump = File(directory, "$stem.xml")
+        val screenshot = File(directory, "$stem.png")
+        val failure = AssertionError(
+            "$message. UI hierarchy: ${dump.absolutePath}; screenshot: ${screenshot.absolutePath}"
+        )
+        // AGP pulls additionalTestOutputDir before uninstalling the test APK.
+        // Preserve the original assertion even if either diagnostic cannot be saved.
+        runCatching {
+            check(directory.isDirectory || directory.mkdirs()) { "Could not create $directory" }
+            device.dumpWindowHierarchy(dump)
+        }.onFailure { failure.addSuppressed(it) }
+        runCatching {
+            check(directory.isDirectory || directory.mkdirs()) { "Could not create $directory" }
+            check(device.takeScreenshot(screenshot)) { "Could not capture $screenshot" }
+        }.onFailure { failure.addSuppressed(it) }
+        throw failure
     }
 }

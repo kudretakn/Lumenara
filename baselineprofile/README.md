@@ -22,12 +22,23 @@ after the run, but its server stops; do not use it as a persistent playlist.
 
 Navigation mirrors `LibraryJourneyTest`: request focus, verify focus, then send
 remote DPAD OK. TV Material Surface activation must not depend on a touchscreen
-`UiObject2.click()`. Setup uses the current Turkish `Liste adı` / `Liste adresi`
-editable-field descriptions, reveals lazy form controls before use, expands
-`Gelişmiş`, verifies `HTTP uyumluluğu · Açık`, and submits `Bağlantıyı sına ve ekle`.
+`UiObject2.click()`. A clean install shows the welcome actions alongside the phone
+pairing panel; `setup-add-m3u` ("Liste adresi gir") opens the manual M3U form.
+Setup locates the existing `setup-name` / `setup-address` resource-id tags and
+targets `ACTION_SET_TEXT` on the tagged node or an editable descendant, matching
+`LibraryJourneyTest`'s `hasSetTextAction()` without assuming the field's class and
+description are exported on the same accessibility node. It focuses the editable
+node and verifies the replacement text, without clicking/OK to open the TV IME or
+blindly pressing Back (which could close the form). It reveals lazy controls before
+use, expands `Gelişmiş`, verifies `HTTP uyumluluğu · Açık`, and submits
+`Bağlantıyı sına ve ekle`.
 Every required screen/control has a bounded wait; failures throw with the step,
-selector and a UI hierarchy path under the producer's external files directory
-(`baseline-failures/`). No missing step is silently skipped.
+selector, XML hierarchy and PNG screenshot paths in `baseline-failures/` under the
+instrumentation argument `additionalTestOutputDir`. AGP pulls this directory into
+`baselineprofile/build/outputs/` before uninstalling the test APK, so diagnostics
+survive a failed run. Without the argument, it falls back to the producer's external
+files directory. Capture errors are attached to the assertion as suppressed failures.
+No missing step is silently skipped.
 
 `MainActivity` already wraps `LibraryScreen` in `testTagsAsResourceId = true`.
 Setup (including PairPanel), Hub, category/live/poster grids, movie/series details,
