@@ -51,4 +51,6 @@ internal class CatalogStreams(
 
 /** Safe visibility while a DDL-only upgrade is still filling derived columns. */
 internal fun List<Item>.visibleStoredRows(showAdult: Boolean): List<Item> =
-    if (showAdult) this else filter { !it.isAdult && it.sortKey.isNotEmpty() }
+    if (showAdult) this else filter {
+        if (it.sortKey.isEmpty()) !isAdultCategory(it.category) else !it.isAdult
+    }

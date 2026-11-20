@@ -241,19 +241,21 @@ class CatalogQueryTest {
             val rows = (0 until 300).map { item("$it", "Film $it", if (it % 2 == 0) "Film" else "Other") }
             dao.save(rows)
             dao.assignVersions(rows.versionAssignments())
-            prepareTestCatalog(db)
-            for ((category, hidden) in listOf("" to emptyList(), "Film" to emptyList(), "" to listOf("Adult"))) {
-                assertEquals(120, dao.browse("a", "MOVIE", category, "", "", 120, hidden = hidden).first().size)
-                val (sql, args) = captured.get()
-                assertFalse(sql.contains("GROUP BY"))
-                val plan = db.openHelper.readableDatabase.query(SimpleSQLiteQuery("EXPLAIN QUERY PLAN $sql", args.toTypedArray())).use { cursor ->
-                    buildList { while (cursor.moveToNext()) add(cursor.getString(3)) }.joinToString("\n")
+            for (ready in listOf(false, true)) {
+                if (ready) prepareTestCatalog(db)
+                for ((category, hidden) in listOf("" to emptyList(), "Film" to emptyList(), "" to listOf("Adult"))) {
+                    assertEquals(120, dao.browse("a", "MOVIE", category, "", "", 120, hidden = hidden).first().size)
+                    val (sql, args) = captured.get()
+                    assertFalse(sql.contains("GROUP BY"))
+                    val plan = db.openHelper.readableDatabase.query(SimpleSQLiteQuery("EXPLAIN QUERY PLAN $sql", args.toTypedArray())).use { cursor ->
+                        buildList { while (cursor.moveToNext()) add(cursor.getString(3)) }.joinToString("\n")
+                    }
+                    assertTrue(plan, plan.contains("USING INDEX index_items_"))
+                    if (category.isNotEmpty() || hidden.isNotEmpty()) assertTrue(plan, plan.contains("index_items_versionKey"))
+                    // A right-part sort of equal-title IDs is fine; a whole-catalog title sort is not.
+                    assertFalse(plan, plan.contains("USE TEMP B-TREE FOR ORDER BY"))
+                    assertFalse(plan, plan.contains("FOR GROUP BY"))
                 }
-                assertTrue(plan, plan.contains("USING INDEX index_items_"))
-                if (category.isNotEmpty() || hidden.isNotEmpty()) assertTrue(plan, plan.contains("index_items_versionKey"))
-                // A right-part sort of equal-title IDs is fine; a whole-catalog title sort is not.
-                assertFalse(plan, plan.contains("USE TEMP B-TREE FOR ORDER BY"))
-                assertFalse(plan, plan.contains("FOR GROUP BY"))
             }
         } finally { db.close() }
     }

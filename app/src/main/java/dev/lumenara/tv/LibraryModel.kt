@@ -28,6 +28,8 @@ internal class LibraryModel
 constructor(private val repository: dagger.Lazy<Repository>, val prefs: Preferences) : androidx.lifecycle.ViewModel() {
     // Recovery must finish before exposing repository state, but never block Hilt/UI creation.
     val repo: Repository get() = repository.get()
+    private val screenDraw = FirstDrawGate()
+    fun onScreenFirstDraw() { screenDraw.onDraw() }
     private val firstDraw = FirstDrawGate()
     val firstDrawn = firstDraw.drawn
     fun onFirstDraw() { firstDraw.onDraw() }
@@ -117,7 +119,10 @@ constructor(private val repository: dagger.Lazy<Repository>, val prefs: Preferen
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
-            // DDL opens immediately; catalog upgrades yield the first 15 seconds to the UI.
+            // A DDL-only upgrade must not wait for the populated Hub or its quiet window.
+            // Release IO work after the actual first window frame, even if Hub is loading.
+            screenDraw.await()
+            repo.startPendingCatalogBackfill()
             backgroundReady.first { it }
             repo.startVersionBackfill()
         }

@@ -83,7 +83,7 @@ interface CatalogDerivedDao {
 data class HubTotal(val kind: String, val count: Int)
 
 /** Source-local, resumable work. Cursor and output commit together; never invoked on DB open.
- * Refresh calls this before publishing; upgrades resume it after the startup quiet window.
+ * Refresh calls this before publishing; pending upgrades resume immediately on IO.
  */
 class CatalogDerivedBackfill(private val db: LibraryDb) {
     private val dao = db.derived()

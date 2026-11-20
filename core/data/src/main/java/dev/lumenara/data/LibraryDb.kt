@@ -10,6 +10,9 @@ import androidx.sqlite.db.SupportSQLiteQuery
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import dev.lumenara.catalog.categorySortKey
 
 @Entity(tableName = "sources")
 data class Source(
@@ -143,6 +146,27 @@ data class VersionCandidate(
 
 @Dao
 interface LibraryDao {
+    @Query("""SELECT NOT EXISTS(SELECT 1 FROM sources s
+        LEFT JOIN catalog_derived_state d ON d.source=s.id
+        WHERE (:source='' OR s.id=:source) AND (d.source IS NULL OR d.phase!='done'))""")
+    fun catalogReady(source: String): Flow<Boolean>
+
+    @Query("SELECT DISTINCT category FROM items WHERE kind IN ('LIVE','MOVIE','SERIES') ORDER BY category")
+    fun originalCategoryNames(): Flow<List<String>>
+
+    fun visibleAdultCategoryNames(): Flow<List<String>> = withCatalog("") { ready ->
+        if (ready) adultCategoryNames() else originalCategoryNames().map { it.filter(::isAdultCategory) }
+    }.distinctUntilChanged()
+
+    @RawQuery(observedEntities = [Item::class, VersionBackfillState::class])
+    fun originalCategoryCounts(query: SupportSQLiteQuery): Flow<List<KindCategoryCount>>
+
+    @RawQuery(observedEntities = [Item::class, VersionBackfillState::class])
+    fun originalHubTotals(query: SupportSQLiteQuery): Flow<List<HubTotal>>
+
+    fun fallbackHubTotals(source: String, hidden: List<String>): Flow<List<HubTotal>> =
+        originalHubTotals(fallbackHubTotalsQuery(source, hidden))
+
     @Query("""SELECT id,source,title,category,kind,tvgId,year,parent,providerId,tvgName,tvgGroup,
         CASE WHEN EXISTS(SELECT 1 FROM version_backfill_state b WHERE b.id=1 AND
             (b.phase IN ('normalize','resolve') OR (b.phase='apply' AND items.id>b.cursor)))
@@ -246,27 +270,30 @@ interface LibraryDao {
     fun liveOrder(query: SupportSQLiteQuery): Flow<List<LiveChannelId>>
 
     fun livePage(source: String, category: String, query: String, shelf: String, limit: Int,
-        offset: Int, hidden: List<String> = emptyList()): Flow<List<Item>> =
+        offset: Int, hidden: List<String> = emptyList()): Flow<List<Item>> = withCatalog(source) { ready ->
         liveFilteredRows(livePageQuery(CatalogFilter(source = source, category = category, query = query,
-            shelf = shelf, hidden = hidden), limit, offset = offset), shelf)
+            shelf = shelf, hidden = hidden, derived = ready), limit, offset = offset), shelf)
+    }
 
     fun livePageAfter(source: String, category: String, query: String, shelf: String, limit: Int,
-        after: LiveCursor?, backwards: Boolean = false, hidden: List<String> = emptyList()): Flow<List<Item>> =
+        after: LiveCursor?, backwards: Boolean = false, hidden: List<String> = emptyList()): Flow<List<Item>> = withCatalog(source) { ready ->
         liveFilteredRows(livePageQuery(CatalogFilter(source = source, category = category, query = query,
-            shelf = shelf, hidden = hidden), limit, after, backwards), shelf)
+            shelf = shelf, hidden = hidden, derived = ready), limit, after, backwards), shelf)
+    }
 
     fun liveNeighbors(source: String, category: String, query: String, shelf: String, limit: Int,
-        id: String, backwards: Boolean = false, hidden: List<String> = emptyList()): Flow<List<Item>> =
+        id: String, backwards: Boolean = false, hidden: List<String> = emptyList()): Flow<List<Item>> = withCatalog(source) { ready ->
         liveFilteredRows(livePageQuery(CatalogFilter(source = source, category = category, query = query,
-            shelf = shelf, hidden = hidden), limit, backwards = backwards, targetId = id), shelf)
+            shelf = shelf, hidden = hidden, derived = ready), limit, backwards = backwards, targetId = id), shelf)
+    }
 
     fun liveCount(source: String, category: String, query: String, shelf: String,
-        hidden: List<String> = emptyList()): Flow<Int> {
+        hidden: List<String> = emptyList()): Flow<Int> = withCatalog(source) { ready ->
         val sql = liveCountQuery(CatalogFilter(source = source, category = category, query = query,
-            shelf = shelf, hidden = hidden))
-        return when {
+            shelf = shelf, hidden = hidden, derived = ready))
+        when {
             shelf == "favorite" -> liveFavoriteTotal(sql)
-            query.isEmpty() -> derivedTotal(sql)
+            ready && query.isEmpty() -> derivedTotal(sql)
             else -> liveTotal(sql)
         }
     }
@@ -274,18 +301,31 @@ interface LibraryDao {
     suspend fun liveIndex(source: String, id: String, category: String = "", query: String = "",
         shelf: String = "", hidden: List<String> = emptyList()): Int? =
         livePosition(liveIndexQuery(CatalogFilter(source = source, category = category, query = query,
-            shelf = shelf, hidden = hidden), id))
+            shelf = shelf, hidden = hidden, derived = catalogReady(source).first()), id))
 
-    fun liveChannelOrder(source: String, hidden: List<String> = emptyList()): Flow<List<LiveChannelId>> =
-        liveOrder(liveChannelOrderQuery(CatalogFilter(source = source, hidden = hidden))).map { rows ->
+    fun liveChannelOrder(source: String, hidden: List<String> = emptyList()): Flow<List<LiveChannelId>> = withCatalog(source) { ready ->
+        liveOrder(liveChannelOrderQuery(CatalogFilter(source = source, hidden = hidden, derived = ready))).map { rows ->
             // The SQL streams title/id. Preserve the public source/title/id order in O(n),
             // sorting only the (usually single) source keys, when a full order is requested.
             if (source.isNotEmpty()) rows else rows.groupBy { it.source }.toSortedMap().values.flatten()
         }
+    }
 
     @Query("""SELECT * FROM items INDEXED BY sqlite_autoindex_items_1 WHERE id IN (:ids) AND kind='LIVE'
         AND category NOT IN (:hidden) AND (:source='' OR source=:source)""")
     fun liveByIds(source: String, ids: List<String>, hidden: List<String> = emptyList()): Flow<List<Item>>
+
+    @Query("""SELECT i.id,
+        (SELECT COUNT(*) FROM items p WHERE p.source=i.source AND p.kind='LIVE' AND p.rowid<=i.rowid) AS channelNumber,
+        CASE WHEN i.category IN (:hidden) THEN 0 ELSE
+        (SELECT COUNT(*) FROM items p WHERE p.source=i.source AND p.kind='LIVE' AND p.rowid<=i.rowid
+            AND p.category NOT IN (:hidden)) END AS safeChannelNumber
+        FROM items i WHERE i.id IN (:ids) AND i.kind='LIVE' AND (:source='' OR i.source=:source)""")
+    suspend fun providerChannelNumbers(source: String, ids: List<String>, hidden: List<String>): List<StoredChannelNumber>
+
+    @Query("""SELECT * FROM items NOT INDEXED WHERE source=:source AND kind='LIVE'
+        AND category NOT IN (:hidden) ORDER BY rowid LIMIT 1 OFFSET :offset""")
+    suspend fun providerChannel(source: String, offset: Int, hidden: List<String>): Item?
 
     fun homeFeaturesRows(source: String, hidden: List<String> = emptyList()): Flow<List<Item>> =
         catalogRows(shelfRowsQuery(CatalogFilter(source = source, hidden = hidden), 6, "i.rowid DESC") {
@@ -302,13 +342,21 @@ interface LibraryDao {
     fun firstLiveCategory(source: String, hidden: List<String> = emptyList()): Flow<List<Item>>
 
     fun liveCategoryCounts(source: String, hidden: List<String> = emptyList()): Flow<List<LiveCategoryCount>> =
-        catalogCategoryCounts(liveCategoryCountsQuery(source, hidden))
+        categoryCounts("LIVE", source, hidden)
 
-    fun categoryCounts(kind: String, source: String, hidden: List<String> = emptyList()): Flow<List<LiveCategoryCount>> =
-        catalogCategoryCounts(categoryCountsQuery(CatalogFilter(source = source, kind = kind, hidden = hidden)))
+    fun categoryCounts(kind: String, source: String, hidden: List<String> = emptyList()): Flow<List<LiveCategoryCount>> = withCatalog(source) { ready ->
+        val filter = CatalogFilter(source = source, kind = kind, hidden = hidden)
+        if (ready) catalogCategoryCounts(categoryCountsQuery(filter))
+        else fallbackCategoryCounts(filter).map { rows ->
+            rows.groupBy { it.category }.map { (name, groups) -> LiveCategoryCount(name, groups.sumOf { it.count }, searchable(name)) }
+                .sortedWith(compareBy({ categorySortKey(it.category) }, { it.category }))
+        }
+    }
 
-    fun sourceCategoryCounts(source: String, hidden: List<String> = emptyList()): Flow<List<KindCategoryCount>> =
-        catalogKindCategoryCounts(sourceCategoryCountsQuery(source, hidden))
+    fun sourceCategoryCounts(source: String, hidden: List<String> = emptyList()): Flow<List<KindCategoryCount>> = withCatalog(source) { ready ->
+        if (ready) catalogKindCategoryCounts(sourceCategoryCountsQuery(source, hidden))
+        else fallbackCategoryCounts(CatalogFilter(source = source, hidden = hidden))
+    }
 
     fun shelfCount(source: String, kind: String, shelf: String, hidden: List<String> = emptyList()): Flow<Int> =
         catalogCount(shelfCountQuery(CatalogFilter(source = source, kind = kind,
@@ -492,10 +540,10 @@ interface LibraryDao {
         language: String = "",
         minRating: Double = 0.0,
         hidden: List<String> = emptyList(),
-    ): Flow<List<Item>> {
+    ): Flow<List<Item>> = withCatalog(source) { ready ->
         val sql = browseQuery(CatalogFilter(source, kind, category, query, shelf, year, genre,
-            language, minRating, hidden), queryLimit)
-        return if (shelf in listOf("favorite", "list", "resume")) markedCatalogRows(sql)
+            language, minRating, hidden, derived = ready), queryLimit)
+        if (shelf in listOf("favorite", "list", "resume")) markedCatalogRows(sql)
             else catalogRows(sql)
     }
 
@@ -506,27 +554,32 @@ interface LibraryDao {
 
     fun browsePage(source: String, kind: String, category: String, query: String, shelf: String,
         limit: Int, offset: Int, year: String = "", genre: String = "", language: String = "",
-        minRating: Double = 0.0, hidden: List<String> = emptyList()): Flow<List<Item>> {
+        minRating: Double = 0.0, hidden: List<String> = emptyList()): Flow<List<Item>> = withCatalog(source) { ready ->
         val sql = browseQuery(CatalogFilter(source, kind, category, query, shelf, year, genre,
-            language, minRating, hidden), limit, offset)
+            language, minRating, hidden, derived = ready), limit, offset)
         val rows = if (shelf in listOf("favorite", "list", "resume")) markedCatalogRows(sql) else catalogRows(sql)
-        return rows.map { page -> page.map(Item::displayVersion) }
+        rows.map { page -> page.map(Item::displayVersion) }
     }
 
     fun browseTotal(source: String, kind: String, category: String, query: String, shelf: String,
         year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0,
-        hidden: List<String> = emptyList()): Flow<Int> = catalogCount(browseCountQuery(
-            CatalogFilter(source, kind, category, query, shelf, year, genre, language, minRating, hidden)))
+        hidden: List<String> = emptyList()): Flow<Int> = withCatalog(source) { ready ->
+        catalogCount(browseCountQuery(CatalogFilter(source, kind, category, query, shelf, year, genre,
+            language, minRating, hidden, derived = ready)))
+    }
 
     fun browseKinds(source: String, kind: String, category: String, query: String, shelf: String,
         year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0,
-        hidden: List<String> = emptyList()): Flow<List<String>> = catalogKinds(browseKindsQuery(
-            CatalogFilter(source, kind, category, query, shelf, year, genre, language, minRating, hidden)))
+        hidden: List<String> = emptyList()): Flow<List<String>> = withCatalog(source) { ready ->
+        catalogKinds(browseKindsQuery(CatalogFilter(source, kind, category, query, shelf, year, genre,
+            language, minRating, hidden, derived = ready)))
+    }
 
     suspend fun browseIndex(source: String, kind: String, category: String, query: String, shelf: String,
         id: String, year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0,
         hidden: List<String> = emptyList()): Int? = livePosition(browseIndexQuery(
-            CatalogFilter(source, kind, category, query, shelf, year, genre, language, minRating, hidden), id))
+            CatalogFilter(source, kind, category, query, shelf, year, genre, language, minRating, hidden,
+                derived = catalogReady(source).first()), id))
 
     @Query("SELECT * FROM items WHERE id=:id")
     suspend fun item(id: String): Item?
@@ -540,9 +593,23 @@ interface LibraryDao {
         AND (b.phase IN ('normalize','resolve') OR (b.phase='apply' AND items.id>b.cursor))) ORDER BY versionRank""")
     suspend fun versionRows(key: String): List<Item>
 
-    fun categories(kind: String, source: String, hidden: List<String> = emptyList()): Flow<List<String>> =
-        catalogCategories(categoryCountsQuery(CatalogFilter(source = source, kind = kind, hidden = hidden), categoriesOnly = true))
+    fun categories(kind: String, source: String, hidden: List<String> = emptyList()): Flow<List<String>> = withCatalog(source) { ready ->
+        val filter = CatalogFilter(source = source, kind = kind, hidden = hidden)
+        if (ready) catalogCategories(categoryCountsQuery(filter, categoriesOnly = true))
+        else fallbackCategoryCounts(filter).map { rows -> rows.map { it.category }.distinct() }
+    }
 }
+
+/** A sources/state probe switches queries only at readiness transitions, never per batch. */
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+internal fun <T> LibraryDao.withCatalog(source: String, read: (Boolean) -> Flow<T>): Flow<T> =
+    catalogReady(source).distinctUntilChanged().flatMapLatest { read(it) }
+
+internal fun LibraryDao.fallbackCategoryCounts(filter: CatalogFilter): Flow<List<KindCategoryCount>> =
+    originalCategoryCounts(fallbackCategoryCountsQuery(filter)).map { rows ->
+        rows.map { it.copy(searchKey = searchable(it.category)) }
+            .sortedWith(compareBy({ it.kind }, { categorySortKey(it.category) }, { it.category }))
+    }
 
 // A single encrypted undo record; deletion participates in the restore's Room commit.
 @Entity(tableName = "restore_pending")

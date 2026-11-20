@@ -279,7 +279,7 @@ internal fun Home(
     val scopedTotals = totals?.takeIf { it.first == source }?.second
     val counts = listOf("LIVE", "MOVIE", "SERIES").map { scopedTotals?.getOrDefault(it, 0) }
     // Capture whether shelves were part of this composition, before draw mutates the state.
-    val shelvesComposed = shellDrawn
+    val shelvesComposed = shellDrawn || rowsReady
     val shellReported = remember { booleanArrayOf(false) }
     WarmVlcAfterHubFrame(backgroundReady)
     val update by model.update.collectAsStateWithLifecycle()
@@ -290,9 +290,9 @@ internal fun Home(
     val target = if (focused in cards) focused else lastCard
     val returnShelf = remember { focused.takeIf { it == "recent" || it == "resume" } }
     var restored by remember { mutableStateOf(false) }
-    LaunchedEffect(recentResult, resumeResult, shellDrawn) {
+    LaunchedEffect(recentResult, resumeResult, shelvesComposed) {
         if (!restored) {
-            if (returnShelf != null && !shellDrawn) return@LaunchedEffect
+            if (returnShelf != null && !shelvesComposed) return@LaunchedEffect
             if (returnShelf != null && (recentResult == null || resumeResult == null)) return@LaunchedEffect
             when {
                 returnShelf == "recent" && recent.isNotEmpty() -> list.scrollToItem(3)
@@ -384,10 +384,10 @@ internal fun Home(
                 }
             }
         }
-        if (shellDrawn && recent.isNotEmpty()) item(key = "recent-live") {
+        if (shelvesComposed && recent.isNotEmpty()) item(key = "recent-live") {
             HubChannelShelf(model, recent, play, { focused = "recent" })
         }
-        if (shellDrawn && resume.isNotEmpty()) item(key = "resume") {
+        if (shelvesComposed && resume.isNotEmpty()) item(key = "resume") {
             Box(Modifier.padding(top = if (recent.isNotEmpty()) Spacing.cardGap else 0.dp)) {
                 HubResumeShelf(model, resume, open, { focused = "resume" })
             }

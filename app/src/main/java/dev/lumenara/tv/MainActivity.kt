@@ -64,6 +64,7 @@ class MainActivity : ComponentActivity() {
                     reported[0] = true
                     Perf.since("startup_screen", "startup_screen_first_draw")
                     Perf.since("startup_first_frame", "startup_first_frame")
+                    model.onScreenFirstDraw()
                 }
             }) {
                 LumenaraTheme { LibraryScreen(model) {
