@@ -73,6 +73,11 @@ internal fun Setup(model: LibraryModel, sources: List<Source>, openRestore: () -
     var editing by remember { mutableStateOf<String?>(null) }
     val busy by model.busy.collectAsState()
     val notice by model.notice.collectAsState()
+    val stage by model.importProgress.stage.collectAsState()
+    val resolvedAddress by model.importProgress.address.collectAsState()
+    LaunchedEffect(resolvedAddress) {
+        if (resolvedAddress.isNotEmpty()) address = resolvedAddress
+    }
     val first = remember { FocusRequester() }
     LaunchedEffect(method) { withFrameNanos { }; first.requestFocus() }
     BackHandler(method != null) { method = null }
@@ -199,7 +204,8 @@ internal fun Setup(model: LibraryModel, sources: List<Source>, openRestore: () -
                                 )
                             model.job(if (editing == null) "Kaynak eklendi." else "Kaynak güncellendi.") {
                                 val id = editing
-                                if (id == null) model.repo.add(name, spec) else model.repo.editSource(id, name, spec)
+                                if (id == null) model.repo.add(name, spec, model.importProgress)
+                                else model.repo.editSource(id, name, spec, model.importProgress)
                                 editing = null
                                 pass = ""
                                 address = ""
@@ -208,15 +214,17 @@ internal fun Setup(model: LibraryModel, sources: List<Source>, openRestore: () -
                             }
                         },
                     ) {
-                        Text(if (busy) "Kaynak işleniyor…" else if (editing == null) "Bağlantıyı sına ve ekle" else "Bağlantıyı sına ve kaydet")
+                        Text(if (busy) stage.ifEmpty { "İşlem sürüyor…" } else if (editing == null) "Bağlantıyı sına ve ekle" else "Bağlantıyı sına ve kaydet")
                     }
                 }
             }
             if (busy) item {
                 Row(horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {
                     LumenIcon(LumenIcon.Clock, null, tint = LumenColors.textSecondary)
-                    Text("Bağlantı sınanıyor…", style = LumenType.meta)
+                    Text(stage.ifEmpty { "İşlem sürüyor…" }, style = LumenType.meta)
                 }
+                LumenButton(style = LumenButtonStyle.Secondary, onClick = model::cancelJob,
+                    modifier = Modifier.testTag("setup-cancel")) { Text("İptal et") }
             }
             if (notice.isNotEmpty()) item {
                 Row(horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {
@@ -276,8 +284,8 @@ internal fun Setup(model: LibraryModel, sources: List<Source>, openRestore: () -
                             enabled = !busy,
                             onClick = {
                                 model.job("Liste yenilendi.") {
-                                    model.repo.refresh(source.id)
-                                    model.repo.refreshGuides(source.id)
+                                    model.repo.refresh(source.id, model.importProgress)
+                                    model.repo.refreshGuides(source.id, model.importProgress)
                                 }
                             },
                         ) {

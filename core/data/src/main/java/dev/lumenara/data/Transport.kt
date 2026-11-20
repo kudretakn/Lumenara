@@ -5,10 +5,12 @@ import java.io.File
 import java.io.Closeable
 import java.security.DigestInputStream
 import java.security.MessageDigest
+import java.util.ArrayDeque
 import java.util.concurrent.TimeUnit
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
+import okhttp3.HttpUrl.Companion.toHttpUrl
 
 object Transport {
     /** Internal marker, consumed before any bytes reach the server. */
@@ -60,8 +62,13 @@ object Transport {
             .build()
 
     fun <T> read(url: String, allowHttp: Boolean, parse: (java.io.InputStream, String) -> T): T {
+        return read(url, allowHttp, null, parse)
+    }
+
+    internal fun <T> read(url: String, allowHttp: Boolean, calls: ImportCalls?,
+        parse: (java.io.InputStream, String) -> T): T {
         val request = Request.Builder().url(url).get().build()
-        return client(allowHttp).newCall(request).execute().use { response ->
+        return execute(request, allowHttp, calls) { response ->
             validate(response, allowHttp)
             parse(
                 bounded(checkNotNull(response.body).byteStream()),
@@ -70,15 +77,54 @@ object Transport {
         }
     }
 
+    internal fun resolveBase(address: String, allowHttp: Boolean, calls: ImportCalls? = null): String {
+        try {
+            val url = address.trim().toHttpUrl()
+            if (url.username.isNotEmpty() || url.password.isNotEmpty())
+                throw SourceFailure("Sunucu adresindeki kullanıcı bilgilerini kaldırın; kullanıcı adı ve şifre alanlarını kullanın.")
+            if (!url.isHttps && !allowHttp)
+                throw SourceFailure("Bu adres HTTP kullanıyor. HTTP uyumluluğunu açın.")
+            return execute(Request.Builder().url(url).build(), allowHttp, calls) { response ->
+                // Many Xtream hosts have no web page at their root (401/403/404).
+                // Resolve the URL here; the account endpoint validates the provider next.
+                if (response.code in 300..399 || response.code >= 500) validate(response, allowHttp)
+                val resolved = response.request.url.newBuilder()
+                    .username("").password("").query(null).fragment(null)
+                val segments = response.request.url.pathSegments
+                if (segments.last().contains('.')) resolved.removePathSegment(segments.lastIndex)
+                resolved.build().toString().trimEnd('/')
+            }
+        } catch (error: SourceFailure) {
+            throw SourceFailure("Sunucu adresi çözümlenemedi. ${error.message}")
+        } catch (_: Exception) {
+            throw SourceFailure("Sunucu adresi çözümlenemedi. Adresi ve bağlantıyı kontrol edin; HTTP adresi için HTTP uyumluluğunu açın.")
+        }
+    }
+
+    private fun <T> execute(request: Request, allowHttp: Boolean, calls: ImportCalls?,
+        timeoutMillis: Long? = 180_000L, read: (Response) -> T): T {
+        val call = client(allowHttp).newCall(request)
+        if (timeoutMillis != null) call.timeout().timeout(timeoutMillis, TimeUnit.MILLISECONDS)
+        calls?.track(call)
+        try {
+            return call.execute().use(read)
+        } catch (_: java.io.InterruptedIOException) {
+            throw SourceFailure("Sunucu isteği zaman aşımına uğradı. Yeniden deneyin veya başka bir sunucu adresi kullanın.")
+        } finally { calls?.release(call) }
+    }
+
     // Keep large bodies on disk: equality must be known before parsing or opening a DB transaction.
     internal fun download(url: String, allowHttp: Boolean, cache: File, previous: FetchState = FetchState(),
-        limit: Long = 64L * 1024 * 1024, checkActive: () -> Unit = {}): Download {
+        limit: Long = 64L * 1024 * 1024, checkActive: () -> Unit = {}, calls: ImportCalls? = null,
+        progress: (Long) -> Unit = {}, stallWindowMillis: Long = 60_000L,
+        stallMinimumBytes: Long = 64L * 1024): Download {
+        require(stallWindowMillis > 0 && stallMinimumBytes > 0)
         checkActive()
         val request = Request.Builder().url(url).apply {
             if (previous.etag.isNotEmpty()) header("If-None-Match", previous.etag)
             if (previous.modified.isNotEmpty()) header("If-Modified-Since", previous.modified)
         }.build()
-        return client(allowHttp).newCall(request).execute().use { response ->
+        return execute(request, allowHttp, calls, timeoutMillis = null) { response ->
             checkActive()
             if (response.code == 304) {
                 if (previous.digest.isEmpty() || (previous.etag.isEmpty() && previous.modified.isEmpty()))
@@ -87,9 +133,11 @@ object Transport {
                 // cannot establish that those entries still describe the imported catalog.
                 if (previous.finalUrl != response.request.url.toString()) {
                     response.close()
-                    return@use download(url, allowHttp, cache, limit = limit, checkActive = checkActive)
+                    return@execute download(url, allowHttp, cache, limit = limit, checkActive = checkActive,
+                        calls = calls, progress = progress, stallWindowMillis = stallWindowMillis,
+                        stallMinimumBytes = stallMinimumBytes)
                 }
-                return@use Download(null, response.request.url.toString(), previous.copy(
+                return@execute Download(null, response.request.url.toString(), previous.copy(
                     etag = response.header("ETag") ?: previous.etag,
                     modified = response.header("Last-Modified") ?: previous.modified,
                 ), true)
@@ -101,12 +149,23 @@ object Transport {
                 DigestInputStream(bounded(checkNotNull(response.body).byteStream(), limit), digest).use { input ->
                     file.outputStream().buffered().use { output ->
                         val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                        var total = 0L
+                        var reported = 0L
+                        val stall = DownloadStall(stallWindowMillis, stallMinimumBytes)
+                        progress(0)
                         while (true) {
                             checkActive()
                             val count = input.read(buffer)
+                            stall.received(count.coerceAtLeast(0))
                             if (count < 0) break
                             output.write(buffer, 0, count)
+                            total += count
+                            if (total - reported >= 256 * 1024) {
+                                progress(total)
+                                reported = total
+                            }
                         }
+                        progress(total)
                     }
                 }
                 checkActive()
@@ -119,6 +178,31 @@ object Transport {
                 file.delete()
                 throw error
             }
+        }
+    }
+
+    /** Check a rolling window, so an early burst cannot hide a later trickle. */
+    private class DownloadStall(windowMillis: Long, private val minimumBytes: Long) {
+        private val windowNanos = TimeUnit.MILLISECONDS.toNanos(windowMillis)
+        private val started = System.nanoTime()
+        private val arrivals = ArrayDeque<Pair<Long, Int>>()
+        private var bytes = 0L
+
+        fun received(count: Int) {
+            val now = System.nanoTime()
+            while (arrivals.isNotEmpty() && now - arrivals.first.first >= windowNanos) {
+                bytes -= arrivals.removeFirst().second
+            }
+            if (count > 0) {
+                arrivals.addLast(now to count)
+                bytes += count
+            }
+            // Retain only enough recent arrivals to establish the minimum throughput.
+            while (arrivals.isNotEmpty() && bytes - arrivals.first.second >= minimumBytes) {
+                bytes -= arrivals.removeFirst().second
+            }
+            if (now - started >= windowNanos && bytes < minimumBytes)
+                throw java.io.InterruptedIOException("Download stalled")
         }
     }
 

@@ -98,6 +98,10 @@ constructor(private val repository: dagger.Lazy<Repository>, val prefs: Preferen
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val busy = MutableStateFlow(false)
     val notice = MutableStateFlow("")
+    val importProgress = ImportProgress()
+    private var activeJob: Job? = null
+
+    fun cancelJob() { activeJob?.cancel() }
     val update = MutableStateFlow<Update?>(null)
     val watchNextPlayback = MutableStateFlow<WatchNextPlayback?>(null)
     val remoteSearch = MutableStateFlow(0)
@@ -159,11 +163,13 @@ constructor(private val repository: dagger.Lazy<Repository>, val prefs: Preferen
         if (busy.value) return
         busy.value = true
         notice.value = ""
-        viewModelScope.launch {
+        importProgress.reset()
+        activeJob = viewModelScope.launch {
             try {
                 action()
                 notice.value = success
             } catch (e: CancellationException) {
+                notice.value = "İşlem iptal edildi."
                 throw e
             } catch (e: SourceFailure) {
                 notice.value = e.message.orEmpty()

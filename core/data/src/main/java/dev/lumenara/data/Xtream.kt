@@ -8,7 +8,7 @@ import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.json.JSONObject
 
-internal class Xtream(private val spec: SourceSpec) {
+internal class Xtream(private val spec: SourceSpec, private val calls: ImportCalls? = null) {
     private val base = spec.address.trimEnd('/').plus("/").toHttpUrl()
 
     private fun api(action: String = "") =
@@ -26,15 +26,23 @@ internal class Xtream(private val spec: SourceSpec) {
 
     // Xtream validators are unreliable. Download each endpoint once, then compare the whole catalog.
     // Account timestamps/online status are deliberately excluded from the catalog digest.
-    fun prepare(cache: java.io.File, previous: FetchState, checkActive: () -> Unit = {}): Snapshot {
+    fun prepare(cache: java.io.File, previous: FetchState, progress: (String) -> Unit = {},
+        checkActive: () -> Unit = {}): Snapshot {
         checkActive()
+        progress("Hesap doğrulanıyor…")
         val account = account()
         val bodies = linkedMapOf<String, Download>()
         try {
             for (type in listOf("live", "vod", "series")) {
+                val stage = when (type) {
+                    "live" -> "Canlı kanallar indiriliyor"
+                    "vod" -> "Filmler indiriliyor"
+                    else -> "Diziler indiriliyor"
+                }
                 for (action in listOf("get_${type}_categories", if (type == "series") "get_series" else "get_${type}_streams"))
                     bodies[action] = Transport.download(api(action).build().toString(), spec.allowHttp, cache,
-                        checkActive = checkActive)
+                        checkActive = checkActive, calls = calls,
+                        progress = { bytes -> progress("$stage · ${bytes / (1024 * 1024)} MB") })
             }
             val digest = java.security.MessageDigest.getInstance("SHA-256")
             bodies.forEach { (action, body) -> digest.update("$action:${body.state.digest}\n".toByteArray(Charsets.UTF_8)) }
@@ -84,7 +92,7 @@ internal class Xtream(private val spec: SourceSpec) {
             }
         }
         if (snapshot != null) snapshot.bodies.getValue(action).read(parse)
-        else Transport.read(api(action).build().toString(), spec.allowHttp, parse)
+        else Transport.read(api(action).build().toString(), spec.allowHttp, calls, parse)
     }
 
     fun guideAddress(): String =
@@ -98,7 +106,7 @@ internal class Xtream(private val spec: SourceSpec) {
 
     private fun account(): JSONObject {
         val account =
-            Transport.read(api().build().toString(), spec.allowHttp) { input, _ ->
+            Transport.read(api().build().toString(), spec.allowHttp, calls) { input, _ ->
                 JSONObject(input.reader().readText())
             }
         if (account.optJSONObject("user_info")?.optInt("auth") != 1)
@@ -181,7 +189,7 @@ internal class Xtream(private val spec: SourceSpec) {
             val id = address.toHttpUrl().pathSegments.last().substringBeforeLast('.')
             api("get_vod_info").addQueryParameter("vod_id", id).build()
         }
-        return Transport.read(url.toString(), spec.allowHttp) { input, _ ->
+        return Transport.read(url.toString(), spec.allowHttp, calls) { input, _ ->
             val root = JSONObject(input.reader().readText())
             val info = root.optJSONObject("info") ?: root.optJSONObject("movie_data") ?: root
             fun number(vararg names: String) = names.asSequence().map { info.optString(it) }
@@ -199,7 +207,7 @@ internal class Xtream(private val spec: SourceSpec) {
     }
 
     fun episodes(info: String, seriesTitle: String): List<Listing> =
-        Transport.read(info, spec.allowHttp) { input, _ ->
+        Transport.read(info, spec.allowHttp, calls) { input, _ ->
             val seriesId = info.toHttpUrl().queryParameter("series_id").orEmpty()
             val seasons =
                 JSONObject(input.reader().readText()).optJSONObject("episodes")

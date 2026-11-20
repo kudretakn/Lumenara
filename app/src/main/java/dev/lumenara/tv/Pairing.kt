@@ -34,6 +34,25 @@ import okhttp3.tls.HeldCertificate
 
 internal data class Paired(val name: String, val spec: SourceSpec)
 
+internal enum class PairingFailureReason {
+    VPN_ACTIVE,
+    NO_NETWORK,
+    NO_LOCAL_IPV4,
+    OTHER,
+}
+
+internal fun pairingFailureMessage(reason: PairingFailureReason): String =
+    when (reason) {
+        PairingFailureReason.VPN_ACTIVE -> "VPN açık. Telefonla eklemek için VPN'i kapatın."
+        PairingFailureReason.NO_NETWORK -> "Ağ bağlantısı yok."
+        PairingFailureReason.NO_LOCAL_IPV4 ->
+            "Yerel IPv4 adresi bulunamadı. TV'yi Wi-Fi ya da kabloyla aynı ağa bağlayın."
+        PairingFailureReason.OTHER -> "Oturum açılamadı. TV ve telefonu aynı yerel ağa bağlayın."
+    }
+
+internal class PairingCreationException(val reason: PairingFailureReason) :
+    IllegalStateException(pairingFailureMessage(reason))
+
 internal class PairSession(address: Inet4Address) : Closeable {
     private val host = address.hostAddress!!
     private val cert =
@@ -218,17 +237,20 @@ internal class PairSession(address: Inet4Address) : Closeable {
             val cm = context.getSystemService(ConnectivityManager::class.java)
             val network = cm.activeNetwork
             val caps = cm.getNetworkCapabilities(network)
-            require(
-                caps != null &&
-                    (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+            if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true)
+                throw PairingCreationException(PairingFailureReason.VPN_ACTIVE)
+            if (
+                caps == null ||
+                    !(caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
                         caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))
-            )
+            ) throw PairingCreationException(PairingFailureReason.NO_NETWORK)
             val ip =
                 cm.getLinkProperties(network)
                     ?.linkAddresses
                     ?.map { it.address }
                     ?.filterIsInstance<Inet4Address>()
-                    ?.firstOrNull { !it.isLoopbackAddress } ?: error("Yerel adres yok")
+                    ?.firstOrNull { !it.isLoopbackAddress }
+                    ?: throw PairingCreationException(PairingFailureReason.NO_LOCAL_IPV4)
             return PairSession(ip)
         }
     }
@@ -258,8 +280,10 @@ internal fun PairPanel(model: LibraryModel, finish: () -> Unit) {
             } else status = "Oturum kapandı. Yeni bir kod için yeniden açın."
         } catch (e: CancellationException) {
             throw e
+        } catch (e: PairingCreationException) {
+            status = pairingFailureMessage(e.reason)
         } catch (_: Exception) {
-            status = "Oturum açılamadı. TV ve telefonu aynı yerel ağa bağlayın."
+            status = pairingFailureMessage(PairingFailureReason.OTHER)
         } finally {
             opened?.close()
             session = null
