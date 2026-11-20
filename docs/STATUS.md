@@ -1,12 +1,12 @@
 # Durum
 
-Son güncelleme: 20 Kasım 2026 · Oracle sunucusu (BNY oturumu); PR #34'te kaynak ekleme takılması düzeltmesi
+Son güncelleme: 21 Kasım 2026 · Windows oturumu; v0.5.7 yayını (kaynak ekleme takılması düzeltmesi, PR #34)
 
 > **Başlangıç:** `git fetch --all --prune && git switch main && git pull`, sonra bu dosyayı ve `CLAUDE.md`'yi oku.
 > **Çalışma düzeni (18 Kasım 2026, kullanıcı kararı):** sen ekip liderisin. Yalnız **Codex** ajanları kullan (`gpt-6-luna` basit, `gpt-6.1-sol` orta/zor, `gpt-6-astra` çok zor); Claude alt ajanı açma (inceleme ve log analizi de Codex'e). Kendin kod yazma (yalnız birleştirme çakışması ve tek satırlık mekanik düzeltme). Kullanıcıyla Türkçe, kısa konuş; commit ve PR metinleri İngilizce.
 
 ## Şu an
-- **Son sürüm v0.5.5** (18 Kasım 03:24, PR #29) ve **TV'de kurulu** (03:25). Açık iş PR'ı yok.
+- **Son sürüm v0.5.7** (21 Kasım; kaynak ekleme takılması düzeltmesi, PR #34). v0.5.6 (18 Kasım, PR #32): şema 13, katalogdan türetilen veriler yenilemede hesaplanıyor, ızgara titremesi giderildi. 0.5.6 ve 0.5.7 için TV ölçümü henüz yok; aşağıdaki ölçümler 0.5.5'e ait.
 - 0.5.5 TV ölçümü (Mi Box 4, 39.682 içerik):
   - Güncelleme sonrası ilk açılış: `migration_11_12` 16 ms, `room_open` 212 ms, ilk kare 0,82 sn (0.5.4: 57 sn boş ekran). Sürüm anahtarı doldurma arka planda ~80 parti × 0,3–2,4 sn ≈ 45 sn, ekranı bekletmedi.
   - Normal soğuk açılış: ilk kare 0,69 sn (0.5.4: 2,5), son kanallar 0,28 sn (1,9), devam 0,30 sn (3,0), **Hub tam çizim 3,2 sn** (4,6), **sayımlar 2,6 sn** (1,3), **ilk 12 sn CPU ≈ 23–24 sn** (0.5.4: ~16 sn).

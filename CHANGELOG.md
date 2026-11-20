@@ -1,5 +1,13 @@
 # Lumenara sürüm kaydı
 
+## 0.5.7 · 21 Kasım 2026
+
+- Kaynak eklerken "Kaynak işleniyor" ekranında takılma giderildi: Xtream sunucu adresi eklerken bir kez çözülüyor (yönlendirmeler izleniyor, kısa bağlantılar ve get.php/player_api.php gibi ekler atılıyor) ve formda gösteriliyor.
+- İçe aktarma aşamaları ve MB/öğe ilerlemesi gösteriliyor; kilit beklenirken "Sırada bekleniyor…" yazıyor; iptal düğmesi yarım kaynak bırakmıyor.
+- API okumalarına süre sınırı, büyük indirmelerde takılma algılama (60 sn'de 64 KB altı) ve 15 dakikalık toplam süre sınırı eklendi. Oynatma bağlantıları etkilenmiyor.
+- Arka plan doldurma işi kullanıcının içe aktarmasına yol veriyor; güncelleme kontrolü ağ beklerken kilidi tutmuyor.
+- Eşleştirme paneli VPN açık / ağ yok / yerel IPv4 yok durumlarını ayırıyor.
+
 ## 0.5.6 · 18 Kasım 2026
 
 - Açılış hızı: katalogdan türetilen her şey (temiz başlıklar, sıralama ve arama anahtarları, sürüm grupları, +18 sınıfı, kategori sırası ve sayımları, Hub toplamları, kanal numaraları) liste yenilenirken bir kez hesaplanıp saklanıyor; açılışta yalnız hazır sonuç okunuyor. Veritabanı şeması 13 (hafif geçiş, mevcut satırlar arka planda doldurulur).
