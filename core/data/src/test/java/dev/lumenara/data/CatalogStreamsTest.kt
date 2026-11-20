@@ -51,6 +51,36 @@ class CatalogStreamsTest {
         assertEquals(1, storedReads)
     }
 
+    @Test fun catalogReadWaitsForReadinessAndRealDatabaseEmissionOnBothPaths() = runTest {
+        for (done in listOf(false, true)) {
+            for (expected in listOf(emptyList(), listOf("real database row"))) {
+                val readiness = MutableSharedFlow<Boolean>(replay = 1)
+                val database = MutableSharedFlow<List<String>>(replay = 1)
+                var selectedPath: Boolean? = null
+                val dao = java.lang.reflect.Proxy.newProxyInstance(LibraryDao::class.java.classLoader,
+                    arrayOf(LibraryDao::class.java)) { _, method, args ->
+                    check(method.name == "catalogReady")
+                    assertEquals("source", args!![0])
+                    readiness
+                } as LibraryDao
+                val first = async {
+                    dao.withCatalog("source") { ready ->
+                        flow { selectedPath = ready; emitAll(database) }
+                    }.first()
+                }
+                runCurrent()
+                assertNull(selectedPath)
+                assertFalse(first.isCompleted)
+                readiness.emit(done)
+                runCurrent()
+                assertEquals(done, selectedPath)
+                assertFalse("Readiness alone must not emit an empty result", first.isCompleted)
+                database.emit(expected)
+                assertEquals(expected, first.await())
+            }
+        }
+    }
+
     private class Catalog {
         val names = MutableStateFlow(listOf("Film", "For Adults"))
         val showAdult = MutableStateFlow(false)
