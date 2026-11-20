@@ -80,6 +80,7 @@ internal fun SettingsScreen(
     val settingsScope = rememberCoroutineScope()
     val context = LocalContext.current
     val busy by model.busy.collectAsStateWithLifecycle()
+    val stage by model.importProgress.stage.collectAsStateWithLifecycle()
     val notice by model.notice.collectAsStateWithLifecycle()
     var token by remember { mutableStateOf("") }
     var configured by remember { mutableStateOf(model.repo.tmdbConfigured()) }
@@ -178,6 +179,11 @@ internal fun SettingsScreen(
     Column(Modifier.fillMaxSize()) {
         Text("Ayarlar", style = LumenType.headline, color = LumenColors.textPrimary)
         Spacer(Modifier.height(Spacing.titleGap))
+        if (busy) Row(horizontalArrangement = Arrangement.spacedBy(Spacing.cardGap), verticalAlignment = Alignment.CenterVertically) {
+            Text(stage.ifEmpty { "İşlem sürüyor…" }, style = LumenType.meta)
+            LumenButton(style = LumenButtonStyle.Secondary, onClick = model::cancelJob,
+                modifier = Modifier.testTag("settings-cancel")) { Text("İptal et") }
+        }
         Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(Spacing.titleGap)) {
             Column(Modifier.width(280.dp), verticalArrangement = Arrangement.spacedBy(Spacing.iconText)) {
                 groups.forEach { group ->
@@ -279,8 +285,8 @@ internal fun SettingsScreen(
                             onClick = {
                                 model.job("Kaynaklar ve rehberler yenilendi.") {
                                     sources.forEach {
-                                        model.repo.refresh(it.id)
-                                        model.repo.refreshGuides(it.id)
+                                        model.repo.refresh(it.id, model.importProgress)
+                                        model.repo.refreshGuides(it.id, model.importProgress)
                                     }
                                 }
                             },

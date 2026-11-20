@@ -384,6 +384,7 @@ class Repository private constructor(private val context: Context) {
     fun tmdbBuiltIn() = metadata.hasBuiltInToken
 
     private val lock = Mutex()
+    private val imports = SourceImports(lock)
     private var versionBackfillJob: kotlinx.coroutines.Job? = null
 
     /** Called only after the UI's first frame gate. Each commit leaves room for navigation. */
@@ -396,12 +397,12 @@ class Repository private constructor(private val context: Context) {
                     val backfill = VersionBackfill(db)
                     val derived = CatalogDerivedBackfill(db)
                     while (currentCoroutineContext().isActive) {
-                        if (!RefreshGate.foreground || RefreshGate.playing) {
+                        if (!RefreshGate.foreground || RefreshGate.playing || imports.userWaiting) {
                             delay(500)
                             continue
                         }
                         val more = lock.withLock {
-                            if (backfill.runBatch()) true else {
+                            if (imports.userWaiting) true else if (backfill.runBatch()) true else {
                                 val source = db.derived().pendingSource()
                                 if (source == null) false else { derived.runBatch(source); true }
                             }
@@ -419,15 +420,12 @@ class Repository private constructor(private val context: Context) {
         }
     }
 
-    // Hold the same lock through networking and cache writes, so an in-flight check
-    // cannot cross a backup/restore snapshot. Automatic checks skip a busy repository.
+    // Updater state is atomically edited in DataStore and excluded from backup/restore.
+    // Its network requests must not delay source imports.
     suspend fun checkUpdate(repository: String, current: String, automatic: Boolean = false): Update? =
         withContext(Dispatchers.IO) {
-            if (automatic) {
-                if (!lock.tryLock()) return@withContext null
-            } else lock.lock()
-            try { Updates.check(repository, current, preferences, automatic) }
-            finally { lock.unlock() }
+            if (automatic && (lock.isLocked || imports.userWaiting)) return@withContext null
+            Updates.check(repository, current, preferences, automatic)
         }
 
     // Queue the launch read with catalog commits, before a later import can
@@ -470,30 +468,34 @@ class Repository private constructor(private val context: Context) {
                 }
     }
 
-    suspend fun add(name: String, spec: SourceSpec) =
+    suspend fun add(name: String, spec: SourceSpec, progress: ImportProgress? = null) =
         withContext(Dispatchers.IO) {
             require(name.isNotBlank()) { "Kaynak adını girin." }
-            lock.withLock {
-                val source =
-                    Source(
-                        UUID.randomUUID().toString(),
-                        name.trim(),
-                        vault.encrypt(spec.encode()),
-                        spec.allowHttp,
-                        0,
-                        0,
-                    )
-                import(source, spec)
+            val id = UUID.randomUUID().toString()
+            // Cleanup runs under the same lock, including cancellation after the DB commit.
+            imports.run(progress, onFailure = { library.deleteSource(id) }) {
+                val resolved = resolveSource(spec, progress)
+                val source = Source(id, name.trim(), vault.encrypt(resolved.encode()), resolved.allowHttp, 0, 0)
+                import(source, resolved, progress = progress)
             }
         }
 
-    suspend fun refresh(id: String) =
+    suspend fun refresh(id: String, progress: ImportProgress? = null) =
         withContext(Dispatchers.IO) {
-            lock.withLock {
-                val source = library.source(id) ?: return@withLock
-                import(source, SourceSpec.decode(vault.decrypt(source.endpoint)))
+            imports.run(progress) {
+                val source = library.source(id) ?: return@run
+                import(source, SourceSpec.decode(vault.decrypt(source.endpoint)), progress = progress)
             }
         }
+
+    private suspend fun resolveSource(spec: SourceSpec, progress: ImportProgress?): SourceSpec {
+        if (spec.user.isEmpty()) return spec
+        progress?.report("Sunucu adresi çözümleniyor…")
+        val address = Transport.resolveBase(spec.address, spec.allowHttp, currentCoroutineContext()[ImportCalls])
+        currentCoroutineContext().ensureActive()
+        progress?.resolved(address)
+        return spec.copy(address = address)
+    }
 
     suspend fun sourceSpec(id: String): SourceSpec = withContext(Dispatchers.IO) {
         SourceSpec.decode(vault.decrypt(checkNotNull(library.source(id)).endpoint))
@@ -512,12 +514,13 @@ class Repository private constructor(private val context: Context) {
         }
     }
 
-    suspend fun editSource(id: String, name: String, spec: SourceSpec) = withContext(Dispatchers.IO) {
+    suspend fun editSource(id: String, name: String, spec: SourceSpec, progress: ImportProgress? = null) = withContext(Dispatchers.IO) {
         require(name.isNotBlank()) { "Kaynak adını girin." }
-        lock.withLock {
+        imports.run(progress) {
             val old = library.source(id) ?: throw SourceFailure("Kaynak bulunamadı.")
-            import(old.copy(name = name.trim(), endpoint = vault.encrypt(spec.encode()), allowHttp = spec.allowHttp), spec,
-                force = sourceSpec(id) != spec)
+            val resolved = resolveSource(spec, progress)
+            import(old.copy(name = name.trim(), endpoint = vault.encrypt(resolved.encode()), allowHttp = resolved.allowHttp), resolved,
+                force = sourceSpec(id) != resolved, progress = progress)
         }
     }
 
@@ -541,10 +544,11 @@ class Repository private constructor(private val context: Context) {
             }
         }
 
-    suspend fun refreshGuides(sourceId: String) =
+    suspend fun refreshGuides(sourceId: String, progress: ImportProgress? = null) =
         withContext(Dispatchers.IO) {
-            lock.withLock {
-                val source = library.source(sourceId) ?: return@withLock
+            imports.run(progress) {
+                val source = library.source(sourceId) ?: return@run
+                progress?.report("Rehber indiriliyor…")
                 for (feed in guide.feeds(sourceId)) syncGuide(source, feed)
             }
         }
@@ -553,7 +557,8 @@ class Repository private constructor(private val context: Context) {
         val key = "feed_${feed.id}"
         val job = currentCoroutineContext()
         Transport.download(vault.decrypt(feed.encryptedAddress), source.allowHttp, context.cacheDir,
-            preferences.fetchState(key), limit = 256L * 1024 * 1024, checkActive = { job.ensureActive() }).use { downloaded ->
+            preferences.fetchState(key), limit = 256L * 1024 * 1024, checkActive = { job.ensureActive() },
+            calls = job[ImportCalls]).use { downloaded ->
             job.ensureActive()
             val now = System.currentTimeMillis()
             val changed = downloaded.importIfChanged {
@@ -578,32 +583,36 @@ class Repository private constructor(private val context: Context) {
         }
     }
 
-    private suspend fun import(source: Source, spec: SourceSpec, updatePreferences: Boolean = true, force: Boolean = false) {
+    private suspend fun import(source: Source, spec: SourceSpec, updatePreferences: Boolean = true, force: Boolean = false,
+        progress: ImportProgress? = null) {
         val token = maxOf(System.currentTimeMillis(), source.refreshed + 1)
         val key = "source_${source.id}"
         val identity = contentKey("catalog", spec.encode())
         val previous = if (source.refreshed > 0 && !force &&
             preferences.text("catalog_identity_${source.id}").first() == identity) preferences.fetchState(key) else FetchState()
-        val xtream = if (spec.user.isNotEmpty()) Xtream(spec) else null
+        val job = currentCoroutineContext()
+        val xtream = if (spec.user.isNotEmpty()) Xtream(spec, job[ImportCalls]) else null
         var downloaded: Download? = null
         var snapshot: Xtream.Snapshot? = null
-        val job = currentCoroutineContext()
         try {
-            if (xtream != null) snapshot = xtream.prepare(context.cacheDir, previous) { job.ensureActive() }
+            if (xtream != null) snapshot = xtream.prepare(context.cacheDir, previous,
+                progress = { progress?.report(it) }) { job.ensureActive() }
             else if (!spec.address.startsWith("content://"))
                 downloaded = Transport.download(spec.address, spec.allowHttp, context.cacheDir, previous,
-                    checkActive = { job.ensureActive() })
+                    checkActive = { job.ensureActive() }, calls = job[ImportCalls],
+                    progress = { progress?.report("Liste indiriliyor · ${it / (1024 * 1024)} MB") })
             job.ensureActive()
             val body = downloaded
             val catalog = snapshot
             val state = catalog?.state ?: body?.state
             val changed = if (body != null) body.importIfChanged {
-                importChanged(source, spec, token, xtream, catalog, body, updatePreferences)
+                importChanged(source, spec, token, xtream, catalog, body, updatePreferences, progress)
             } else if (catalog?.unchanged != true) {
-                importChanged(source, spec, token, xtream, catalog, body, updatePreferences)
+                importChanged(source, spec, token, xtream, catalog, body, updatePreferences, progress)
                 true
             } else false
             if (!changed) {
+                progress?.report("Katalog düzenleniyor…")
                 db.withTransaction {
                     prepareCatalog(source.id)
                     library.save(source.copy(refreshed = token))
@@ -623,7 +632,8 @@ class Repository private constructor(private val context: Context) {
     }
 
     private suspend fun importChanged(source: Source, spec: SourceSpec, token: Long,
-        xtream: Xtream?, snapshot: Xtream.Snapshot?, downloaded: Download?, carryPreferences: Boolean) {
+        xtream: Xtream?, snapshot: Xtream.Snapshot?, downloaded: Download?, carryPreferences: Boolean,
+        progress: ImportProgress? = null) {
         val staged = CatalogStage(context.cacheDir, source.id, token)
         val job = currentCoroutineContext()
         val carryStart = android.os.SystemClock.elapsedRealtime()
@@ -631,10 +641,12 @@ class Repository private constructor(private val context: Context) {
         val incoming = ArrayList<CarryRow>()
         val series = ArrayList<Item>()
         try {
+            progress?.report("İçerikler hazırlanıyor…")
             staged.write { append ->
                 fun stage(row: Item) {
                     append(row)
                     incoming += row.carryRow()
+                    if (incoming.size % 250 == 0) progress?.report("İçerikler hazırlanıyor · ${importCount(incoming.size)}")
                     if (row.kind == "SERIES") series += row
                 }
                 val grouper = SeriesGrouper()
@@ -695,6 +707,8 @@ class Repository private constructor(private val context: Context) {
                 // overwrite refreshed metadata in a later migration batch.
                 db.versionBackfill().discardSource(source.id)
                 library.save(source)
+                var imported = 0
+                progress?.report("İçe aktarılıyor · 0 / ${importCount(incoming.size)}")
                 staged.read { batch ->
                     job.ensureActive()
                     // Keep late metadata matches on unchanged streams, even if Android evicted
@@ -708,6 +722,8 @@ class Repository private constructor(private val context: Context) {
                         retained.withTmdbMatch(metadata.cachedMatch(retained))
                             .copy(versionKey = row.id, displayTitle = row.title, displayYear = row.year)
                     })
+                    imported += batch.size
+                    progress?.report("İçe aktarılıyor · ${importCount(imported)} / ${importCount(incoming.size)}")
                 }
                 val preferenceReferences = preferences.carryReferences(old)
                 val excluded = context.getSharedPreferences("watch_next_state", Context.MODE_PRIVATE)
@@ -724,6 +740,7 @@ class Repository private constructor(private val context: Context) {
                 else library.prune(source.id, token)
                 library.orphans(source.id)
                 protected.toList().chunked(900).forEach { library.isolateCarryRows(it, token - 1) }
+                progress?.report("Katalog düzenleniyor…")
                 prepareCatalog(source.id, token)
                 if (carryPreferences && matches.ids.isNotEmpty()) {
                     val current = library.carryRows(source.id)
