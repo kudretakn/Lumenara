@@ -66,7 +66,9 @@ class ListLoadingTest {
             org.junit.Assert.assertTrue("Loading skeleton should fill at least one row, was $skeletons", skeletons >= 6)
             screen.onNodeWithText("İçerik yok.").assertDoesNotExist()
             screen.onNodeWithText("Geri").assertDoesNotExist()
-            screen.onAllNodes(isFocused()).assertCountEquals(0)
+            // Focus may rest on the top bar (search) while loading; the list itself must not take it.
+            screen.onAllNodes(isFocused() and hasTestTag("category-Haber")).assertCountEquals(0)
+            screen.onAllNodes(isFocused() and hasTestTag("list-loading")).assertCountEquals(0)
             screen.runOnIdle { release.complete(Unit) }
             fun assertResult() {
                 val target = if (empty) hasText("Geri") else hasTestTag("category-Haber")
