@@ -164,7 +164,7 @@ class BaselineProfileGenerator {
             setFieldText("search-input", "BP Film A")
             // The container exists before debounce/query completion; require a real result.
             requireNode(By.res("search-results").hasDescendant(
-                By.clickable(true).desc(Pattern.compile("BP Film A .+"))
+                By.desc(Pattern.compile("BP Film A .+"))
             ), "Search results for BP Film A")
             device.waitForIdle()
             returnToHub()
