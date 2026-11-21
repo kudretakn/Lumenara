@@ -15,6 +15,9 @@ import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.Until
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.security.KeyStore
+import javax.net.ssl.KeyManagerFactory
+import javax.net.ssl.SSLContext
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.regex.Pattern
 import okhttp3.mockwebserver.Dispatcher
@@ -37,6 +40,7 @@ class BaselineProfileGenerator {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val device = UiDevice.getInstance(instrumentation)
     private val server = MockWebServer()
+    private val artworkServer = MockWebServer()
     private val images = AtomicInteger()
     private val streams = AtomicInteger()
 
@@ -46,6 +50,18 @@ class BaselineProfileGenerator {
             "Baseline profiles must run on the local emulator, never the TV."
         }
         server.start()
+        // Repository deliberately drops non-HTTPS logos even for HTTP-compatible sources.
+        // Trust this test certificate only in the target's nonMinifiedRelease resources.
+        val password = "baseline-fixture".toCharArray()
+        val keys = KeyStore.getInstance("PKCS12").apply {
+            instrumentation.context.assets.open("baseline-artwork.p12").use { load(it, password) }
+        }
+        val managers = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm()).apply {
+            init(keys, password)
+        }
+        val tls = SSLContext.getInstance("TLS").apply { init(managers.keyManagers, null, null) }
+        artworkServer.useHttps(tls.socketFactory, false)
+        artworkServer.start()
         val playlist = playlist()
         val bitmap = Bitmap.createBitmap(120, 180, Bitmap.Config.ARGB_8888)
         bitmap.eraseColor(0xff425b78.toInt())
@@ -58,7 +74,15 @@ class BaselineProfileGenerator {
             override fun dispatch(request: RecordedRequest): MockResponse = when {
                 request.path == "/list" -> MockResponse()
                     .setHeader("Content-Type", "audio/x-mpegurl").setBody(playlist)
-                request.path.orEmpty().startsWith("/images/") -> {
+                else -> {
+                    streams.incrementAndGet()
+                    MockResponse().setResponseCode(404)
+                }
+            }
+        }
+        artworkServer.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when {
+                request.requestUrl?.encodedPath.orEmpty().startsWith("/images/") -> {
                     images.incrementAndGet()
                     MockResponse().setHeader("Content-Type", "image/png")
                         .setBody(Buffer().write(poster))
@@ -92,7 +116,7 @@ class BaselineProfileGenerator {
         try {
             check(streams.get() == 0) { "Browsing unexpectedly requested ${streams.get()} streams" }
         } finally {
-            server.shutdown()
+            try { artworkServer.shutdown() } finally { server.shutdown() }
         }
     }
 
@@ -167,20 +191,24 @@ class BaselineProfileGenerator {
                 By.desc(Pattern.compile("BP Film A .+"))
             ), "Search results for BP Film A")
             device.waitForIdle()
+            // Wait while artwork is visible, not after returning to a different screen.
+            // UI resource IDs also exist when Repository supplies no image model.
+            requireArtwork()
             returnToHub()
 
             openHub("Ayarlar")
             requireNode(By.res("settings-list"), "Settings content")
             device.waitForIdle()
             returnToHub()
-            if (images.get() == 0) fail("No local artwork requested; Coil was not exercised")
+            if (images.get() == 0) fail("No fixture HTTPS artwork requested; Coil was not exercised")
         }
     }
 
     private fun playlist(): String = buildString {
         append("#EXTM3U\n")
         fun entry(group: String, title: String, path: String) {
-            append("#EXTINF:-1 group-title=\"$group\" tvg-logo=\"${server.url("/images/$path.png")}\",$title\n")
+            // tvg-logo is not resolved against the playlist base; it must be absolute HTTPS.
+            append("#EXTINF:-1 group-title=\"$group\" tvg-logo=\"${artworkServer.url("/images/$path.png")}\",$title\n")
             append("${server.url("/$path")}\n")
         }
         listOf("Spor", "Haber", "Muzik").forEachIndexed { category, name ->
@@ -198,6 +226,19 @@ class BaselineProfileGenerator {
                 entry("BP Diziler", "BP Yolculuk S${season + 1}E${episode + 1}", "series/$season/$episode.mp4")
             }
         }
+    }
+
+    private fun requireArtwork() {
+        val deadline = SystemClock.uptimeMillis() + timeout
+        while (SystemClock.uptimeMillis() < deadline) {
+            if (images.get() > 0) return
+            SystemClock.sleep(100)
+        }
+        fail("No local artwork requested; Coil was not exercised. " +
+            "Expected absolute tvg-logo URLs under ${artworkServer.url("/images/")}; " +
+            "HTTPS requests=${artworkServer.requestCount}, HTTP requests=${server.requestCount}. " +
+            "Repository keeps only https:// logos regardless of source HTTP opt-in; " +
+            "verify the nonMinifiedRelease localhost certificate trust and TLS handshake")
     }
 
     private fun addFixture(address: String) {

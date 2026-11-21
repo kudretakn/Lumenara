@@ -49,7 +49,27 @@ MockWebServer serves 3 live categories with 96 channels each (24 rows at four
 columns), 3 movie categories with 96 movies each, and one M3U series with 2 seasons
 of 8 episodes. Every item has a distinct local `tvg-logo` PNG URL, including movies,
 so Coil executes real fetch/cache/decode paths without external artwork services.
-The server remains alive throughout each test's collection iterations.
+The servers remain alive throughout each test's collection iterations.
+
+Artwork uses a separate HTTPS MockWebServer on the emulator itself (`localhost`,
+not the host machine's `10.0.2.2`). Playlist/stream URLs retain their HTTP server
+and Setup's per-source HTTP opt-in. That opt-in permits image transport too, but
+`Repository.toItem` deliberately persists only `https://` logos, so HTTP artwork
+is discarded before Coil. `Playlist` reads `tvg-logo` (not `logo`) verbatim; relative
+artwork URLs are not resolved against the playlist base. Use absolute HTTPS URLs.
+The HTTPS dispatcher's `/images/` counter covers the actual artwork port/path;
+the generator waits for a request while search results are still visible.
+
+`baselineprofile/src/main/assets/baseline-artwork.p12` is a public, test-only TLS
+identity (password `baseline-fixture`), valid 2020-2119, with localhost/loopback SANs.
+Its exported certificate is trusted for `localhost` only by the
+`app/src/nonMinifiedRelease/` network security overlay. No trust-all client,
+hostname-verifier override, device CA installation or production import change is
+needed. Normal debug/release variants contain neither the trust configuration nor
+the certificate; the private test key is packaged only in the generator APK.
+Regenerate both identity and certificate together if replacing this fixture.
+Visible images use the real shared Coil loader after the existing FirstDrawGate;
+coverage does not depend on speculative prefetch or device RAM classification.
 
 Hub only has recent-channel and continue-watching shelves; a clean catalog has
 neither. `app/src/nonMinifiedRelease/` therefore contains a collection-only receiver

@@ -8,6 +8,7 @@ local.properties
 *.keystore
 signing.properties
 *.p12
+!baselineprofile/src/main/assets/baseline-artwork.p12
 *.dpapi
 dist/
 work/

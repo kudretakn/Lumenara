@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Preserve the main manifest's cleartext policy; source opt-in is enforced in Transport. -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system"/>
+        </trust-anchors>
+    </base-config>
+    <!-- Collection-only trust, restricted to the on-device MockWebServer hostname. -->
+    <domain-config>
+        <domain>localhost</domain>
+        <trust-anchors>
+            <certificates src="system"/>
+            <certificates src="@raw/baseline_artwork_certificate"/>
+        </trust-anchors>
+    </domain-config>
+</network-security-config>
