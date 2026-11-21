@@ -73,21 +73,22 @@ class HubFirstDrawTest {
             }
             screen.waitUntil(10_000) { gateAtFirstDraw.get() != null }
             assertEquals("Cached shelves must be in the first populated draw", true, gateAtFirstDraw.get())
-            val tile = "live-channel-${channel.id}"
-            screen.onNodeWithTag(tile).performSemanticsAction(SemanticsActions.RequestFocus)
-            screen.waitUntil(10_000) {
-                screen.onAllNodes(hasTestTag(tile) and isFocused()).fetchSemanticsNodes().isNotEmpty()
-            }
-            // TV Material Surface handles remote OK; performClick injects a touch tap.
-            screen.onNodeWithTag(tile).assertIsFocused()
-            screen.ok()
-            screen.waitUntil(10_000) {
-                screen.onAllNodesWithText("Return to cached Hub").fetchSemanticsNodes().isNotEmpty()
-            }
-            screen.onNodeWithText("Return to cached Hub").performSemanticsAction(SemanticsActions.RequestFocus)
-            screen.ok()
-            screen.waitUntil(10_000) {
-                screen.onAllNodes(hasTestTag(tile) and isFocused()).fetchSemanticsNodes().isNotEmpty()
+            for (tile in listOf(hasTestTag("live-channel-${channel.id}"), hasContentDescription(movie.title))) {
+                screen.onNode(tile).performSemanticsAction(SemanticsActions.RequestFocus)
+                screen.waitUntil(10_000) {
+                    screen.onAllNodes(tile and isFocused()).fetchSemanticsNodes().isNotEmpty()
+                }
+                // TV Material Surface handles remote OK; performClick injects a touch tap.
+                screen.onNode(tile).assertIsFocused()
+                screen.ok()
+                screen.waitUntil(10_000) {
+                    screen.onAllNodesWithText("Return to cached Hub").fetchSemanticsNodes().isNotEmpty()
+                }
+                screen.onNodeWithText("Return to cached Hub").performSemanticsAction(SemanticsActions.RequestFocus)
+                screen.ok()
+                screen.waitUntil(10_000) {
+                    screen.onAllNodes(tile and isFocused()).fetchSemanticsNodes().isNotEmpty()
+                }
             }
         } finally {
             screen.runOnUiThread {

@@ -5,6 +5,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.*
@@ -68,6 +70,30 @@ private fun HubShelfTile(
     )
 }
 
+/** Reveal captions as well as artwork, once per shelf entry, never on LEFT/RIGHT. */
+@Composable
+private fun HubShelf(title: String, tag: String, content: LazyListScope.() -> Unit) {
+    val requester = remember { BringIntoViewRequester() }
+    var hasFocus by remember { mutableStateOf(false) }
+    LaunchedEffect(hasFocus) {
+        if (hasFocus) requester.bringIntoView()
+    }
+    // LibraryScreen already insets this viewport by the TV safe area. Request the
+    // complete, unscaled shelf bounds so every visible tile's caption fits there.
+    Column(Modifier.bringIntoViewRequester(requester),
+        verticalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
+        Text(title, style = LumenType.caption, color = LumenColors.textSecondary)
+        LazyRow(
+            Modifier.testTag(tag).onFocusChanged { hasFocus = it.hasFocus }
+                .focusRestorer().focusGroup(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            // Include the unchanged focus scale and ring in the revealed shelf.
+            contentPadding = PaddingValues(Spacing.unit),
+            content = content,
+        )
+    }
+}
+
 @Composable
 private fun HubChannelShelf(
     model: LibraryModel,
@@ -83,34 +109,27 @@ private fun HubChannelShelf(
         if (drawn) model.repo.liveNow(rows, now) else flowOf(emptyMap())
     }.collectAsStateWithLifecycle(emptyMap())
     LaunchedEffect(Unit) { wallClockTicks(30_000).collect { now = it } }
-    Column(verticalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
-        Text("SON KANAL", style = LumenType.caption, color = LumenColors.textSecondary)
-        LazyRow(
-            Modifier.testTag("channel-shelf-Son kanal").focusRestorer().focusGroup(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            // Leave room for the unchanged focus scale and ring at the row edges.
-            contentPadding = PaddingValues(Spacing.unit),
-        ) {
-            items(rows, key = { it.id }) { item ->
-                val current = programmes[item.id]
-                val logo by produceState<String?>(null, item.id, item.logo) {
-                    model.awaitFirstDraw()
-                    value = model.repo.poster(item)
+    HubShelf("SON KANAL", "channel-shelf-Son kanal") {
+        items(rows, key = { it.id }) { item ->
+            val current = programmes[item.id]
+            val logo by produceState<String?>(null, item.id, item.logo) {
+                model.awaitFirstDraw()
+                value = model.repo.poster(item)
+            }
+            Column(Modifier.width(150.dp), verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+                HubShelfTile(item, { play(item, rows) }, focus,
+                    Modifier.testTag("live-channel-${item.id}")) {
+                    HubArtwork(model, item, logo, channel = true)
                 }
-                Column(Modifier.width(150.dp), verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
-                    HubShelfTile(item, { play(item, rows) }, focus,
-                        Modifier.testTag("live-channel-${item.id}")) {
-                        HubArtwork(model, item, logo, channel = true)
-                    }
-                    Text(item.title, style = LumenType.label, color = LumenColors.textPrimary,
-                        minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    Text(current?.title.orEmpty(), style = LumenType.meta,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Box(Modifier.fillMaxWidth().height(3.dp)) {
-                        if (current != null) ProgressLine(
-                            (now - current.start).toFloat() / (current.end - current.start).coerceAtLeast(1),
-                        )
-                    }
+                Text(item.title, Modifier.testTag("hub-title-${item.id}"),
+                    style = LumenType.label, color = LumenColors.textPrimary,
+                    minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(current?.title.orEmpty(), Modifier.testTag("hub-caption-${item.id}"), style = LumenType.meta,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Box(Modifier.fillMaxWidth().height(3.dp)) {
+                    if (current != null) ProgressLine(
+                        (now - current.start).toFloat() / (current.end - current.start).coerceAtLeast(1),
+                    )
                 }
             }
         }
@@ -123,53 +142,48 @@ private fun HubResumeShelf(model: LibraryModel, rows: List<Item>, open: (Item) -
     LaunchedEffect(backgroundReady) {
         if (backgroundReady) Perf.duration("startup_hub_episode_details_deferred", 0)
     }
-    Column(verticalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
-        Text("KALDIĞIN YERDEN DEVAM ET", style = LumenType.caption, color = LumenColors.textSecondary)
-        LazyRow(
-            Modifier.testTag("shelf-Kaldığın yerden devam et").focusRestorer().focusGroup(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            contentPadding = PaddingValues(Spacing.unit),
-        ) {
-            items(rows, key = { it.id }) { item ->
-                val episodes by remember(item.id, backgroundReady) {
-                    if (backgroundReady && item.kind == "SERIES") model.repo.episodes(item.id) else flowOf(emptyList<Item>())
-                }.collectAsStateWithLifecycle(emptyList())
-                val marks by remember(item.id, backgroundReady) {
-                    if (backgroundReady && item.kind == "SERIES") model.repo.library.episodeMarks(item.id) else flowOf(emptyList<Mark>())
-                }.collectAsStateWithLifecycle(emptyList())
-                val continuing by produceState<Item?>(null, episodes, marks) {
-                    value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-                        episodes.continueItem(marks)
-                    }
+    HubShelf("KALDIĞIN YERDEN DEVAM ET", "shelf-Kaldığın yerden devam et") {
+        items(rows, key = { it.id }) { item ->
+            val episodes by remember(item.id, backgroundReady) {
+                if (backgroundReady && item.kind == "SERIES") model.repo.episodes(item.id) else flowOf(emptyList<Item>())
+            }.collectAsStateWithLifecycle(emptyList())
+            val marks by remember(item.id, backgroundReady) {
+                if (backgroundReady && item.kind == "SERIES") model.repo.library.episodeMarks(item.id) else flowOf(emptyList<Mark>())
+            }.collectAsStateWithLifecycle(emptyList())
+            val continuing by produceState<Item?>(null, episodes, marks) {
+                value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                    episodes.continueItem(marks)
                 }
-                val observedMark by remember(item.id) {
-                    model.repo.library.observeMark(item.id)
-                }.collectAsStateWithLifecycle(null)
-                val mark = if (item.kind == "SERIES") marks.firstOrNull { it.id == continuing?.id } else observedMark
-                val backdrop by produceState<String?>(null, item.id, item.backdrop, item.logo) {
-                    model.awaitFirstDraw()
-                    // Listing backdrops can be absent even when a provider poster is available.
-                    value = model.repo.backdrop(item)?.takeIf(String::isNotBlank)
-                        ?: model.repo.poster(item)?.takeIf(String::isNotBlank)
+            }
+            val observedMark by remember(item.id) {
+                model.repo.library.observeMark(item.id)
+            }.collectAsStateWithLifecycle(null)
+            val mark = if (item.kind == "SERIES") marks.firstOrNull { it.id == continuing?.id } else observedMark
+            val backdrop by produceState<String?>(null, item.id, item.backdrop, item.logo) {
+                model.awaitFirstDraw()
+                // Listing backdrops can be absent even when a provider poster is available.
+                value = model.repo.backdrop(item)?.takeIf(String::isNotBlank)
+                    ?: model.repo.poster(item)?.takeIf(String::isNotBlank)
+            }
+            val episode = continuing?.seriesEpisode()
+            val remaining = mark?.takeIf { it.duration > 0 }?.let {
+                "${((it.duration - it.position).coerceAtLeast(0) + 59_999) / 60_000} dk kaldı"
+            }
+            val caption = listOfNotNull(episode?.let { "S${it.season} · B${it.episode}" }, remaining)
+                .joinToString(" · ").ifBlank { "İzlemeye devam et" }
+            Column(Modifier.width(180.dp), verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+                HubShelfTile(item, { open(item) }, focus) {
+                    HubArtwork(model, item, backdrop)
+                    if ((mark?.duration ?: 0) > 0) ProgressLine(
+                        (mark?.position ?: 0).toFloat() / checkNotNull(mark).duration,
+                        Modifier.align(Alignment.BottomStart),
+                    )
                 }
-                val episode = continuing?.seriesEpisode()
-                val remaining = mark?.takeIf { it.duration > 0 }?.let {
-                    "${((it.duration - it.position).coerceAtLeast(0) + 59_999) / 60_000} dk kaldı"
-                }
-                val caption = listOfNotNull(episode?.let { "S${it.season} · B${it.episode}" }, remaining)
-                    .joinToString(" · ").ifBlank { "İzlemeye devam et" }
-                Column(Modifier.width(180.dp), verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
-                    HubShelfTile(item, { open(item) }, focus) {
-                        HubArtwork(model, item, backdrop)
-                        if ((mark?.duration ?: 0) > 0) ProgressLine(
-                            (mark?.position ?: 0).toFloat() / checkNotNull(mark).duration,
-                            Modifier.align(Alignment.BottomStart),
-                        )
-                    }
-                    Text(item.title, style = LumenType.label, color = LumenColors.textPrimary,
-                        minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    Text(caption, style = LumenType.meta, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
+                Text(item.title, Modifier.testTag("hub-title-${item.id}"),
+                    style = LumenType.label, color = LumenColors.textPrimary,
+                    minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(caption, Modifier.testTag("hub-caption-${item.id}"), style = LumenType.meta,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }
