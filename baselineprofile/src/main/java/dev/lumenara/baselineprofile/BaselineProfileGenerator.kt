@@ -161,7 +161,7 @@ class BaselineProfileGenerator {
             returnToHub()
 
             openHub("Ara")
-            requireNode(By.res("search-input"), "Search input").text = "BP Film A"
+            setFieldText("search-input", "BP Film A")
             // The container exists before debounce/query completion; require a real result.
             requireNode(By.res("search-results").hasDescendant(
                 By.clickable(true).desc(Pattern.compile("BP Film A .+"))
@@ -204,8 +204,8 @@ class BaselineProfileGenerator {
         // Match LibraryJourneyTest: focus + remote OK, not a touchscreen tap on TV Surface.
         activate("setup-add-m3u")
         requireNode(By.text("Yöntemi değiştir"), "M3U form after Liste adresi gir")
-        setFieldText("setup-name", "Baseline Profile fixture")
-        setFieldText("setup-address", address)
+        setFieldText("setup-name", "Baseline Profile fixture", "source-setup")
+        setFieldText("setup-address", address, "source-setup")
         reveal("source-setup", "setup-advanced")
         activate("setup-advanced")
         reveal("source-setup", "setup-http-compat")
@@ -262,8 +262,9 @@ class BaselineProfileGenerator {
     private fun requireNode(selector: BySelector, description: String): UiObject2 =
         device.wait(Until.findObject(selector), timeout) ?: fail("$description unavailable: $selector")
 
-    private fun setFieldText(tag: String, value: String) {
-        reveal("source-setup", tag)
+    private fun setFieldText(tag: String, value: String, container: String? = null) {
+        if (container != null) reveal(container, tag)
+        requireNode(By.res(tag).enabled(true), "Editable field $tag")
         val root = instrumentation.uiAutomation.rootInActiveWindow ?: fail("No active window for $tag")
         // LibraryJourneyTest uses hasSetTextAction(), not class + contentDescription.
         // Compose may export the description separately from the editable node.
@@ -273,8 +274,7 @@ class BaselineProfileGenerator {
             if (!field.isFocused && !field.performAction(AccessibilityNodeInfo.ACTION_FOCUS)) {
                 fail("Could not focus editable field $tag")
             }
-            // Set text directly, without clicking/OK (which opens the TV IME).
-            // A blind Back to dismiss an IME could instead close the manual form.
+            // Focus can open the TV IME even when setting text without clicking/OK.
             val arguments = Bundle().apply {
                 putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value)
             }
@@ -286,10 +286,43 @@ class BaselineProfileGenerator {
         val childText = By.res(tag).hasDescendant(By.text(value))
         val deadline = SystemClock.uptimeMillis() + timeout
         while (SystemClock.uptimeMillis() < deadline) {
-            if (device.hasObject(ownText) || device.hasObject(childText)) return
+            if (device.hasObject(ownText) || device.hasObject(childText)) {
+                dismissImeIfShown()
+                return
+            }
             SystemClock.sleep(100)
         }
         fail("Text replacement did not reach $tag")
+    }
+
+    private fun dismissImeIfShown() {
+        device.waitForIdle()
+        val deadline = SystemClock.uptimeMillis() + timeout
+        var backPressed = false
+        var hiddenSince: Long? = null
+        while (SystemClock.uptimeMillis() < deadline) {
+            val state = Regex("""\bmInputShown=(true|false)\b""")
+                .find(device.executeShellCommand("dumpsys input_method"))?.groupValues?.get(1)
+                ?: fail("Could not determine IME visibility from dumpsys input_method")
+            if (state == "true") {
+                hiddenSince = null
+                // Never send an unguarded or repeated Back: it could leave Setup.
+                if (!backPressed) {
+                    device.pressBack()
+                    backPressed = true
+                }
+            } else {
+                val now = SystemClock.uptimeMillis()
+                if (hiddenSince == null) hiddenSince = now
+                // Allow pending IME show/hide and layout updates to settle.
+                if (now - hiddenSince >= 500L) {
+                    device.waitForIdle()
+                    return
+                }
+            }
+            SystemClock.sleep(100)
+        }
+        fail("IME did not stay hidden after text entry")
     }
 
     private fun findEditable(
@@ -310,12 +343,14 @@ class BaselineProfileGenerator {
 
     private fun reveal(container: String, tag: String, direction: Direction = Direction.DOWN) {
         val deadline = SystemClock.uptimeMillis() + timeout
+        val target = By.res(tag).enabled(true)
         repeat(12) {
-            if (device.hasObject(By.res(tag))) return
+            device.waitForIdle()
+            // Re-query after each layout change; lazy items may exist before usable.
+            if (device.findObject(target)?.visibleBounds?.isEmpty == false) return
             if (SystemClock.uptimeMillis() >= deadline) fail("Timed out revealing $tag in $container")
             requireNode(By.res(container), "Scroll container $container").scroll(direction, 0.35f)
-            device.waitForIdle()
-            if (device.wait(Until.hasObject(By.res(tag)), 500L)) return
+            device.wait(Until.hasObject(target), 500L)
         }
         fail("Could not reveal $tag in $container")
     }
