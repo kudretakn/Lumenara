@@ -3,20 +3,26 @@ package dev.lumenara.tv
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.text.TextLayoutResult
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.*
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.lumenara.data.Item
 import dev.lumenara.data.Repository
 import dev.lumenara.data.Source
+import dev.lumenara.data.Preferences
+import dev.lumenara.data.Feed
+import dev.lumenara.data.Slot
+import dev.lumenara.data.Mapping
 import dev.lumenara.design.LumenaraTheme
 import dev.lumenara.design.Spacing
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.first
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -231,26 +237,63 @@ class DenseGridTest {
     }
 
     @Test fun hubShelfStaysStillWhenHorizontalScrollingRevealsDifferentTitles() {
-        val repo = Repository.get(InstrumentationRegistry.getInstrumentation().targetContext)
+        assertHubCaptionsAndStableScroll(360.dp)
+    }
+
+    @Test fun lastHubShelfCaptionsFitTheFivePercentTvSafeArea() {
+        // 1920x1080 TV at the app's 2x UI density; both shelves force vertical scrolling.
+        assertHubCaptionsAndStableScroll(540.dp)
+    }
+
+    private fun assertHubCaptionsAndStableScroll(height: Dp) {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val repo = Repository.get(context)
+        val prefs = Preferences(context)
+        val savedRecent = runBlocking { prefs.text("recent_live").first() }
         val source = "stable-hub-${System.nanoTime()}"
         val rows = List(16) { index ->
             val title = if (index % 2 == 0) "Film $index" else "A long film title that occupies two caption lines $index"
-            Item("$source-$index", source, title, "Test", "MOVIE", "", "", title.lowercase(), 1, "")
+            Item("$source-$index", source, title, "Test", if (index == 1) "SERIES" else "MOVIE",
+                "", "", title.lowercase(), 1, "")
+        }
+        val channels = List(2) { rows[it].copy(id = "$source-live-$it", title = "Channel $it", kind = "LIVE") }
+        val episode = rows[1].copy(id = "$source-episode", title = "Series S01E02", kind = "EPISODE", parent = rows[1].id)
+        lateinit var model: LibraryModel
+        fun assertCaption(item: Item) {
+            val root = screen.onNodeWithTag("hub-test-window").getUnclippedBoundsInRoot()
+            val viewport = screen.onNodeWithTag("hub").getUnclippedBoundsInRoot()
+            for (tag in listOf("hub-title-${item.id}", "hub-caption-${item.id}")) {
+                val bounds = screen.onNodeWithTag(tag).assertIsDisplayed().getUnclippedBoundsInRoot()
+                // Unclipped bounds catch partially visible text that assertIsDisplayed accepts.
+                assertTrue("$tag crosses the top safe area", bounds.top >= root.top + root.height * .05f)
+                assertTrue("$tag crosses the bottom safe area", bounds.bottom <= root.bottom - root.height * .05f)
+                assertTrue("$tag crosses the left safe area", bounds.left >= root.left + root.width * .05f)
+                assertTrue("$tag crosses the right safe area", bounds.right <= root.right - root.width * .05f)
+                assertTrue("$tag is clipped by the Hub", bounds.top >= viewport.top && bounds.bottom <= viewport.bottom)
+            }
         }
         try {
             runBlocking {
-                repo.library.save(Source(source, source, "", false, System.currentTimeMillis(), rows.size))
-                repo.library.save(rows)
+                val now = System.currentTimeMillis()
+                repo.library.save(Source(source, source, "", false, now, rows.size + channels.size + 1))
+                repo.library.save(rows + channels + episode)
+                repo.guide.put(Feed(source, source, ""))
+                repo.guide.slots(channels.map { Slot(source, it.id, now - 60_000, now + 3_600_000,
+                    "Current programme", "", "current programme") })
+                channels.forEach { repo.guide.map(Mapping(it.id, source, it.id)) }
                 prepareTestCatalog(repo, source)
                 rows.forEachIndexed { index, item ->
-                    repo.updateMark(item.id) { it.copy(position = 10, duration = 100, updated = 1000L - index) }
+                    repo.updateMark(if (item.kind == "SERIES") episode.id else item.id) {
+                        it.copy(position = 60_000, duration = 3_600_000, updated = now - index)
+                    }
                 }
+                channels.reversed().forEach { prefs.recordLive(it.id) }
             }
             screen.runOnUiThread {
-                val model = ViewModelProvider(screen.activity)[LibraryModel::class.java]
+                model = ViewModelProvider(screen.activity)[LibraryModel::class.java]
                 screen.activity.setContent {
                     LumenaraTheme {
-                        Box(Modifier.requiredSize(960.dp, 360.dp)
+                        Box(Modifier.requiredSize(960.dp, height).testTag("hub-test-window")
                             .padding(Spacing.screenHorizontal, Spacing.screenVertical)) {
                             Home(model, source, {}, { _, _ -> }, navigate = {})
                         }
@@ -258,11 +301,31 @@ class DenseGridTest {
                 }
             }
             screen.waitUntil(10_000) {
-                screen.onAllNodesWithTag("shelf-Kaldığın yerden devam et").fetchSemanticsNodes().isNotEmpty()
+                model.hubRecent.value?.let { it.source == source && it.rows.size == channels.size } == true &&
+                    model.hubResume.value?.let { it.source == source && it.rows.size == rows.size } == true
             }
-            screen.onNodeWithContentDescription(rows.first().title)
+            screen.onNodeWithTag("hub").performScrollToNode(hasTestTag("channel-shelf-Son kanal"))
+            screen.onNodeWithTag("live-channel-${channels.first().id}")
                 .performSemanticsAction(SemanticsActions.RequestFocus)
+            screen.waitUntil(10_000) {
+                screen.onAllNodes(hasText("Current programme") and
+                    hasAnyAncestor(hasTestTag("channel-shelf-Son kanal"))).fetchSemanticsNodes().size == 2
+            }
             screen.waitForIdle()
+            channels.forEach(::assertCaption)
+            // Enter the last shelf with the remote: pre-scrolling it into view would hide the bug.
+            screen.dpad(Key.DirectionDown)
+            screen.waitUntil(10_000) {
+                screen.onAllNodes(hasContentDescription(rows.first().title) and isFocused())
+                    .fetchSemanticsNodes().isNotEmpty()
+            }
+            screen.waitForIdle()
+            rows.take(3).forEach(::assertCaption) // Focused tile and unfocused neighbours.
+            screen.waitUntil(30_000) {
+                screen.onAllNodes(hasTestTag("hub-caption-${rows[1].id}") and hasText("S1 · B2", substring = true))
+                    .fetchSemanticsNodes().isNotEmpty()
+            }
+            rows.take(3).forEach(::assertCaption)
             val before = screen.onNodeWithTag("hub").fetchSemanticsNode().config[ScrollPositionKey]
             for (index in 1..10) {
                 screen.dpad(Key.DirectionRight)
@@ -273,6 +336,8 @@ class DenseGridTest {
                 screen.waitForIdle()
                 assertEquals("Hub shelf moved vertically", before,
                     screen.onNodeWithTag("hub").fetchSemanticsNode().config[ScrollPositionKey])
+                assertCaption(rows[index])
+                assertCaption(rows[index - 1])
             }
             for (index in 9 downTo 0) {
                 screen.dpad(Key.DirectionLeft)
@@ -283,10 +348,12 @@ class DenseGridTest {
                 screen.waitForIdle()
                 assertEquals("Shelf moved vertically on LEFT", before,
                     screen.onNodeWithTag("hub").fetchSemanticsNode().config[ScrollPositionKey])
+                assertCaption(rows[index])
+                assertCaption(rows[index + 1])
             }
         } finally {
             screen.runOnUiThread { screen.activity.setContent {} }
-            runBlocking { repo.remove(source) }
+            runBlocking { prefs.set("recent_live", savedRecent); repo.remove(source) }
         }
     }
 }

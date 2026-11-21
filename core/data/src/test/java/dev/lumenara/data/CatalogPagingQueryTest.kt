@@ -6,6 +6,38 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CatalogPagingQueryTest {
+    @Test fun pendingGridsUseOriginalTitleIndexesAndKeepVersionAndShelfPolicy() {
+        for (source in listOf("", "provider")) for (category in listOf("", "Films")) {
+            val filter = CatalogFilter(source = source, kind = "MOVIE", category = category,
+                hidden = listOf("XXX"), derived = false)
+            val page = browseQuery(filter, 80)
+            assertFalse(page.sql.contains("sortKey"))
+            assertTrue(page.sql.contains("ORDER BY i.title,i.id"))
+            assertTrue(page.sql.contains("INDEXED BY index_items_"))
+            assertTrue(page.sql.contains("v.versionRank<i.versionRank"))
+            assertTrue(browseIndexQuery(filter, "saved").sql.contains("(i.title,i.id)<(t.title,t.id)"))
+            assertEquals(arguments(page).dropLast(2), arguments(browseCountQuery(filter)))
+        }
+        val popular = browseQuery(CatalogFilter(kind = "MOVIE", shelf = "popular", derived = false), 80)
+        assertTrue(popular.sql.contains("ORDER BY CAST(i.rating AS REAL) DESC,i.title,i.id"))
+    }
+
+    @Test fun pendingLivePagesNeighborsIndexAndCountsUseProviderOrderAndOriginalRows() {
+        val filter = CatalogFilter(source = "provider", hidden = listOf("XXX"), derived = false)
+        val page = livePageQuery(filter, 28, LiveCursor("partly-filled", "anchor"))
+        assertTrue(page.sql.contains("ORDER BY i.rowid ASC"))
+        assertTrue(page.sql.contains("SELECT t.rowid"))
+        assertFalse(page.sql.contains("sortKey"))
+        assertFalse(arguments(page).contains("partly-filled"))
+        assertTrue(arguments(page).contains("anchor"))
+        assertTrue(livePageQuery(filter, 28, backwards = true, targetId = "anchor").sql.contains("ORDER BY i.rowid DESC"))
+        assertTrue(liveIndexQuery(filter, "anchor").sql.contains("i.rowid<t.rowid"))
+        assertTrue(liveChannelOrderQuery(filter).sql.contains("ORDER BY i.rowid"))
+        val count = liveCountQuery(filter)
+        assertTrue(count.sql.contains("FROM items i"))
+        assertFalse(count.sql.contains("category_counts"))
+    }
+
     private fun arguments(query: SupportSQLiteQuery): List<Any?> {
         val values = MutableList<Any?>(query.argCount) { null }
         query.bindTo(object : SupportSQLiteProgram {

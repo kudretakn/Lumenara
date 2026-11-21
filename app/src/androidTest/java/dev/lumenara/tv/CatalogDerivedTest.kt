@@ -7,6 +7,8 @@ import dev.lumenara.data.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.async
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.*
 import org.junit.Test
 import java.util.concurrent.CopyOnWriteArrayList
@@ -35,7 +37,7 @@ internal suspend fun prepareTestCatalog(repo: Repository, source: String) {
 }
 
 class CatalogDerivedTest {
-    @Test fun pendingDerivedCatalogIsLoadingUntilTheLastBatchCommits() = runBlocking {
+    @Test fun pendingDerivedCatalogReturnsContentUntilTheLastBatchCommits() = runBlocking {
         val db = Room.inMemoryDatabaseBuilder(
             InstrumentationRegistry.getInstrumentation().targetContext, LibraryDb::class.java).build()
         try {
@@ -45,12 +47,87 @@ class CatalogDerivedTest {
             assertFalse(db.derived().ready("pending").first())
             assertFalse(db.derived().ready("").first())
             assertTrue(db.derived().ready("another-source").first())
+            assertEquals(1, db.library().liveCount("pending", "", "", "").first())
+            assertEquals("channel", db.library().livePage("pending", "", "", "", 10, 0).first().single().id)
+            assertEquals(1, db.library().sourceCategoryCounts("pending").first().single().count)
             val work = CatalogDerivedBackfill(db)
             while (work.runBatch("pending", 1)) {
                 assertFalse(db.derived().ready("pending").first())
             }
             assertTrue(db.derived().ready("pending").first())
             assertEquals(1, db.library().liveCount("pending", "", "", "").first())
+        } finally { db.close() }
+    }
+
+    @Test fun migrationRowsStayBrowsableSearchableCountedAndNumberedThroughoutPartialBackfill() = runBlocking {
+        val db = Room.inMemoryDatabaseBuilder(
+            InstrumentationRegistry.getInstrumentation().targetContext, LibraryDb::class.java).build()
+        try {
+            val dao = db.library()
+            dao.save(Source("a", "Pending", "", false, 0, 0))
+            dao.save(Source("b", "Ready", "", false, 0, 0))
+            fun row(id: String, title: String, category: String, kind: String) =
+                Item(id, "a", title, category, kind, "", "", title.lowercase(), 1, "",
+                    cleanTitle = "", sortKey = "", isAdult = false)
+            val rows = listOf(row("z-live", "Z News", "News", "LIVE"),
+                row("hidden-live", "Hidden", "XXX", "LIVE"), row("a-live", "A News", "News", "LIVE"),
+                row("dub", "Coast Dublaj", "XXX", "MOVIE"), row("sub", "Coast Altyazılı", "Film", "MOVIE"),
+                row("other", "Another Film", "Film", "MOVIE"))
+            dao.save(rows)
+            dao.assignVersions(rows.versionAssignments())
+            dao.save(listOf(row("ready", "Ready News", "News", "LIVE").copy(source = "b")))
+            val work = CatalogDerivedBackfill(db)
+            while (work.runBatch("b", 1)) { }
+            dao.save(Mark("sub", favorite = true, listed = true))
+
+            suspend fun verifyPending() {
+                assertFalse(dao.catalogReady("a").first())
+                assertTrue(dao.catalogReady("b").first())
+                val hidden = dao.visibleAdultCategoryNames().first()
+                assertEquals(listOf("XXX"), hidden)
+                for (source in listOf("a", "")) {
+                    val movies = dao.browsePage(source, "MOVIE", "", "", "", 20, 0, hidden = hidden).first()
+                    assertEquals(listOf("other", "sub"), movies.map { it.id })
+                    assertEquals(2, dao.browseTotal(source, "MOVIE", "", "", "", hidden = hidden).first())
+                    assertEquals(1, dao.browseIndex(source, "MOVIE", "", "", "", "sub", hidden = hidden))
+                    assertEquals(listOf("MOVIE", "MOVIE"), dao.browseKinds(source, "MOVIE", "", "", "", hidden = hidden).first())
+                    assertEquals("sub", dao.browse(source, "MOVIE", "", "coast", "", 20, hidden = hidden).first().single().id)
+                    assertEquals("sub", dao.browse(source, "MOVIE", "", "", "favorite", 20, hidden = hidden).first().single().id)
+                    assertEquals(2, dao.categoryCounts("MOVIE", source, hidden).first().single().count)
+                    assertEquals(2, dao.fallbackHubTotals(source, hidden).first().single { it.kind == "MOVIE" }.count)
+                    assertEquals(if (source.isEmpty()) 3 else 2,
+                        dao.browse(source, "", "", "news", "", 20, hidden = hidden).first().size)
+                    assertEquals(3, dao.categoryCounts("MOVIE", source).first().sumOf { it.count })
+                }
+                val live = dao.livePage("a", "", "", "", 20, 0, hidden).first()
+                assertEquals(listOf("z-live", "a-live"), live.map { it.id })
+                assertEquals(2, dao.liveCount("a", "", "", "", hidden).first())
+                assertEquals(1, dao.liveCount("a", "", "a news", "", hidden).first())
+                assertEquals(1, dao.liveIndex("a", "a-live", hidden = hidden))
+                assertEquals("a-live", dao.livePageAfter("a", "", "", "", 1,
+                    LiveCursor(live.first().sortKey, "z-live"), hidden = hidden).first().single().id)
+                assertEquals("z-live", dao.liveNeighbors("a", "", "", "", 1, "a-live", true, hidden).first().single().id)
+                assertEquals("a-live", dao.livePage("a", "", "", "", 1, 1, hidden).first().single().id)
+                assertEquals(live.map { it.id }, dao.liveChannelOrder("a", hidden).first().map { it.id })
+                assertEquals(listOf(1, 2), dao.providerChannelNumbers("a", live.map { it.id }, hidden)
+                    .sortedBy { it.safeChannelNumber }.map { it.safeChannelNumber })
+                assertEquals("a-live", dao.providerChannel("a", 1, hidden)!!.id)
+            }
+            verifyPending()
+            // Keep the same subscription alive across the final state transition.
+            val completedOrder = async {
+                withTimeout(30_000) {
+                    dao.livePage("a", "", "", "", 20, 0, listOf("XXX"))
+                        .first { it.map { row -> row.id } == listOf("a-live", "z-live") }
+                }
+            }
+            while (db.derived().state("a")?.phase != "done") {
+                work.runBatch("a", 1)
+                if (db.derived().state("a")?.phase != "done") verifyPending()
+            }
+            assertEquals(listOf("a-live", "z-live"), completedOrder.await().map { it.id })
+            assertEquals(2, dao.liveCount("a", "", "", "", listOf("XXX")).first())
+            assertEquals(2, db.derived().totals("a", false).first().single { it.kind == "MOVIE" }.count)
         } finally { db.close() }
     }
 

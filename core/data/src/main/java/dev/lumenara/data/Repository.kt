@@ -94,13 +94,9 @@ class Repository private constructor(private val context: Context) {
         StartupPerf.measure("startup_room_recovery") { restoreTransaction.recover() }
     } }
     private val catalogScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private fun <T> readyCatalog(source: String, read: () -> Flow<T>): Flow<T> =
-        db.derived().ready(source).distinctUntilChanged().flatMapLatest { ready ->
-            if (ready) read() else emptyFlow()
-        }
-    private val catalog = CatalogStreams(library.adultCategoryNames(),
-        { kind, source, hidden -> readyCatalog(source) { library.categoryCounts(kind, source, hidden) } },
-        { source, hidden -> readyCatalog(source) { library.sourceCategoryCounts(source, hidden) } },
+    private val catalog = CatalogStreams(library.visibleAdultCategoryNames(),
+        { kind, source, hidden -> library.categoryCounts(kind, source, hidden) },
+        { source, hidden -> library.sourceCategoryCounts(source, hidden) },
         preferences.showAdult, catalogScope, StartupPerf::duration, preclassified = true)
     val hidden: Flow<List<String>> = catalog.hidden
     private val seriesExpansionCache = SeriesExpansionCache(
@@ -108,8 +104,7 @@ class Repository private constructor(private val context: Context) {
         writeStamp = { id, stamp -> preferences.set("series_expanded_$id", stamp.toString()) },
     )
 
-    // Upgraded rows have no derived key yet. Keep them hidden from safe-mode pages until
-    // their batch commits, even before category_counts has published its adult names.
+    // Upgraded rows use their original category until stored classification is available.
     private fun Flow<List<Item>>.storedVisibility(): Flow<List<Item>> =
         combine(preferences.showAdult) { rows, show -> rows.visibleStoredRows(show) }
 
@@ -142,7 +137,7 @@ class Repository private constructor(private val context: Context) {
     fun categoryCounts(kind: String, source: String) = catalog.categoryCounts(kind, source)
     fun categories(kind: String, source: String) = categoryCounts(kind, source).map { groups -> groups.map { it.category } }
     fun liveCategoryCounts(source: String) =
-        hidden.flatMapLatest { hidden -> readyCatalog(source) { library.liveCategoryCounts(source, hidden) } }
+        hidden.flatMapLatest { hidden -> library.liveCategoryCounts(source, hidden) }
             .distinctUntilChanged()
     /** A bounded visible page, with no whole-catalog GuideResolver or future schedules. */
     fun liveNow(rows: List<Item>, now: Long): Flow<Map<String, Slot>> = flow {
@@ -167,8 +162,10 @@ class Repository private constructor(private val context: Context) {
     suspend fun liveChannel(number: Int, source: String): Item? {
         if (number < 1) return null
         val show = preferences.showAdult.first()
-        suspend fun at(id: String, value: Int) = if (show) db.derived().channel(id, value)
-            else db.derived().safeChannel(id, value)
+        val ready = library.catalogReady(source).first()
+        val excluded = if (show || ready) emptyList() else library.visibleAdultCategoryNames().first()
+        suspend fun at(id: String, value: Int) = if (!ready) library.providerChannel(id, value - 1, excluded)
+            else if (show) db.derived().channel(id, value) else db.derived().safeChannel(id, value)
         val selected = source.ifEmpty {
             library.snapshot().firstOrNull { at(it.id, 1) != null }?.id ?: return null
         }
@@ -206,30 +203,38 @@ class Repository private constructor(private val context: Context) {
     private val liveFavoriteEpoch = java.util.concurrent.atomic.AtomicLong()
     private fun liveWindowEpoch(shelf: String): Long =
         if (shelf == "favorite") liveFavoriteEpoch.get() else liveOrderEpoch.get()
-    private val liveInvalidation = object : InvalidationTracker.Observer("items", "marks") {
+    private val liveInvalidation = object : InvalidationTracker.Observer("items", "marks", "catalog_derived_state") {
         override fun onInvalidated(tables: Set<String>) {
-            if ("items" in tables) liveOrderEpoch.incrementAndGet()
+            if ("items" in tables || "catalog_derived_state" in tables) liveOrderEpoch.incrementAndGet()
             liveFavoriteEpoch.incrementAndGet()
         }
     }
     init { db.invalidationTracker.addObserver(liveInvalidation) }
 
-    /** Only the requested visible IDs; numbering was committed by the source refresh. */
-    fun liveChannelNumbers(source: String, ids: List<String>): Flow<Map<String, Int>> = flow {
-        val show = preferences.showAdult.first()
-        val rows = ids.distinct().chunked(250).flatMap { db.derived().numbered(source, it) }
-        emit(rows.mapNotNull { row ->
-            val number = if (show) row.channelNumber else row.safeChannelNumber
-            number.takeIf { it > 0 }?.let { row.id to it }
-        }.toMap())
-    }.flowOn(Dispatchers.IO)
+    /** Only requested IDs; pending upgrades use the same provider order as live pages. */
+    fun liveChannelNumbers(source: String, ids: List<String>): Flow<Map<String, Int>> =
+        combine(preferences.showAdult, library.catalogReady(source).distinctUntilChanged()) { show, ready -> show to ready }
+            .flatMapLatest { (show, ready) -> flow {
+                val excluded = if (show || ready) emptyList() else library.visibleAdultCategoryNames().first()
+                val rows = ids.distinct().chunked(250).flatMap {
+                    if (ready) db.derived().numbered(source, it) else library.providerChannelNumbers(source, it, excluded)
+                }
+                emit(rows.mapNotNull { row ->
+                    val number = if (show) row.channelNumber else row.safeChannelNumber
+                    number.takeIf { it > 0 }?.let { row.id to it }
+                }.toMap())
+            } }.flowOn(Dispatchers.IO)
 
-    fun hubTotals(source: String): Flow<List<HubTotal>> = preferences.showAdult.flatMapLatest {
-        readyCatalog(source) { db.derived().totals(source, it) }
+    fun hubTotals(source: String): Flow<List<HubTotal>> = preferences.showAdult.flatMapLatest { show ->
+        library.withCatalog(source) { ready ->
+            if (ready) db.derived().totals(source, show)
+            else if (show) library.fallbackHubTotals(source, emptyList())
+            else library.visibleAdultCategoryNames().flatMapLatest { library.fallbackHubTotals(source, it) }
+        }
     }.distinctUntilChanged()
 
     fun liveCount(source: String, category: String = "", query: String = "", shelf: String = "") =
-        hidden.flatMapLatest { hidden -> readyCatalog(source) { library.liveCount(source, category, query, shelf, hidden) } }
+        hidden.flatMapLatest { hidden -> library.liveCount(source, category, query, shelf, hidden) }
     suspend fun liveIndex(source: String, id: String, category: String = "", query: String = "", shelf: String = "") =
         library.liveIndex(source, id, category, query, shelf, hidden.first())
     fun episodes(id: String) = hidden.flatMapLatest { library.episodes(id, it) }
@@ -387,13 +392,18 @@ class Repository private constructor(private val context: Context) {
     private val imports = SourceImports(lock)
     private var versionBackfillJob: kotlinx.coroutines.Job? = null
 
-    /** Called only after the UI's first frame gate. Each commit leaves room for navigation. */
+    /** State-only probe on IO; completed catalogs do not start an upgrade worker. */
+    suspend fun startPendingCatalogBackfill() = withContext(Dispatchers.IO) {
+        if (db.derived().pendingSource() != null) startVersionBackfill()
+    }
+
+    /** Upgrades start immediately on IO; ordinary maintenance keeps its deferred UI gate. */
     fun startVersionBackfill() {
         synchronized(this) {
             if (versionBackfillJob?.isActive == true) return
             versionBackfillJob = catalogScope.launch(Dispatchers.IO) {
                 try {
-                    StartupPerf.duration("startup_catalog_backfill_deferred", 0)
+                    StartupPerf.duration("startup_catalog_backfill_started", 0)
                     val backfill = VersionBackfill(db)
                     val derived = CatalogDerivedBackfill(db)
                     while (currentCoroutineContext().isActive) {

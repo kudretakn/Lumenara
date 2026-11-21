@@ -11,15 +11,74 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class CatalogStreamsTest {
-    @Test fun unfilledUpgradeRowsStayHiddenInSafeModeUntilTheirBatchCommits() {
+    @Test fun unfilledUpgradeRowsUseOriginalCategoriesWithoutHidingSafeContent() {
         val safe = Item("safe", "source", "News", "News", "LIVE", "", "sealed", "news", 1, "")
         val adult = safe.copy(id = "adult", category = "XXX", isAdult = true)
         val legacy = safe.copy(id = "legacy", sortKey = "", isAdult = false)
-        val rows = listOf(safe, adult, legacy)
-        assertEquals(listOf(safe), rows.visibleStoredRows(false))
+        val legacyAdult = adult.copy(id = "legacy-adult", sortKey = "", isAdult = false)
+        val rows = listOf(safe, adult, legacy, legacyAdult)
+        assertEquals(listOf(safe, legacy), rows.visibleStoredRows(false))
         assertEquals(rows, rows.visibleStoredRows(true))
         val filled = legacy.copy(sortKey = "news")
         assertEquals(listOf(safe, filled), listOf(safe, adult, filled).visibleStoredRows(false))
+    }
+
+    @Test fun pendingReadEmitsContentAndSwitchesOnlyWhenReadinessChanges() = runTest {
+        val ready = MutableStateFlow(false)
+        val original = MutableStateFlow(listOf("provider row"))
+        var fallbackReads = 0
+        var storedReads = 0
+        val dao = java.lang.reflect.Proxy.newProxyInstance(LibraryDao::class.java.classLoader,
+            arrayOf(LibraryDao::class.java)) { _, method, args ->
+            check(method.name == "catalogReady")
+            assertEquals("pending", args!![0])
+            ready
+        } as LibraryDao
+        val rows = dao.withCatalog("pending") { done ->
+            if (done) { storedReads++; flowOf(listOf("stored row")) }
+            else { fallbackReads++; original }
+        }.stateIn(backgroundScope, SharingStarted.Eagerly, null)
+        runCurrent()
+        assertEquals(listOf("provider row"), rows.value)
+        original.value = listOf("provider row", "next batch")
+        runCurrent()
+        assertEquals(2, rows.value!!.size)
+        assertEquals(1, fallbackReads)
+        assertEquals(0, storedReads)
+        ready.value = true
+        runCurrent()
+        assertEquals(listOf("stored row"), rows.value)
+        assertEquals(1, storedReads)
+    }
+
+    @Test fun catalogReadWaitsForReadinessAndRealDatabaseEmissionOnBothPaths() = runTest {
+        for (done in listOf(false, true)) {
+            for (expected in listOf(emptyList(), listOf("real database row"))) {
+                val readiness = MutableSharedFlow<Boolean>(replay = 1)
+                val database = MutableSharedFlow<List<String>>(replay = 1)
+                var selectedPath: Boolean? = null
+                val dao = java.lang.reflect.Proxy.newProxyInstance(LibraryDao::class.java.classLoader,
+                    arrayOf(LibraryDao::class.java)) { _, method, args ->
+                    check(method.name == "catalogReady")
+                    assertEquals("source", args!![0])
+                    readiness
+                } as LibraryDao
+                val first = async {
+                    dao.withCatalog("source") { ready ->
+                        flow { selectedPath = ready; emitAll(database) }
+                    }.first()
+                }
+                runCurrent()
+                assertNull(selectedPath)
+                assertFalse(first.isCompleted)
+                readiness.emit(done)
+                runCurrent()
+                assertEquals(done, selectedPath)
+                assertFalse("Readiness alone must not emit an empty result", first.isCompleted)
+                database.emit(expected)
+                assertEquals(expected, first.await())
+            }
+        }
     }
 
     private class Catalog {

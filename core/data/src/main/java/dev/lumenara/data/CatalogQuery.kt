@@ -10,6 +10,7 @@ internal data class CatalogFilter(
     val query: String = "", val shelf: String = "", val year: String = "",
     val genre: String = "", val language: String = "", val minRating: Double? = null,
     val hidden: List<String> = emptyList(),
+    val derived: Boolean = true,
 ) {
     fun predicate(alias: String, includeEpisodes: Boolean = false): CatalogPredicate {
         val parts = mutableListOf("1=1")
@@ -71,6 +72,7 @@ private fun pendingVersionPredicate(alias: String): String = """EXISTS(
 
 private fun browseStatement(filter: CatalogFilter, ordered: Boolean = true, includeSort: Boolean = false,
     projectionOnly: String? = null): CatalogPredicate {
+    val sort = if (filter.derived) "sortKey" else "title"
     val eligible = filter.predicate("i")
     val representative = representativePredicate({ filter.predicate(it) }, filter.filtersVersions)
     // EQP: equality on kind/category -> index_items_kind_category_sortKey_id (all sources), or
@@ -101,6 +103,8 @@ private fun browseStatement(filter: CatalogFilter, ordered: Boolean = true, incl
         filter.source.isNotEmpty() -> "index_items_source_kind_sortKey_id"
         else -> "index_items_kind_sortKey_id"
     } else ""
+    val orderIndex = if (filter.derived) index else index
+        .replace("source_kind_sortKey_id", "kind_title").replace("sortKey_id", "title")
     val args = eligible.args + representative.args
     fun projection(row: String) = projectionOnly ?: if (!includeSort) "i.*" else "i.*," + when (filter.shelf) {
         "resume" -> "m.updated"
@@ -116,13 +120,13 @@ private fun browseStatement(filter: CatalogFilter, ordered: Boolean = true, incl
             UNION ALL
             SELECT i.*,i.rowid AS catalogRow FROM items i
             WHERE ${eligible.sql} AND ${representative.sql} AND i.kind='LIVE' $grouping
-            ) i ${if (ordered) "ORDER BY ${order.replace("i.rowid", "i.catalogRow")}i.sortKey,i.id" else ""}""",
+            ) i ${if (ordered) "ORDER BY ${order.replace("i.rowid", "i.catalogRow")}i.$sort,i.id" else ""}""",
             args + args)
     }
-    return CatalogPredicate("""SELECT ${projection("i.rowid")} FROM items i $index
+    return CatalogPredicate("""SELECT ${projection("i.rowid")} FROM items i $orderIndex
         ${if (filter.shelf == "resume") "LEFT JOIN marks m ON m.id=i.id" else ""}
         WHERE ${eligible.sql} AND ${representative.sql} $grouping
-        ${if (ordered) "ORDER BY ${order}i.sortKey,i.id" else ""}""", args)
+        ${if (ordered) "ORDER BY ${order}i.$sort,i.id" else ""}""", args)
 }
 
 /** The same indexed statement for a bounded page, without allocating preceding Item rows. */
@@ -146,11 +150,31 @@ internal fun browseKindsQuery(filter: CatalogFilter): SimpleSQLiteQuery {
 /** Resolve a saved focus without allocating a full catalog, preserving shelf tie order. */
 internal fun browseIndexQuery(filter: CatalogFilter, id: String): SimpleSQLiteQuery {
     val statement = browseStatement(filter, ordered = false, includeSort = true)
+    val sort = if (filter.derived) "sortKey" else "title"
     val before = if (filter.shelf in listOf("resume", "recent", "popular"))
-        "(i.catalogSort>t.catalogSort OR (i.catalogSort=t.catalogSort AND (i.sortKey,i.id)<(t.sortKey,t.id)))"
-        else "(i.sortKey,i.id)<(t.sortKey,t.id)"
+        "(i.catalogSort>t.catalogSort OR (i.catalogSort=t.catalogSort AND (i.$sort,i.id)<(t.$sort,t.id)))"
+        else "(i.$sort,i.id)<(t.$sort,t.id)"
     return SimpleSQLiteQuery("""SELECT (SELECT COUNT(*) FROM (${statement.sql}) i WHERE $before)
         FROM (${statement.sql}) t WHERE t.id=? LIMIT 1""", (statement.args + statement.args + id).toTypedArray())
+}
+
+/** Upgrade-only aggregation over original columns; never reads partially published counts. */
+internal fun fallbackCategoryCountsQuery(filter: CatalogFilter): SimpleSQLiteQuery {
+    val base = filter.predicate("i")
+    val representative = representativePredicate({ filter.predicate(it) }, true, sameCategory = true)
+    return SimpleSQLiteQuery("""SELECT i.kind,i.category,COUNT(*) AS count,'' AS searchKey FROM items i
+        WHERE i.kind IN ('LIVE','MOVIE','SERIES') AND ${base.sql} AND ${representative.sql}
+        GROUP BY i.kind,i.category""",
+        (base.args + representative.args).toTypedArray())
+}
+
+internal fun fallbackHubTotalsQuery(source: String, hidden: List<String>): SimpleSQLiteQuery {
+    val filter = CatalogFilter(source = source, hidden = hidden)
+    val base = filter.predicate("i")
+    val representative = representativePredicate({ filter.predicate(it) }, filter.filtersVersions)
+    return SimpleSQLiteQuery("""SELECT i.kind,COUNT(*) AS count FROM items i
+        WHERE i.kind IN ('LIVE','MOVIE','SERIES') AND ${base.sql} AND ${representative.sql}
+        GROUP BY i.kind ORDER BY i.kind""", (base.args + representative.args).toTypedArray())
 }
 
 internal fun categoryCountsQuery(filter: CatalogFilter, categoriesOnly: Boolean = false): SimpleSQLiteQuery {

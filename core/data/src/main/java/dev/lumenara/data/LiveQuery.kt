@@ -25,6 +25,7 @@ internal fun livePageQuery(
     filter: CatalogFilter, limit: Int, after: LiveCursor? = null, backwards: Boolean = false,
     offset: Int = 0, targetId: String? = null,
 ): SimpleSQLiteQuery {
+    if (!filter.derived) return providerLivePageQuery(filter, limit, after, backwards, offset, targetId)
     val eligible = filter.livePredicate("i")
     val args = eligible.args.toMutableList()
     val boundary = when {
@@ -60,7 +61,7 @@ internal fun livePageQuery(
 }
 
 internal fun liveCountQuery(filter: CatalogFilter): SimpleSQLiteQuery {
-    if (filter.query.isEmpty() && filter.shelf != "favorite") {
+    if (filter.derived && filter.query.isEmpty() && filter.shelf != "favorite") {
         val args = mutableListOf<Any>()
         val parts = mutableListOf("kind='LIVE'")
         if (filter.source.isNotEmpty()) { parts += "source=?"; args += filter.source }
@@ -84,8 +85,9 @@ internal fun liveCategoryCountsQuery(source: String, hidden: List<String>): Simp
 internal fun liveIndexQuery(filter: CatalogFilter, id: String): SimpleSQLiteQuery {
     val before = filter.livePredicate("i")
     val target = filter.livePredicate("t")
+    val preceding = if (filter.derived) "(i.sortKey,i.id)<(t.sortKey,t.id)" else "i.rowid<t.rowid"
     return SimpleSQLiteQuery("""SELECT (SELECT COUNT(*) FROM items i WHERE ${before.sql}
-        AND (i.sortKey,i.id)<(t.sortKey,t.id)) FROM items t WHERE t.id=? AND ${target.sql}""",
+        AND $preceding) FROM items t WHERE t.id=? AND ${target.sql}""",
         (before.args + id + target.args).toTypedArray())
 }
 
@@ -93,7 +95,28 @@ internal fun liveChannelOrderQuery(filter: CatalogFilter): SimpleSQLiteQuery {
     val eligible = filter.livePredicate("i")
     // Grouping by source in the caller preserves per-source title/id numbering. Do not sort
     // by source here: that would sort the entire LIVE catalog when source is unselected.
-    return SimpleSQLiteQuery("""SELECT i.id,i.title,${if (filter.source.isEmpty()) "i.source" else "?"} AS source FROM items i ${filter.liveOrderIndex()} WHERE ${eligible.sql}
-        ORDER BY i.sortKey,i.id""",
+    val index = if (filter.derived) filter.liveOrderIndex() else "NOT INDEXED"
+    val order = if (filter.derived) "i.sortKey,i.id" else "i.rowid"
+    return SimpleSQLiteQuery("""SELECT i.id,i.title,${if (filter.source.isEmpty()) "i.source" else "?"} AS source FROM items i $index WHERE ${eligible.sql}
+        ORDER BY $order""",
         ((if (filter.source.isEmpty()) emptyList() else listOf(filter.source)) + eligible.args).toTypedArray())
+}
+
+/** Until numbering commits, every live operation uses the original provider insertion order.
+ * Resolve cursor IDs in SQL so a partially filled sortKey cannot move a page boundary.
+ */
+private fun providerLivePageQuery(filter: CatalogFilter, limit: Int, after: LiveCursor?,
+    backwards: Boolean, offset: Int, targetId: String?): SimpleSQLiteQuery {
+    val base = filter.livePredicate("i")
+    val args = base.args.toMutableList()
+    val anchorId = targetId ?: after?.id
+    val boundary = if (anchorId == null) "" else {
+        val target = filter.livePredicate("t")
+        args += anchorId
+        args.addAll(target.args)
+        "AND i.rowid${if (backwards) "<" else ">"}(SELECT t.rowid FROM items t WHERE t.id=? AND ${target.sql})"
+    }
+    args.addAll(listOf(limit, if (anchorId == null) offset.coerceAtLeast(0) else 0))
+    return SimpleSQLiteQuery("""SELECT i.* FROM items i NOT INDEXED WHERE ${base.sql} $boundary
+        ORDER BY i.rowid ${if (backwards) "DESC" else "ASC"} LIMIT ? OFFSET ?""", args.toTypedArray())
 }

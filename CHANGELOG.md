@@ -1,5 +1,12 @@
 # Lumenara sürüm kaydı
 
+## 0.5.8 · 22 Kasım 2026
+
+- Güncellemeden sonra listeler ve ana ekran sayıları artık boş kalmıyor: katalog verileri arka planda yeniden hazırlanırken içerikler eski alanlardan gösteriliyor, hazırlık bitince hızlı yola geçiliyor (0.5.7'de büyük kataloglarda ~14 dakika boş liste görünüyordu).
+- Güncelleme sonrası hazırlık işi uygulama açılır açılmaz başlıyor; 20 saniye beklemiyor.
+- Ana ekran rafları ilk çizimde geliyor.
+- Ana ekranın en altındaki "Kaldığın yerden devam et" rafında film adlarının kesilmesi giderildi.
+
 ## 0.5.7 · 21 Kasım 2026
 
 - Kaynak eklerken "Kaynak işleniyor" ekranında takılma giderildi: Xtream sunucu adresi eklerken bir kez çözülüyor (yönlendirmeler izleniyor, kısa bağlantılar ve get.php/player_api.php gibi ekler atılıyor) ve formda gösteriliyor.

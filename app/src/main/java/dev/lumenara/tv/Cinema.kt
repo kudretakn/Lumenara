@@ -77,12 +77,14 @@ internal fun CinemaBackdrop(
                         alignment = Alignment.CenterEnd,
                         role = if (art.second) "poster" else "backdrop",
                     )
+                    // Scrims shade artwork only. Over a bare bg they add no visual
+                    // value and GPU gradient dithering can alter the neutral colour.
+                    Box(Modifier.fillMaxHeight().fillMaxWidth(.68f).background(LumenBrushes.detailLeft))
+                    Box(Modifier.fillMaxSize().background(LumenBrushes.detailBottom))
+                    if (dim) Box(Modifier.fillMaxSize().background(LumenColors.bg.copy(alpha = .35f)))
                 }
             }
         }
-        Box(Modifier.fillMaxHeight().fillMaxWidth(.68f).background(LumenBrushes.detailLeft))
-        Box(Modifier.fillMaxSize().background(LumenBrushes.detailBottom))
-        if (dim) Box(Modifier.fillMaxSize().background(LumenColors.bg.copy(alpha = .35f)))
     }
 }
 

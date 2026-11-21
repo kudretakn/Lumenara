@@ -11,6 +11,25 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class FirstDrawGateTest {
+    @Test fun screenFrameReleasesUpgradeWorkWithoutReleasingPopulatedHubWork() = runTest {
+        val screen = FirstDrawGate()
+        val hub = FirstDrawGate()
+        var upgradeStarted = false
+        var maintenanceStarted = false
+        launch { screen.await(); upgradeStarted = true }
+        launch { hub.await(); maintenanceStarted = true }
+        runCurrent()
+        assertFalse(upgradeStarted)
+        screen.onDraw()
+        runCurrent()
+        assertTrue(upgradeStarted)
+        assertFalse(maintenanceStarted)
+        assertFalse(hub.drawn.value)
+        hub.onDraw()
+        runCurrent()
+        assertTrue(maintenanceStarted)
+    }
+
     @Test fun startupWorkWaitsForDrawAndReleasesAllWaiters() = runTest {
         val gate = FirstDrawGate()
         var started = 0
