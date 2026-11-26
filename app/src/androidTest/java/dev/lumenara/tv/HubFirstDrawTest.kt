@@ -34,16 +34,20 @@ class HubFirstDrawTest {
         val source = "hub-first-draw-${System.nanoTime()}"
         val channel = Item("$source-live", source, "Cached News", "News", "LIVE", "", "", "cached news", 1, "")
         val movie = Item("$source-movie", source, "Cached Film", "Film", "MOVIE", "", "", "cached film", 1, "")
+        val channels = List(3) { channel.copy(id = "${channel.id}-$it", title = "${channel.title} $it") }
+        val movies = List(3) { movie.copy(id = "${movie.id}-$it", title = "${movie.title} $it") }
         val savedRecent = runBlocking { prefs.text("recent_live").first() }
         val gateAtFirstDraw = AtomicReference<Boolean>()
         var model: LibraryModel? = null
         try {
             runBlocking {
-                repo.library.save(Source(source, source, "", false, System.currentTimeMillis(), 2))
-                repo.library.save(listOf(channel, movie))
-                repo.library.save(Mark(movie.id, position = 10, duration = 100, updated = System.currentTimeMillis()))
+                repo.library.save(Source(source, source, "", false, System.currentTimeMillis(), 6))
+                repo.library.save(channels + movies)
+                movies.forEachIndexed { index, item ->
+                    repo.library.save(Mark(item.id, position = 10, duration = 100, updated = System.currentTimeMillis() - index))
+                }
                 prepareTestCatalog(repo, source)
-                prefs.recordLive(channel.id)
+                channels.reversed().forEach { prefs.recordLive(it.id) }
             }
             screen.runOnUiThread {
                 screen.activity.setContent {}
@@ -72,8 +76,11 @@ class HubFirstDrawTest {
                 }
             }
             screen.waitUntil(10_000) { gateAtFirstDraw.get() != null }
-            assertEquals("Cached shelves must be in the first populated draw", true, gateAtFirstDraw.get())
-            for (tile in listOf(hasTestTag("live-channel-${channel.id}"), hasContentDescription(movie.title))) {
+            assertEquals("Sized shelf slots must release IO on their first draw", true, gateAtFirstDraw.get())
+            // Later tiles must retain their saved admission state and their own
+            // return-focus flag, rather than briefly becoming placeholders again.
+            for (tile in listOf(hasTestTag("live-channel-${channels.last().id}"), hasContentDescription(movies.last().title))) {
+                screen.waitUntil(10_000) { screen.onAllNodes(tile).fetchSemanticsNodes().isNotEmpty() }
                 screen.onNode(tile).performSemanticsAction(SemanticsActions.RequestFocus)
                 screen.waitUntil(10_000) {
                     screen.onAllNodes(tile and isFocused()).fetchSemanticsNodes().isNotEmpty()
