@@ -25,9 +25,10 @@ internal open class WindowPages(val pageSize: Int, val columns: Int) {
         center = window.visibleCenter(index, focusIndex)
     }
     fun range(): IntRange = window.range(center, count, countLoaded)
-    fun install(firstPage: Int, endPage: Int, rows: List<Item>) {
-        window.install(firstPage..endPage, rows)
-        if (!countLoaded) count = firstPage * pageSize + rows.size
+    fun retain(range: IntRange) { window.retain(range) }
+    fun installPage(page: Int, rows: List<Item>) {
+        window.installPage(page, rows)
+        if (!countLoaded) count = page * pageSize + rows.size
         firstPageLoaded = true
     }
     open fun loaded(): List<Item> = pages.toSortedMap().values.flatten()
@@ -77,8 +78,14 @@ internal fun rememberWindowPagesDriver(state: WindowPages,
     }
     if (state.anchor != null) {
         val range = state.range()
-        LaunchedEffect(state, range.first, range.last) {
-            currentPage(range.first, range.last).collect { rows -> state.install(range.first, range.last, rows) }
+        SideEffect { state.retain(range) }
+        // Retain both rows and Room subscriptions for overlapping pages. A normal
+        // one-page advance reads only 28/80 new rows, instead of the full 140/400.
+        // Each retained subscription still refreshes on ordering/mark invalidation.
+        for (pageIndex in range) key(state, pageIndex) {
+            LaunchedEffect(state, pageIndex) {
+                currentPage(pageIndex, pageIndex).collect { rows -> state.installPage(pageIndex, rows) }
+            }
         }
     }
 }

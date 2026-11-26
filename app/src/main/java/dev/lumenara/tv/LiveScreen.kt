@@ -17,6 +17,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -28,6 +29,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.lumenara.catalog.searchable
 import dev.lumenara.data.Item
 import dev.lumenara.design.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.*
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -45,7 +48,8 @@ internal fun LiveScreen(
     var category by rememberSaveable(source) { mutableStateOf<String?>(null) }
     var categoryTitle by rememberSaveable(source) { mutableStateOf("") }
     var query by rememberSaveable(source, category) { mutableStateOf("") }
-    var focusedId by rememberSaveable(source) { mutableStateOf<String?>(null) }
+    // Read saved focus only when entering a grid, never while moving within it.
+    val focusedId = rememberSaveable(source) { mutableStateOf<String?>(null) }
     val pages = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { wallClockTicks(30_000).collect { now = it } }
@@ -78,7 +82,7 @@ internal fun LiveScreen(
     androidx.activity.compose.BackHandler(category != null) { category = null }
     LaunchedEffect(source, returnToChannel) {
         val target = returnToChannel ?: return@LaunchedEffect
-        if (target != focusedId) {
+        if (target != focusedId.value) {
             category = "all"
             categoryTitle = "Tüm kanallar"
             query = ""
@@ -100,7 +104,7 @@ internal fun LiveScreen(
         } else {
             val provider = category?.removePrefix("provider:")
                 .takeIf { category?.startsWith("provider:") == true }.orEmpty()
-            val restoreId = remember(source, category, query) { returnToChannel ?: focusedId }
+            val restoreId = remember(source, category, query) { returnToChannel ?: focusedId.value }
             val airingIds by remember(source, category, query) {
                 if (category == "airing") model.repo.nowAiring(source, snapshotFlow { now }, searchable(query))
                     .onEach { if (query.isBlank()) airingCount = it.size }.map { hits -> hits.map { it.itemId }.distinct() }
@@ -118,15 +122,15 @@ internal fun LiveScreen(
                 } else flowOf(emptyList())
             }.collectAsLoadingState()
             pages.SaveableStateProvider("channels-$category") {
-                LiveChannelGrid(model, categoryTitle, rows, source, now, query, { focusedId = null; query = it },
-                    returnToChannel ?: focusedId, { item ->
-                        focusedId = item.id
+                LiveChannelGrid(model, categoryTitle, rows, source, now, query, { focusedId.value = null; query = it },
+                    restoreId, { item ->
+                        focusedId.value = item.id
                         numberSource = item.source
                     }, onChannelFocusRestored, open, play, paged, entries.orEmpty().filter { it.id != "timeline" }) {
                         category = it.id
                         categoryTitle = it.name
                         query = ""
-                        focusedId = null
+                        focusedId.value = null
                     }
             }
         }
@@ -178,20 +182,16 @@ private fun LiveChannelGrid(model: LibraryModel, title: String, result: List<Ite
         }
     }
     // Badges, logo prefetch and EPG must not start whole-catalog work before the cards draw.
-    val numbers = if (paged is LivePages && source.isNotEmpty() && paged.category.isEmpty() &&
-        paged.query.isEmpty() && paged.shelf.isEmpty()) {
-        paged.pages.flatMap { (page, items) ->
-            items.mapIndexed { index, item -> item.id to page * LIVE_PAGE_SIZE + index + 1 }
-        }.toMap()
-    } else if (decorationsReady) liveChannelNumbers(model, source, paged?.loaded() ?: rows) else emptyMap()
-    val current by remember(model.repo, grid, paged, rows, now, decorationsReady) {
-        if (!decorationsReady) flowOf(emptyMap<String, dev.lumenara.data.Slot>()) else snapshotFlow {
-            grid.layoutInfo.visibleItemsInfo.mapNotNull { visible ->
-                if (paged != null) paged[visible.index] else rows.getOrNull(visible.index)
-            }.distinctBy { it.id }
-        }.flatMapLatest { visible -> model.repo.liveNow(visible, now) }
-    }.collectAsStateWithLifecycle(emptyMap())
-    if (decorationsReady) PrefetchArtwork(model, grid, rows, columns = LIVE_GRID_COLUMNS, paged = paged)
+    val slotNumbers = paged is LivePages && source.isNotEmpty() && paged.category.isEmpty() &&
+        paged.query.isEmpty() && paged.shelf.isEmpty()
+    val numbers = if (!slotNumbers && decorationsReady)
+        liveChannelNumbers(model, source, paged?.loaded() ?: rows) else emptyMap()
+    val decorations = liveGridDecorations(model, paged, rows, now, decorationsReady)
+    val sources by model.sources.collectAsStateWithLifecycle()
+    val httpSources = remember(sources) { sources.orEmpty().filter { it.allowHttp }.map { it.id }.toSet() }
+    val logoSize = with(LocalDensity.current) { 28.dp.roundToPx() }
+    if (decorationsReady) PrefetchArtwork(model, grid, rows, columns = LIVE_GRID_COLUMNS, paged = paged,
+        resolvedLogo = { item -> decorations.values.firstNotNullOfOrNull { it.logos.value[item.logo] } })
     val focus = remember { FocusRequester() }
     val searchFocus = remember { FocusRequester() }
     val fieldFocus = remember { FocusRequester() }
@@ -266,7 +266,9 @@ private fun LiveChannelGrid(model: LibraryModel, title: String, result: List<Ite
                 if (!loading && count == 0) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
                     Text("Eşleşen içerik yok.", color = LumenColors.textSecondary)
                 }
-                items(count, key = { it }) { index ->
+                // Absolute slot keys survive eviction/loading; changing them when a page
+                // arrives would destroy the placeholder's focus requester.
+                items(count, key = { it }, contentType = { "live-channel" }) { index ->
                     val item = if (paged != null) paged[index] else rows[index]
                     if (item != null && index == target && positioned && requestPending && !searching) LaunchedEffect(Unit) {
                         withFrameNanos { }
@@ -282,10 +284,13 @@ private fun LiveChannelGrid(model: LibraryModel, title: String, result: List<Ite
                         },
                             Modifier.fillMaxWidth()
                                 .then(gridFocus.item(index))
-                                .onFocusChanged { if (it.isFocused) paged?.focused(index) }
                                 .then(if (index == target) Modifier.focusRequester(focus) else Modifier),
-                            number = numbers[item?.id], operations = { item?.let(open) }, compact = true,
-                            categoryName = title, programmes = listOfNotNull(current[item?.id]))
+                            number = if (slotNumbers && item != null) index + 1 else numbers[item?.id],
+                            operations = { item?.let(open) }, compact = true,
+                            categoryName = title,
+                            currentProgramme = decorations[index / (paged?.pageSize ?: LIVE_PAGE_SIZE)]?.current?.value?.get(item?.id),
+                            compactLogo = decorations[index / (paged?.pageSize ?: LIVE_PAGE_SIZE)]?.logos?.value?.get(item?.logo),
+                            compactAllowHttp = item?.source in httpSources, compactLogoSize = logoSize)
                     }
                 }
             }
@@ -303,6 +308,34 @@ private fun LiveChannelGrid(model: LibraryModel, title: String, result: List<Ite
                     }
                 }
             }
+        }
+    }
+}
+
+@Stable
+private class LiveGridDecoration(
+    val current: State<Map<String, dev.lumenara.data.Slot>>,
+    val logos: State<Map<String, String?>>,
+)
+
+/** One EPG subscription and one logo resolver per retained page, independent of scrolling.
+ * Keyed effects survive overlapping windows; Room and the wall clock still refresh EPG.
+ * States are read in the item scope, so results do not recompose the grid header.
+ */
+@Composable
+private fun liveGridDecorations(model: LibraryModel, paged: WindowPages?, rows: List<Item>,
+    now: Long, ready: Boolean): Map<Int, LiveGridDecoration> = buildMap {
+    val pages = paged?.pages?.toMap() ?: rows.chunked(LIVE_PAGE_SIZE).withIndex().associate { it.index to it.value }
+    if (ready) pages.forEach { (page, items) ->
+        key(paged, page) {
+            val current = remember(model.repo, items, now) { model.repo.liveNow(items, now) }
+                .collectAsStateWithLifecycle(emptyMap())
+            val logos = produceState<Map<String, String?>>(emptyMap(), model.repo, items) {
+                value = withContext(Dispatchers.IO) {
+                    items.distinctBy { it.logo }.associate { it.logo to model.repo.poster(it) }
+                }
+            }
+            put(page, remember(current, logos) { LiveGridDecoration(current, logos) })
         }
     }
 }
