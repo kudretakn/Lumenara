@@ -5,19 +5,25 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-/** Process-wide quiet window, also used by setup and deep links that never visit Hub. */
+/** For optional work only, never visible UI. Input can defer work at most 20s after draw. */
 class StartupIdleGate(scope: CoroutineScope) {
     private data class Signals(val drawn: Boolean = false, val foreground: Boolean = false,
-        val playing: Boolean = false, val revision: Long = 0)
+        val playing: Boolean = false, val deadlineReached: Boolean = false, val revision: Long = 0)
     private val signals = MutableStateFlow(Signals())
     private val ready = MutableStateFlow(false)
     val idle = ready.asStateFlow()
 
     init {
         scope.launch {
+            signals.first { it.drawn }
+            // Independent of input/lifecycle revisions: a held remote key cannot starve work.
+            delay(20_000)
+            update { it.copy(deadlineReached = true) }
+        }
+        scope.launch {
             signals.collectLatest { observed ->
                 if (observed.drawn && observed.foreground && !observed.playing) {
-                    delay(15_000)
+                    if (!observed.deadlineReached) delay(15_000)
                     synchronized(this@StartupIdleGate) {
                         if (signals.value == observed) ready.value = true
                     }
@@ -29,7 +35,8 @@ class StartupIdleGate(scope: CoroutineScope) {
     @Synchronized private fun update(force: Boolean = false, change: (Signals) -> Signals) {
         val next = change(signals.value)
         if (!force && next == signals.value) return
-        ready.value = false
+        // Playback/background protection still applies after the startup deadline.
+        ready.value = next.drawn && next.foreground && !next.playing && next.deadlineReached
         // StateFlow may conflate a rapid stop/start or playback open/close. The revision
         // keeps that transition visible even when the final lifecycle flags are identical.
         signals.value = next.copy(revision = signals.value.revision + 1)

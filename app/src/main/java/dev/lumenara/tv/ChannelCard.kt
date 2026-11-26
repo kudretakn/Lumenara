@@ -200,7 +200,10 @@ internal fun ChannelLogo(model: LibraryModel, item: Item, logo: String?, modifie
             Modifier.fillMaxWidth(.85f), style = LumenType.label,
             color = LumenColors.textPrimary, maxLines = if (compact) 1 else 2,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center, overflow = TextOverflow.Ellipsis)
-        AsyncImage(request, contentDescription = null, modifier = Modifier.fillMaxSize(.7f),
-            contentScale = ContentScale.Fit, onSuccess = { loaded = true }, onError = { loaded = false })
+        // A text-only tile must not initialize Coil while the first frame is drawing.
+        if (request != null) {
+            AsyncImage(request, contentDescription = null, modifier = Modifier.fillMaxSize(.7f),
+                contentScale = ContentScale.Fit, onSuccess = { loaded = true }, onError = { loaded = false })
+        }
     }
 }

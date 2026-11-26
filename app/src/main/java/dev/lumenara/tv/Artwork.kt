@@ -202,12 +202,12 @@ internal fun PrefetchArtwork(model: LibraryModel, grid: LazyGridState, rows: Lis
                 val span = if (item.kind == "LIVE") channelSpan else 1
                 if (slots + span > columns) break
                 slots += span
-                val address = model.repo.poster(item) ?: continue
                 val allow = sources?.firstOrNull { it.id == item.source }?.allowHttp == true
                 val px = context.resources.displayMetrics.density
                 val width = if (item.kind == "LIVE") (28 * px).toInt() else size.width
                 val height = if (item.kind == "LIVE") width else (width * 1.5f).toInt()
                 backgroundWork.whenIdle {
+                    val address = model.repo.poster(item) ?: return@whenIdle
                     context.imageLoader.execute(artworkRequest(context, address, allow, width, height))
                 }
             }

@@ -29,14 +29,12 @@ class LumenaraApp : Application(), ImageLoaderFactory, androidx.work.Configurati
 
     internal fun prepareHubArtwork() {
         if (artworkStarted.compareAndSet(false, true)) startupScope.launch {
-            backgroundWork.whenIdle {
-                Perf.mark("startup_image_loader")
-                // Decorative Hub artwork can wait; navigation and shelf text are interactive.
-                // Keep disk-cache/OkHttp initialization off Main and out of the CPU15 window.
-                imageLoader
-                Perf.since("startup_image_loader", "startup_image_loader_ready")
-                artworkReady.value = true
-            }
+            Perf.mark("startup_image_loader")
+            // Called after the populated draw. Visible artwork must not wait for idle
+            // maintenance or its serial lane; initialize disk cache/OkHttp off Main.
+            imageLoader
+            Perf.since("startup_image_loader", "startup_image_loader_ready")
+            artworkReady.value = true
         }
     }
     override val workManagerConfiguration: androidx.work.Configuration

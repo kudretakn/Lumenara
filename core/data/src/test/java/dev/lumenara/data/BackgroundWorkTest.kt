@@ -25,12 +25,12 @@ class BackgroundWorkTest {
         assertTrue(gate.idle.value)
     }
 
-    @Test fun inputPlaybackAndBackgroundingRestartTheQuietWindow() = runTest {
+    @Test fun inputRestartsQuietWindowButDeadlineStillProtectsPlaybackAndBackground() = runTest {
         val gate = StartupIdleGate(backgroundScope)
         gate.foreground(true)
         gate.onDraw()
         runCurrent()
-        advanceTimeBy(10_000)
+        advanceTimeBy(1_000)
         gate.onInput()
         runCurrent()
         advanceTimeBy(14_999)
@@ -46,8 +46,6 @@ class BackgroundWorkTest {
         assertFalse(gate.idle.value)
         gate.playing(false)
         runCurrent()
-        advanceTimeBy(15_000)
-        runCurrent()
         assertTrue(gate.idle.value)
         gate.foreground(false)
         assertFalse(gate.idle.value)
@@ -56,9 +54,40 @@ class BackgroundWorkTest {
         assertFalse(gate.idle.value)
         gate.foreground(true)
         runCurrent()
-        advanceTimeBy(15_000)
-        runCurrent()
         assertTrue(gate.idle.value)
+    }
+
+    @Test fun continuousRemoteInputCannotDeferWorkPastTwentySecondsAfterDraw() = runTest {
+        val gate = StartupIdleGate(backgroundScope)
+        val queue = BackgroundWorkQueue(gate)
+        gate.foreground(true)
+        runCurrent()
+        advanceTimeBy(30_000)
+        gate.onDraw()
+        var ran = false
+        val maintenance = launch { queue.whenIdle { ran = true } }
+        runCurrent()
+        repeat(19) {
+            advanceTimeBy(1_000)
+            gate.onInput()
+            gate.onDraw()
+            runCurrent()
+            assertFalse(ran)
+        }
+        advanceTimeBy(999)
+        runCurrent()
+        assertFalse(ran)
+        advanceTimeBy(1)
+        gate.onInput()
+        runCurrent()
+        maintenance.join()
+        assertTrue(ran)
+        repeat(10) {
+            gate.onInput()
+            assertTrue(gate.idle.value)
+            advanceTimeBy(1_000)
+            runCurrent()
+        }
     }
 
     @Test fun importsCanRunBeforeFirstDrawAndHeavyJobsNeverOverlap() = runTest {
@@ -113,7 +142,10 @@ class BackgroundWorkTest {
         assertFalse(ran)
         // A quiet-window waiter must release the lane instead of holding it for 15 seconds.
         queue.run { }
-        advanceTimeBy(15_000)
+        advanceTimeBy(4_999)
+        runCurrent()
+        assertFalse(ran)
+        advanceTimeBy(1)
         runCurrent()
         speculative.join()
         assertTrue(ran)
@@ -162,7 +194,10 @@ class BackgroundWorkTest {
         gate.playing(false)
         assertFalse(gate.idle.value)
         runCurrent()
-        advanceTimeBy(15_000)
+        advanceTimeBy(4_999)
+        runCurrent()
+        assertFalse(gate.idle.value)
+        advanceTimeBy(1)
         runCurrent()
         assertTrue(gate.idle.value)
     }

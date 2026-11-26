@@ -113,7 +113,8 @@ private fun HubChannelShelf(
         items(rows, key = { it.id }) { item ->
             val current = programmes[item.id]
             val logo by produceState<String?>(null, item.id, item.logo) {
-                value = backgroundWork.whenIdle { model.repo.poster(item) }
+                model.awaitFirstDraw()
+                value = model.repo.poster(item)
             }
             Column(Modifier.width(150.dp), verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
                 HubShelfTile(item, { play(item, rows) }, focus,
@@ -137,17 +138,14 @@ private fun HubChannelShelf(
 
 @Composable
 private fun HubResumeShelf(model: LibraryModel, rows: List<Item>, open: (Item) -> Unit, focus: () -> Unit) {
-    val backgroundReady by model.backgroundReady.collectAsStateWithLifecycle()
-    LaunchedEffect(backgroundReady) {
-        if (backgroundReady) Perf.duration("startup_hub_episode_details_deferred", 0)
-    }
+    val detailsReady by model.hubDetailsReady.collectAsStateWithLifecycle()
     HubShelf("KALDIĞIN YERDEN DEVAM ET", "shelf-Kaldığın yerden devam et") {
         items(rows, key = { it.id }) { item ->
-            val episodes by remember(item.id, backgroundReady) {
-                if (backgroundReady && item.kind == "SERIES") model.repo.episodes(item.id) else flowOf(emptyList<Item>())
+            val episodes by remember(item.id, detailsReady) {
+                if (detailsReady && item.kind == "SERIES") model.repo.episodes(item.id) else flowOf(emptyList<Item>())
             }.collectAsStateWithLifecycle(emptyList())
-            val marks by remember(item.id, backgroundReady) {
-                if (backgroundReady && item.kind == "SERIES") model.repo.library.episodeMarks(item.id) else flowOf(emptyList<Mark>())
+            val marks by remember(item.id, detailsReady) {
+                if (detailsReady && item.kind == "SERIES") model.repo.library.episodeMarks(item.id) else flowOf(emptyList<Mark>())
             }.collectAsStateWithLifecycle(emptyList())
             val continuing by produceState<Item?>(null, episodes, marks) {
                 value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
@@ -159,11 +157,10 @@ private fun HubResumeShelf(model: LibraryModel, rows: List<Item>, open: (Item) -
             }.collectAsStateWithLifecycle(null)
             val mark = if (item.kind == "SERIES") marks.firstOrNull { it.id == continuing?.id } else observedMark
             val backdrop by produceState<String?>(null, item.id, item.backdrop, item.logo) {
+                model.awaitFirstDraw()
                 // Listing backdrops can be absent even when a provider poster is available.
-                value = backgroundWork.whenIdle {
-                    model.repo.backdrop(item)?.takeIf(String::isNotBlank)
-                        ?: model.repo.poster(item)?.takeIf(String::isNotBlank)
-                }
+                value = model.repo.backdrop(item)?.takeIf(String::isNotBlank)
+                    ?: model.repo.poster(item)?.takeIf(String::isNotBlank)
             }
             val episode = continuing?.seriesEpisode()
             val remaining = mark?.takeIf { it.duration > 0 }?.let {
@@ -195,23 +192,21 @@ private fun HubArtwork(model: LibraryModel, item: Item, address: String?, channe
     val drawn by model.firstDrawn.collectAsStateWithLifecycle()
     val artworkReady by (LocalContext.current.applicationContext as LumenaraApp)
         .hubArtworkReady.collectAsStateWithLifecycle()
-    if (!drawn || !artworkReady) {
-        Box(Modifier.fillMaxSize().background(LumenColors.surface2))
-        return
-    }
+    // Text tiles are part of the first draw, even before Coil or decryption is ready.
     if (channel) {
-        ChannelLogo(model, item, address, Modifier.fillMaxSize())
+        ChannelLogo(model, item, address.takeIf { drawn && artworkReady }, Modifier.fillMaxSize())
         return
     }
     Box(Modifier.fillMaxSize().background(LumenColors.surface2), contentAlignment = Alignment.BottomStart) {
-        if (address == null) {
-            Text(item.title, Modifier.padding(Spacing.cardGap), style = LumenType.label,
-                color = LumenColors.textPrimary, maxLines = 3, overflow = TextOverflow.Ellipsis)
-            LumenIcon(if (item.kind == "SERIES") LumenIcon.Series else LumenIcon.Film,
-                contentDescription = null, modifier = Modifier.align(Alignment.TopEnd).padding(Spacing.cardGap),
-                tint = LumenColors.textPrimary.copy(alpha = .4f))
-        } else Artwork(model, item, address, Modifier.fillMaxSize(),
-            contentScale = ContentScale.Crop, role = "backdrop")
+        Text(item.title, Modifier.padding(Spacing.cardGap), style = LumenType.label,
+            color = LumenColors.textPrimary, maxLines = 3, overflow = TextOverflow.Ellipsis)
+        LumenIcon(if (item.kind == "SERIES") LumenIcon.Series else LumenIcon.Film,
+            contentDescription = null, modifier = Modifier.align(Alignment.TopEnd).padding(Spacing.cardGap),
+            tint = LumenColors.textPrimary.copy(alpha = .4f))
+        if (drawn && artworkReady && address != null) {
+            Artwork(model, item, address, Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop, role = "backdrop")
+        }
     }
 }
 
@@ -224,8 +219,9 @@ private fun HubNavigationCard(
     val artworkReady by (LocalContext.current.applicationContext as LumenaraApp)
         .hubArtworkReady.collectAsStateWithLifecycle()
     val backdrop by produceState<String?>(null, artworkItem?.id, artworkItem?.backdrop) {
+        model.awaitFirstDraw()
         // Only a real wide image is eligible; never substitute a channel logo or poster.
-        value = backgroundWork.whenIdle { artworkItem?.let { model.repo.backdrop(it) } }
+        value = artworkItem?.let { model.repo.backdrop(it) }
     }
     FocusCard(click, modifier, focusedScale = Motion.hubFocusScale) {
         if (!compact && backdrop != null && artworkReady) {
