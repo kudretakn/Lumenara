@@ -135,7 +135,7 @@ internal fun CategoryGrid(title: String, entries: List<CategoryEntry>?, choose: 
                     requestPending = false
                 }
                 FocusCard(onClick = {
-                    Perf.mark("category")
+                    Perf.transitions.categoryStart()
                     searching = false
                     query = ""
                     choose(entry)

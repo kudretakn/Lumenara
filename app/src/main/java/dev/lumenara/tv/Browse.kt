@@ -501,12 +501,6 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
         pageSize = POSTER_PAGE_SIZE, columns = POSTER_GRID_COLUMNS, returnId = restoreId)
     val loading = !paged.firstPageLoaded
     val count = paged.count
-    LaunchedEffect(paged, loading) {
-        if (!loading && count > 0) {
-            withFrameNanos { }; withFrameNanos { }
-            Perf.since("category", "category_grid_first_draw")
-        }
-    }
     val sources by model.sources.collectAsStateWithLifecycle()
     val httpSources = remember(sources) { sources.orEmpty().filter { it.allowHttp }.map { it.id }.toSet() }
     val density = LocalDensity.current
@@ -564,7 +558,8 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
                 columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(POSTER_GRID_COLUMNS),
                 state = grid,
                 modifier = Modifier.weight(1f).onSizeChanged { gridWidth = it.width }.testTag("poster-grid").reportScrollPosition(grid).then(gridFocus.modifier)
-                    .semantics { pagingWindow = pagingDescription(paged) }.focusRestorer().focusGroup(),
+                    .semantics { pagingWindow = pagingDescription(paged) }.focusRestorer().focusGroup()
+                    .categoryFirstDraw(!loading && (count == 0 || positioned && paged[posterTarget] != null)),
                 // TV safe area plus the title/year below the focusable poster.
                 contentPadding = PaddingValues(top = 8.dp, bottom = 64.dp),
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
