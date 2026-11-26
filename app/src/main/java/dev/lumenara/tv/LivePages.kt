@@ -28,7 +28,8 @@ internal suspend fun liveNeighbor(model: LibraryModel, item: Item, group: LiveCh
     if (delta == 0) return item to group
     val rows = model.repo.liveNeighbors(group.source, group.category, group.query, group.shelf,
         maxOf(LIVE_PAGE_SIZE, kotlin.math.abs(delta)), item.id, delta < 0).first()
-    val target = rows.getOrNull(kotlin.math.abs(delta) - 1) ?: return null
+    // A burst may cross the list boundary; land on its last channel rather than dropping the zap.
+    val target = rows.getOrNull(kotlin.math.abs(delta) - 1) ?: rows.lastOrNull() ?: return null
     val ordered = if (delta < 0) rows.asReversed() else rows
     return target to LiveChannelGroup(ordered, group.source, group.category, group.query, group.shelf)
 }

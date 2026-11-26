@@ -16,6 +16,26 @@ class HistoryCarryOverDeviceTest {
     private val repo = Repository.get(context)
     private val prefs = Preferences(context)
 
+    @Test fun removingUndecryptableSourceDeletesItsItems() = runBlocking {
+        val id = "carry-invalid-${System.nanoTime()}"
+        val items = listOf(
+            Item("$id-live", id, "Channel", "", "LIVE", "", "", "channel", 1, ""),
+            Item("$id-movie", id, "Film", "", "MOVIE", "", "", "film", 1, ""),
+        )
+        try {
+            // Like UI fixtures, this endpoint bypasses Vault and is shorter than its IV.
+            repo.library.save(Source(id, id, "", false, 0, items.size))
+            repo.library.save(items)
+            assertNotNull(repo.library.source(id))
+            items.forEach { assertNotNull(repo.library.item(it.id)) }
+
+            repo.remove(id)
+
+            assertNull(repo.library.source(id))
+            items.forEach { assertNull(repo.library.item(it.id)) }
+        } finally { repo.library.deleteSource(id) }
+    }
+
     private fun published(id: String): WatchNextProgram? {
         context.contentResolver.query(TvContractCompat.WatchNextPrograms.CONTENT_URI, null, null, null, null)?.use { cursor ->
             while (cursor.moveToNext()) if (cursor.getString(cursor.getColumnIndexOrThrow("package_name")) == context.packageName) {

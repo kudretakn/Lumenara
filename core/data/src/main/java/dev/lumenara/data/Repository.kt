@@ -8,6 +8,7 @@ import androidx.room.withTransaction
 import androidx.work.*
 import dev.lumenara.catalog.*
 import java.net.URI
+import java.security.GeneralSecurityException
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.*
@@ -25,6 +26,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import org.json.JSONObject
+import org.json.JSONException
 
 data class SourceSpec(
     val address: String,
@@ -483,7 +485,7 @@ class Repository private constructor(private val context: Context) {
             require(name.isNotBlank()) { "Kaynak adını girin." }
             val id = UUID.randomUUID().toString()
             // Cleanup runs under the same lock, including cancellation after the DB commit.
-            imports.run(progress, onFailure = { library.deleteSource(id) }) {
+            imports.run(progress, onFailure = { removeUnlocked(id) }) {
                 val resolved = resolveSource(spec, progress)
                 val source = Source(id, name.trim(), vault.encrypt(resolved.encode()), resolved.allowHttp, 0, 0)
                 import(source, resolved, progress = progress)
@@ -513,7 +515,10 @@ class Repository private constructor(private val context: Context) {
 
     private suspend fun carryRows(source: String, xtream: Boolean): List<CarryRow> {
         val rows = library.carryRows(source, legacy = xtream)
-        if (!xtream) return rows
+        return if (xtream) legacyCarryRows(rows) else rows
+    }
+
+    private fun legacyCarryRows(rows: List<CarryRow>): List<CarryRow> {
         val parents = rows.filter { it.kind == "SERIES" }.associate { row -> row.id to row.providerId.ifEmpty {
             legacyProviderId(vault.decrypt(row.legacyUrl), row.kind)
         } }
@@ -534,8 +539,59 @@ class Repository private constructor(private val context: Context) {
         }
     }
 
-    suspend fun remove(id: String) = lock.withLock {
-        library.deleteSource(id)
+    suspend fun remove(id: String) = withContext(Dispatchers.IO) {
+        lock.withLock { removeUnlocked(id) }
+    }
+
+    // Only decoding belongs in this block: database and preference failures must propagate.
+    private inline fun <T> decodeRemovalSnapshot(block: () -> T): T? = try {
+        block()
+    } catch (_: GeneralSecurityException) {
+        removalSnapshotWarning()
+        null
+    } catch (_: IllegalArgumentException) {
+        removalSnapshotWarning()
+        null
+    } catch (_: JSONException) {
+        removalSnapshotWarning()
+        null
+    }
+
+    private fun removalSnapshotWarning() {
+        android.util.Log.w("LumenaraRepository", "Skipping history carry-over: stored source data could not be decoded")
+    }
+
+    // Also used for a cancelled add after its catalog committed: re-save recovered state before cleanup.
+    private suspend fun removeUnlocked(id: String) {
+        val source = library.source(id) ?: return
+        val spec = decodeRemovalSnapshot { SourceSpec.decode(vault.decrypt(source.endpoint)) } ?: run {
+            library.deleteSource(id)
+            return
+        }
+        val now = System.currentTimeMillis()
+        val snapshots = preferences.orphanSnapshots(now)
+        val storedRows = library.carryRows(id, legacy = true)
+        val rows = decodeRemovalSnapshot {
+            if (spec.user.isNotEmpty()) legacyCarryRows(storedRows) else storedRows.map { row ->
+                row.copy(urlHash = row.legacyUrl.takeIf { it.isNotEmpty() }
+                    ?.let { contentKey("orphan-url", vault.decrypt(it)) }.orEmpty(), legacyUrl = "")
+            }
+        } ?: run {
+            library.deleteSource(id)
+            return
+        }
+        val excluded = context.getSharedPreferences("watch_next_state", Context.MODE_PRIVATE)
+            .getStringSet("excluded", emptySet()).orEmpty().toSet()
+        val provider = orphanProvider(spec)
+        val ids = rows.map { it.id }.toSet()
+        val redirects = library.redirects().filter { it.newId in ids }
+        val snapshot = provider?.let { orphanHistory(id, it, now, rows, library.backupMarks(),
+            library.carryMembers(), preferences.carryReferences(rows) + excluded + redirects.map { it.newId })
+            .copy(redirects = redirects) }
+        restoreTransaction.run {
+            preferences.saveOrphanSnapshots(snapshots + listOfNotNull(snapshot?.takeIf { it.pendingIds().isNotEmpty() }))
+            library.deleteSource(id)
+        }
     }
 
     suspend fun addGuide(sourceId: String, url: String) =
@@ -647,7 +703,11 @@ class Repository private constructor(private val context: Context) {
         val staged = CatalogStage(context.cacheDir, source.id, token)
         val job = currentCoroutineContext()
         val carryStart = android.os.SystemClock.elapsedRealtime()
-        val old = carryRows(source.id, spec.user.isNotEmpty())
+        // Backup imports must never read or consume device-local recovery state.
+        val retainedOrphans = if (carryPreferences) preferences.orphanSnapshots(System.currentTimeMillis()) else emptyList()
+        val recovering = retainedOrphans.filter { it.provider == orphanProvider(spec) }
+        val previousRows = carryRows(source.id, spec.user.isNotEmpty())
+        val old = previousRows + recovering.flatMap { it.rows }
         val incoming = ArrayList<CarryRow>()
         val series = ArrayList<Item>()
         try {
@@ -655,7 +715,10 @@ class Repository private constructor(private val context: Context) {
             staged.write { append ->
                 fun stage(row: Item) {
                     append(row)
-                    incoming += row.carryRow()
+                    incoming += row.carryRow().let { identity ->
+                        if (recovering.isNotEmpty() && spec.user.isEmpty()) identity.copy(
+                            urlHash = contentKey("orphan-url", vault.decrypt(row.encryptedUrl))) else identity
+                    }
                     if (incoming.size % 250 == 0) progress?.report("İçerikler hazırlanıyor · ${importCount(incoming.size)}")
                     if (row.kind == "SERIES") series += row
                 }
@@ -689,10 +752,17 @@ class Repository private constructor(private val context: Context) {
                 // Xtream episodes are lazy. Rebuild only already-expanded series whose locator
                 // changed, before pruning their old parents. A failed fetch leaves the old catalog intact.
                 if (xtream != null) {
-                    val expanded = old.filter { it.kind == "EPISODE" }.map { it.parent }.toSet()
-                    val matches = matchCarryOver(old.filter { it.kind == "SERIES" }, incoming.filter { it.kind == "SERIES" }).ids
+                    val expanded = previousRows.filter { it.kind == "EPISODE" }.map { it.parent }.toSet() +
+                        recovering.flatMap { orphan ->
+                            val pending = orphan.pendingIds()
+                            orphan.rows.filter { it.kind == "EPISODE" && it.id in pending }.map { it.parent }
+                        }
+                    val targets = incoming.filter { it.kind == "SERIES" }
+                    val matches = matchCarryOver(previousRows.filter { it.kind == "SERIES" }, targets).ids +
+                        recovering.flatMap { orphan -> matchCarryOver(orphan.rows.filter { it.kind == "SERIES" },
+                            targets, categoryFallback = true).ids.entries }.associate { it.key to it.value }
                     val parents = series.associateBy { it.id }
-                    for ((from, to) in matches) if (from in expanded) {
+                    for (to in matches.filterKeys { it in expanded }.values.toSet()) {
                         val parent = parents.getValue(to)
                         xtream.episodes(vault.decrypt(parent.encryptedUrl), parent.title).distinctBy { it.url }.forEach {
                             job.ensureActive()
@@ -703,9 +773,12 @@ class Repository private constructor(private val context: Context) {
             }
             val incomingIds = incoming.map { it.id }.toSet()
             val refreshedParents = incoming.filter { it.kind == "EPISODE" }.map { it.parent }.toSet()
-            val matches = matchCarryOver(old.filterNot {
+            val existingMatches = matchCarryOver(previousRows.filterNot {
                 it.kind == "EPISODE" && it.parent in incomingIds && it.parent !in refreshedParents
             }, incoming)
+            val orphanMatches = matchOrphanHistories(recovering, incoming)
+            val matches = CarryMatch(existingMatches.ids + orphanMatches.ids,
+                existingMatches.ambiguous + orphanMatches.ambiguous, existingMatches.unmatched + orphanMatches.unmatched)
             // M3U supplies the complete episode catalog. Missing episodes must be pruned even
             // when marked; matched locator changes have already carried their state forward.
             // Xtream episodes are lazy, so absence from its top-level catalog proves nothing.
@@ -738,7 +811,23 @@ class Repository private constructor(private val context: Context) {
                 val preferenceReferences = preferences.carryReferences(old)
                 val excluded = context.getSharedPreferences("watch_next_state", Context.MODE_PRIVATE)
                     .getStringSet("excluded", emptySet()).orEmpty().toSet()
-                carryRoomState(db, matches.ids, preferenceReferences + excluded)
+                val orphanReferences = recovering.flatMap { it.pendingIds() }.toSet()
+                carryRoomState(db, matches.ids, preferenceReferences + excluded + orphanReferences)
+                for (orphan in recovering) {
+                    for (mark in orphan.marks) {
+                        val target = orphanMatches.ids[mark.id] ?: continue
+                        library.save(mergeCarryMark(mark, library.mark(target), target))
+                    }
+                    for (member in orphan.members) {
+                        val target = orphanMatches.ids[member.id] ?: continue
+                        if (library.member(target) == null) library.collection(member.copy(id = target))
+                    }
+                    for (redirect in orphan.redirects) {
+                        val target = orphanMatches.ids[redirect.newId] ?: continue
+                        if (redirect.oldId != target && library.redirectedId(redirect.oldId) == null)
+                            library.redirect(redirect.copy(newId = target))
+                    }
+                }
                 // Keep other unresolved user records for a future/manual retry, including
                 // lazy episode parents, rather than guessing or cascading their removal.
                 val protected = (library.carryProtectedIds(source.id) + preferenceReferences)
@@ -754,13 +843,18 @@ class Repository private constructor(private val context: Context) {
                 prepareCatalog(source.id, token)
                 if (carryPreferences && matches.ids.isNotEmpty()) {
                     val current = library.carryRows(source.id)
-                    val subtitleKeys = preferences.carryItems(matches.ids, carryPreferenceIdentities(old, current, matches.ids))
+                    val subtitleKeys = preferences.carryItems(matches.ids, carryPreferenceIdentities(old, current, matches.ids),
+                        old.filter { it.id in matches.ids }.associate { it.source to source.id })
                     subtitles.cache.carryKeys(subtitleKeys)
                 }
+                if (recovering.isNotEmpty()) preferences.saveOrphanSnapshots(
+                    retainedOrphans.filterNot { it in recovering } + recovering.mapNotNull {
+                        pendingOrphanHistory(it, orphanMatches.ids.keys)
+                    })
                 job.ensureActive()
                 library.save(source.copy(refreshed = token, count = library.count(source.id)))
             }
-            if (carryPreferences && matches.ids.isNotEmpty()) restoreTransaction.run { commit() }
+            if (carryPreferences && (matches.ids.isNotEmpty() || recovering.isNotEmpty())) restoreTransaction.run { commit() }
             else db.withTransaction { commit() }
             android.util.Log.i("LumenaraPerf", "history_carry_over matched=${matches.ids.size} ambiguous=${matches.ambiguous} unmatched=${matches.unmatched}")
         } finally {

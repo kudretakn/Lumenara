@@ -25,6 +25,7 @@ data class CarryRow(
     val providerId: String, val tvgName: String, val tvgGroup: String,
     val legacyUrl: String = "",
     val versionKey: String = "",
+    val urlHash: String = "",
 ) {
     fun preferenceIdentity(): String = "$source|$kind|${productionName(title, year).key()}"
 }
@@ -35,7 +36,7 @@ private val carryPunctuation = Regex("[^\\p{L}\\p{N}]+")
 private fun normalized(value: String) = searchable(value).replace(carryPunctuation, " ").trim()
 
 /** Never choose an arbitrary rendition. Duplicate keys on either side block weaker matches. */
-fun matchCarryOver(oldRows: List<CarryRow>, newRows: List<CarryRow>): CarryMatch {
+fun matchCarryOver(oldRows: List<CarryRow>, newRows: List<CarryRow>, categoryFallback: Boolean = false): CarryMatch {
     // Import upserts duplicate locators; match the final persisted row for each primary key.
     val oldParents = oldRows.associateBy { it.id }
     val newParents = newRows.associateBy { it.id }
@@ -68,6 +69,7 @@ fun matchCarryOver(oldRows: List<CarryRow>, newRows: List<CarryRow>): CarryMatch
         }
     }
     round { row, _ -> row.providerId.takeIf { it.isNotBlank() }?.let { "${row.kind}|$it" } }
+    round { row, _ -> row.urlHash.takeIf { it.isNotEmpty() }?.let { "${row.kind}|$it" } }
     round { row, _ ->
         if (row.providerId.isNotEmpty()) null else row.tvgId.takeIf { it.isNotBlank() }
             ?.let { "${row.kind}|${it.trim()}|${normalized(row.tvgGroup.ifBlank { row.category })}" }
@@ -78,13 +80,14 @@ fun matchCarryOver(oldRows: List<CarryRow>, newRows: List<CarryRow>): CarryMatch
     }
     round { row, parents ->
         val name = productionName(row.title, row.year)
+        val category = if (categoryFallback) "|${normalized(row.category)}" else ""
         when (row.kind) {
-            "MOVIE" -> normalized(name.title).takeIf { it.isNotBlank() }?.let { "MOVIE|$it|${name.year}" }
-            "SERIES" -> normalized(name.title).takeIf { it.isNotBlank() }?.let { "SERIES|$it|${name.year}" }
-            "LIVE" -> normalized(row.title).takeIf { it.isNotBlank() }?.let { "LIVE|$it" }
+            "MOVIE" -> normalized(name.title).takeIf { it.isNotBlank() }?.let { "MOVIE|$it|${name.year}$category" }
+            "SERIES" -> normalized(name.title).takeIf { it.isNotBlank() }?.let { "SERIES|$it|${name.year}$category" }
+            "LIVE" -> normalized(row.title).takeIf { it.isNotBlank() }?.let { "LIVE|$it$category" }
             "EPISODE" -> if (!hasEpisodeNumber(row.title)) null else episodeName(row.title, row.category).let {
                 val series = parents[row.parent]?.title ?: it.series
-                "EPISODE|${normalized(productionName(series).title)}|${it.season}|${it.episode}"
+                "EPISODE|${normalized(productionName(series).title)}|${it.season}|${it.episode}$category"
             }
             else -> null
         }
@@ -134,11 +137,13 @@ internal fun carryPlaybackIdentity(row: CarryRow, identities: Map<String, String
     return "$base|${number.season}|${number.episode}"
 }
 
-internal fun remapSubtitleDelayKey(name: String, ids: Map<String, String>): String? {
+internal fun remapSubtitleDelayKey(name: String, ids: Map<String, String>,
+    sources: Map<String, String> = emptyMap()): String? {
     val identity = name.removePrefix("subtitle_delay_")
     val separator = identity.lastIndexOf('|')
     if (!name.startsWith("subtitle_delay_") || separator < 0) return null
     val itemId = identity.substring(separator + 1)
     val replacement = ids[itemId] ?: return null
-    return "subtitle_delay_${identity.substring(0, separator + 1)}$replacement"
+    val source = identity.substring(0, separator)
+    return "subtitle_delay_${sources[source] ?: source}|$replacement"
 }

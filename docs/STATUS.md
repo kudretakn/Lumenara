@@ -1,11 +1,16 @@
 # Durum
 
-Son güncelleme: 24 Kasım 2026 (Oracle sunucusu oturumu, STATUS düzeltmesi)
+Son güncelleme: 26 Kasım 2026 (0.5.9 portu, Codex çalışma dalı)
 
 > **Başlangıç:** `git fetch --all --prune && git switch main && git pull`, sonra bu dosyayı ve `CLAUDE.md`'yi oku.
 > **Çalışma düzeni (18 Kasım 2026, kullanıcı kararı):** sen ekip liderisin. Yalnız **Codex** ajanları kullan (`gpt-6-luna` basit, `gpt-6.1-sol` orta/zor, `gpt-6-astra` çok zor); Claude alt ajanı açma (inceleme ve log analizi de Codex'e). Kendin kod yazma (yalnız birleştirme çakışması ve tek satırlık mekanik düzeltme). Kullanıcıyla Türkçe, kısa konuş; commit ve PR metinleri İngilizce.
 
 ## Şu an
+- **0.5.9 hazırlığı** (`feat/0.5.9-carry-zap`, yerel değişiklikler; commit/push yok): 18 Kasım carry/zap/PowerShell yamaları güncel v0.5.8 tabanına taşındı. Sürüm `0.5.9`, versionCode `20`; Room şeması **13** kaldı. Katalog yenilemede mevcut `prepareCatalog` (sürüm grupları + türetilmiş veriler), 0.5.8 eski alanlardan okuma yolu ve performans işaretleri korunuyor. Gradle, APK ve cihaz doğrulaması liderde.
+- **Geçmiş kurtarma:** kaynak silinmeden önce yalnız kullanıcı durumu ve eşleşme için gerekli kimlikler cihaz Vault'u ile şifrelenir; Room silme ve DataStore yazma mevcut dayanıklı geri alma günlüğüyle birlikte yapılır. Favori/Listem bayrakları birleştirilir, ilerlemede en yeni kayıt kazanır. Eşleşmeyen/belirsiz kayıtlar 30 gün boyunca saklanır ve sonraki katalog yenilemelerinde yeniden denenir. Yedek dışıdır; yedek içe aktarması yerel kurtarma kayıtlarını tüketmez. Ayrıntılı eşleşme kuralı: `docs/plans/history-carry-0.5.9.md`.
+- **Hızlı kanal geçişi:** CH/PAGE/DPAD aynı 80 ms son hedef kuyruğunu kullanır; eski sorgu ve VLC HTTP açılışı iptal edilir. VLC oynatıcı/görüntü bağlantısı canlı oturum boyunca, Media3 renderers canlı geçişte korunur; komşu URL/DNS hazırlığı ek IPTV akışı açmaz. Sessiz kanalda otomatik VLC geçişi oturumda korunur; desteklenmeyen canlı akışta otomatik Media3 dönüşü döngüye girmez. Yeniden bağlanma politikası değişmedi. `zap_start` / `zap_first_frame` mevcut `channel_first_frame_*` ölçümlerine eklendi (VLC'de Vout sinyali).
+- **Yerel doğrulama (Gradle çalıştırılmadı):** önbellekteki Kotlin/JUnit ile 66 benzersiz JVM testi geçti: 13 kurtarma, 10 mevcut taşıma, 11 geri alma günlüğü, 14 zap, 12 yeniden bağlanma, 6 VLC veri pompası. Güncel Kotlin/Compose kaynak kontrolü de geçti (geçici kaynak kimlikleriyle; Android paketleme/kod üretimi değil). Room/KSP, lint, APK ve cihaz doğrulaması yapılmadı.
+- **0.5.9 kabul kontrolü:** lider tüm modül JVM testlerini/lint/APK derlemesini ve emülatör testlerini çalıştırmalı. Mi Box'ta hızlı ve ters yönlü tuş serileri, liste sınırı, numara/rehberden doğrudan seçim, sessiz kanalda VLC geçişi, HLS kanalına dönüş, yeniden bağlanma ve kaynak sil/ekle + kısmi eşleşme denenmeli; zap süreleri önceki 1,0–1,7 sn ile karşılaştırılmalı.
 - **Son sürüm v0.5.8** (21 Kasım, PR #36 birleşti ve yayımlandı): türetilmiş katalog arka planda doldurulurken eski alanlardan okuma, backfill'in hemen başlaması, Hub raflarının ilk çizime katılması ve alt raf başlıklarının kesilmesi düzeltmesi (`HubShelf`, başlık ve alt yazılar dahil tüm raf için `bringIntoView` istiyor). `fix/derived-fallback` ve Hub raf başlığı işleri tamamlandı. v0.5.7 (PR #34/#35) yayımlandı; açık PR yok.
 - **Doğrulama bekleyenler:** 0.5.6/0.5.7/0.5.8 için TV ölçümü henüz yok; aşağıdaki ölçümler 0.5.5'e ait. `HubFirstDrawTest` / `DenseGridTest` son raf senaryosu cihazda çalıştırılmadı. Mi Box'ta güncelleme sonrası ilk açılış, +18, kanal sırası/numarası, DPAD raf odağı (alt raf/sağ-sol gezinmesi dahil) ve açılış CPU/süre ölçümü bekliyor.
 - 0.5.5 TV ölçümü (Mi Box 4, 39.682 içerik):
@@ -22,20 +27,14 @@ Son güncelleme: 24 Kasım 2026 (Oracle sunucusu oturumu, STATUS düzeltmesi)
 - **Ana ilke (kullanıcı kararı, 18 Kasım): IPTV listesi zaten TV'de (Room) duruyor; ondan türetilen her şey (temiz başlık/sıralama anahtarı, sürüm grupları, +18 sınıfı, kategori sırası ve sayımları, Hub toplamları, arama anahtarları, kanal numaraları) liste yenilenirken bir kez hesaplanıp saklansın, açılışta yalnız hazır sonuç okunsun. Gerekirse şema 12→13 (yalnız DDL), mevcut satırlar arka planda parça parça doldurulur.**
 - Açılış inceleme notları: `docs/plans/startup-cpu-0.5.6.md` (gpt-6.1-sol high). TV'de kabul: alt satırlarda sağ/sol gezerken liste dikeyde hiç kıpırdamasın; yalnız satır değişince kaysın.
 - Not: genel OkHttp istemcisine `callTimeout` EKLENMEZ — aynı istemci VLC oynatma, güncelleme indirme, OpenSubtitles ve TMDB tarafından kullanılıyor (incelemede yakalandı).
-- İzleme kaydı taşımada elle yol (kaynağı silip yenisini ekleyince) yayımlanmadı; sunucudaki `feat/057-carry` çalışması commit edilmemiş durumda, kullanıcı kararı bekliyor.
 - Hız hedefleri: ilk kare < 1,2 sn (sağlandı), Hub tam < 1,5 sn, ilk 15 sn CPU < 5 sn. Hub ve CPU hedefleri açık; 0.5.5 ölçümü Hub tam 3,2 sn, ilk 12 sn CPU ≈ 23–24 sn.
 - U3 (ebeveyn kilidi/PIN, kanal sıralama) kullanıcı kararıyla planlardan SİLİNDİ (18 Kasım); önerme, yapma. Remux testi: kullanıcı "geç" dedi. Baseline profile cihazda ÜRETİLMEYECEK (kullanıcı kararı, 18 Kasım).
 - Kontrol: altyazı arama ekranında arkada kitaplık görünmesi, sessiz kanallarda VLC'ye geçiş, canlı yayın yeniden bağlanmanın sahada tetiklenmesi, altyazı gecikmesinin TV'de denenmesi.
-- `scripts/local-device-tests.ps1` RETRIED testi "Tests that never ran" diye yanlış sınıflandırıyor; sunucudaki `feat/057-ps1` düzeltmesi commit edilmemiş durumda, kullanıcı kararı bekliyor.
 
 ### Sunucudaki commit edilmemiş işler (18 Kasım, Oracle sunucusu)
 
-- `~/workspace/lumenara-wt` altındaki dört Codex worktree'sinde `6c43fa5` tabanı üzerinde **commit edilmemiş**, hiç push edilmemiş değişiklikler var:
-  - `feat/057-carry`: kaynak değiştirildiğinde izleme geçmişini taşıma; `OrphanHistory.kt` + test, Backup/Preferences/Repository değişiklikleri.
-  - `feat/057-zap`: hızlı canlı kanal geçişi; `LiveZapController` + test, `LiveUrlCache`, VLC girdi değişiklikleri.
-  - `feat/057-ps1`: `scripts/local-device-tests.ps1` RETRIED sınıflandırma düzeltmesi.
-  - `tools/perf-harness`: `scripts/perf/`.
-- Yama yedekleri sunucuda: `~/lumenara-wip-backup-2026-11-24/*.patch`. Tamamlanıp tamamlanmayacağı kullanıcı kararını bekliyor; silme.
+- Yalnız `tools/perf-harness`: `scripts/perf/` işi eski `6c43fa5` tabanında commit edilmemiş durumda kaldı; bu porta dahil değil.
+- Eski yama yedekleri `~/lumenara-wip-backup-2026-11-24/*.patch` altında korunuyor; silinmedi.
 
 ## TV ölçümleri (17 Kasım 2026, Mi Box 4, v0.5.0, Wi-Fi)
 - Bellek (PSS): Hub boşta 72 MB, 10.645 kanallı ızgara 90 MB, canlı (VLC) 87 MB, 4K film 109 MB. Sorun yok.
@@ -60,6 +59,6 @@ Son güncelleme: 24 Kasım 2026 (Oracle sunucusu oturumu, STATUS düzeltmesi)
 
 ## Çalışma notları
 - **CI:** `main` korumalı (build + device zorunlu). Hepsi yeşil olmadan merge yok; yeşilse sormadan merge. Cihaz testleri artık yerelde de çalıştırılabilir: `scripts/local-device-tests.ps1` (emülatör; ilk tam turu henüz doğrulanmadı). Release: `v*` etiketi → imzalı APK → `kudretakn/Lumenara-releases` (CHANGELOG'da `## <sürüm> · <tarih>` başlığı şart).
-- **Sunucu (Oracle ARM):** 2 CPU, dar disk. 17 Kasım'da temizlendi: Gradle önbelleği, o tarihteki worktree'ler ve yerel dallar silindi (hepsi GitHub'da). Sunucuda ilk derleme ~2 GB bağımlılığı yeniden indirir. Sunucudaki `~/workspace/streamora`, `main` dalında (`origin` gerisinde); yerel oturum kendi klonunu kullanır. Eski worktree'ler var: carry, cpu, harness, jit, ps1, readme, subapi, win, zap. cpu/jit/readme/subapi/win içinde commit edilmemiş veya birleşmemiş iş yok; carry/zap/ps1/harness işleri yukarıdaki alt bölümde.
+- **Sunucu (Oracle ARM):** 2 CPU, dar disk. 17 Kasım'da temizlendi: Gradle önbelleği, o tarihteki worktree'ler ve yerel dallar silindi (hepsi GitHub'da). Sunucuda ilk derleme ~2 GB bağımlılığı yeniden indirir. Sunucudaki `~/workspace/streamora`, `main` dalında (`origin` gerisinde); yerel oturum kendi klonunu kullanır. Eski worktree'ler var: carry, cpu, harness, jit, ps1, readme, subapi, win, zap. cpu/jit/readme/subapi/win içinde commit edilmemiş veya birleşmemiş iş yok; carry/zap/ps1 işleri 0.5.9 dalına taşındı; yalnız harness işi yukarıdaki alt bölümde açık.
 - **Bilinen arada düşen testler** (tekrar denemede geçerse RETRIED yazılır): CinemaJourneyTest, FullscreenTest ("performMeasureAndLayout"), LiveComfortTest, AudioSubtitleTest (VLC altyazı).
 - Sabit tarihli testlerden kaçın (bkz. CLAUDE.md "Tuzaklar").

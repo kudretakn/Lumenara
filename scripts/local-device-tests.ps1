@@ -49,7 +49,7 @@ function Get-Results([string]$log) {
         elseif ($line -match 'INSTRUMENTATION_STATUS_CODE: -3$') { "SKIP  $cls.$name" }
     }
 }
-function Strip($lines) { $lines | ForEach-Object { $_ -replace '^[A-Z]+\s+', '' } }
+function Strip($lines) { $lines | ForEach-Object { $_ -replace '^(?:PASS|FAIL|SKIP|RETRIED)\s+', '' } }
 
 & $adb -s $Serial logcat -c | Out-Null
 & $adb -s $Serial shell settings put global window_animation_scale 0 | Out-Null
@@ -98,6 +98,8 @@ $final | Set-Content $summary -Encoding utf8
 & $adb -s $Serial pull /sdcard/Download/lumenara-ui $out 2>&1 | Out-Null
 
 $final
+$retried = @($final | Where-Object { $_ -match '^RETRIED\s+' } | ForEach-Object { $_ -replace '^RETRIED\s+', '' })
+if ($retried.Count -gt 0) { Write-Host "Passed with retry:"; $retried }
 Get-ChildItem $out -Filter "instrument*.txt" | Select-String -Pattern 'INSTRUMENTATION_STATUS: stack=' -Context 0,4 | Select-Object -First 30 | ForEach-Object { $_.Line; $_.Context.PostContext }
 
 if ($code -eq 124) { Write-Host "Instrumentation timed out"; exit 1 }
@@ -105,6 +107,6 @@ $ran = @(Strip $final | Sort-Object -Unique)
 $never = @($all | Where-Object { $ran -notcontains $_ })
 if ($all.Count -eq 0) { Write-Host "Could not list the tests"; exit 1 }
 if ($never.Count -gt 0) { Write-Host "Tests that never ran (crash?):"; $never; exit 1 }
-if (-not ($final -match '^PASS')) { Write-Host "No test passed"; exit 1 }
+if (-not ($final -match '^(PASS|RETRIED)\s+')) { Write-Host "No test passed"; exit 1 }
 if ($final -match '^FAIL') { exit 1 }
 exit 0

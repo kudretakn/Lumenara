@@ -52,6 +52,8 @@ internal fun Video(
     failure: (Boolean) -> Unit = {},
     liveRetry: LiveRetry? = null,
     subtitleDelayUs: java.util.concurrent.atomic.AtomicLong? = null,
+    liveUrls: LiveUrlCache? = null,
+    livePlaying: () -> Unit = {},
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val owner = LocalLifecycleOwner.current
@@ -59,6 +61,7 @@ internal fun Video(
     if (!lifecycle.isAtLeast(Lifecycle.State.STARTED)) return
     val currentReady by rememberUpdatedState(ready)
     val currentEnded by rememberUpdatedState(ended)
+    val currentLivePlaying by rememberUpdatedState(livePlaying)
     var playbackActive by remember(item.id) { mutableStateOf(false) }
     var error by remember(item.id) { mutableStateOf("") }
     var subtitleText by remember(item.id) { mutableStateOf("") }
@@ -88,7 +91,7 @@ internal fun Video(
             subtitleText = ""
             try {
                 val source = model.repo.library.source(item.source) ?: error("Kaynak kaldırıldı")
-                val url = model.repo.address(item)
+                val url = if (item.kind == "LIVE" && liveUrls != null) liveUrls.address(item) else model.repo.address(item)
                 val saved = model.repo.library.mark(item.id)
                 val start =
                     if (resume >= 0) resume
@@ -143,7 +146,10 @@ internal fun Video(
                 }
                 val mediaListener = object : Player.Listener {
                         override fun onRenderedFirstFrame() {
-                            if (!preview && !multi) Perf.since("channel", "channel_first_frame_media3")
+                            if (!preview && !multi) {
+                                Perf.since("channel", "channel_first_frame_media3")
+                                Perf.zapFirstFrame(item.id)
+                            }
                         }
                         override fun onCues(cueGroup: androidx.media3.common.text.CueGroup) {
                             subtitleText = cueGroup.cues.mapNotNull { it.text }.joinToString(" ")
@@ -194,6 +200,7 @@ internal fun Video(
 
                         override fun onIsPlayingChanged(isPlaying: Boolean) {
                             playbackActive = isPlaying
+                            if (isPlaying && item.kind == "LIVE") currentLivePlaying()
                             if (isPlaying && !reconnectRequested) { retry.playing(); error = "" }
                             if (isPlaying && !preview && !recorded) {
                                 recorded = true
@@ -256,6 +263,7 @@ internal fun Video(
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
+                player?.stop()
                 if (BuildConfig.DEBUG) {
                     val frames =
                         e.stackTrace.take(8).joinToString(" / ") {
@@ -276,7 +284,8 @@ internal fun Video(
                 model.progress(item, resume, engine.duration)
                 listener?.let(engine::removeListener)
                 listener = null
-                engine.stop()
+                // setMediaItem replaces live input without disabling the reusable renderers.
+                if (item.kind != "LIVE") engine.stop()
             }
         }
     }
@@ -388,9 +397,36 @@ internal fun Playback(
     var category by remember { mutableStateOf("") }
     val slots = remember { decoderSlots() }
     val scope = rememberCoroutineScope()
-    var moveJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    val activeId by rememberUpdatedState(item.id)
-    DisposableEffect(item.id) { onDispose { moveJob?.cancel() } }
+    val zap = remember(scope) { LiveZapController<Pair<Item, List<Item>>>(scope, targetId = { it.first.id }) }
+    SideEffect { zap.synchronize(item.id) }
+    DisposableEffect(zap) { onDispose { zap.cancel(); Perf.zapCancel() } }
+    val liveUrls = remember(model) { LiveUrlCache(model) }
+    var playingLive by remember(item.id) { mutableStateOf(false) }
+    val currentChannelId by rememberUpdatedState(item.id)
+    fun selectChannel(channel: Item, rows: List<Item>, queued: Boolean = false) {
+        if (!queued) { zap.cancel(); Perf.zapCancel() }
+        if (channel.kind == "LIVE" && channel.id != currentChannelId) {
+            if (!queued) Perf.zapStart()
+            Perf.zapSelected(channel.id)
+            Perf.mark("channel")
+        }
+        changeGroup(rows)
+        select(channel)
+    }
+    LaunchedEffect(item.id, item.encryptedUrl, group, playingLive) {
+        if (item.kind != "LIVE" || !playingLive) return@LaunchedEffect
+        for (direction in listOf(-1, 1)) launch {
+            try {
+                val neighbor = if (group is LiveChannelGroup) liveNeighbor(model, item, group, direction)?.first
+                    else group.indexOfFirst { it.id == item.id }.takeIf { it >= 0 }?.let { group.getOrNull(it + direction) }
+                if (neighbor != null) liveUrls.warm(neighbor)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // A speculative catalog lookup must not interrupt playback.
+            }
+        }
+    }
     var sleepTimerVersion by remember { mutableIntStateOf(0) }
     val currentSleepTimerExpired by rememberUpdatedState(sleepTimerExpired)
     LaunchedEffect(activeSleepTimer) {
@@ -444,13 +480,14 @@ internal fun Playback(
         scope.launch { model.prefs.setSubtitleDelay(item, value) }
     }
     fun move(delta: Int) {
-        if (item.kind == "LIVE" && group is LiveChannelGroup) {
-            moveJob?.cancel()
-            moveJob = scope.launch {
-                liveNeighbor(model, item, group, delta)?.let { (channel, rows) ->
-                    if (activeId == item.id) { Perf.mark("channel"); changeGroup(rows); select(channel) }
-                }
-            }
+        if (live) {
+            Perf.zapStart()
+            zap.move(item.id, delta, resolve = { distance ->
+                if (group is LiveChannelGroup) liveNeighbor(model, item, group, distance)
+                else group.indexOfFirst { it.id == item.id }.takeIf { it >= 0 }
+                    ?.let { group[(it + distance).coerceIn(0, group.lastIndex)] }
+                    ?.takeUnless { it.id == currentChannelId }?.let { target -> target to group }
+            }, start = { (channel, rows) -> selectChannel(channel, rows, queued = true) })
             return
         }
         if (item.kind == "EPISODE" && delta == 1) group.nextItem(item)?.let(select)
@@ -469,7 +506,8 @@ internal fun Playback(
     }
         .collectAsStateWithLifecycle("Açık")
     if (preferred == null) return
-    var vlc by remember(item.id) { mutableStateOf(preferred == "VLC") }
+    // Keep an automatic VLC fallback for the live session, including subsequent zaps.
+    var vlc by remember(if (live) "live-player" else item.id) { mutableStateOf(preferred == "VLC") }
     var transferred by remember(item.id) { mutableLongStateOf(initial) }
     var switched by remember(item.id) { mutableStateOf(false) }
     if (vlc) {
@@ -486,7 +524,15 @@ internal fun Playback(
             group = group,
             subtitle = subtitle,
             attachSubtitle = { subtitle = it },
-            select = { channel, rows -> changeGroup(rows); select(channel) },
+            select = { channel, rows -> selectChannel(channel, rows) },
+            zap = ::move,
+            liveUrls = liveUrls,
+            livePlaying = { playingLive = true },
+            unsupportedLive = if (preferred != "VLC" && fallback == "Açık") ({
+                transferred = 0
+                switched = true
+                vlc = false
+            }) else null,
             next = { if (item.kind == "EPISODE") move(1) },
             sleepTimer = activeSleepTimer,
             sleepTimerVersion = sleepTimerVersion,
@@ -499,7 +545,7 @@ internal fun Playback(
         return
     }
     val numbers = if (live) rememberLiveNumberControl(model, item.source, item.id) { channel, rows ->
-        changeGroup(rows); select(channel)
+        selectChannel(channel, rows)
     } else null
     val retry = rememberLiveRetry(item.id)
     val playerUi by rememberPlayerUiState(engine,
@@ -564,6 +610,8 @@ internal fun Playback(
             initial = transferred,
             subtitle = subtitle,
             subtitleDelayUs = subtitleDelay,
+            liveUrls = liveUrls,
+            livePlaying = { playingLive = true },
             decoderFailure = { pos ->
                 if (!switched && fallback == "Açık") {
                     switched = true
@@ -576,7 +624,7 @@ internal fun Playback(
             },
         )
         if (!panel && !sleepCountdown) FullscreenOverlay(model, item, group, fullscreen,
-            { channel, rows -> changeGroup(rows); select(channel) },
+            { channel, rows -> selectChannel(channel, rows) },
             { panel = true },
             playerUi.position, playerUi.duration,
             if (item.kind == "EPISODE" && group.nextItem(item) != null)
@@ -783,13 +831,12 @@ internal fun Playback(
                 if (candidates != null) playerChannelItems(candidates) { channel, rows ->
                     if (channel.id == item.id) panel = false
                     else {
-                        changeGroup(rows)
-                        select(channel)
+                        selectChannel(channel, rows)
                     }
                 } else items(group, key = { it.id }) { channel ->
                     PlayerOption(onClick = {
                         if (channel.id == item.id) panel = false
-                        else { changeGroup(group); select(channel) }
+                        else { selectChannel(channel, group) }
                     }) { Text(channel.title) }
                 }
             }

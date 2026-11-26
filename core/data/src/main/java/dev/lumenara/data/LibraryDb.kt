@@ -170,7 +170,7 @@ interface LibraryDao {
     @Query("""SELECT id,source,title,category,kind,tvgId,year,parent,providerId,tvgName,tvgGroup,
         CASE WHEN EXISTS(SELECT 1 FROM version_backfill_state b WHERE b.id=1 AND
             (b.phase IN ('normalize','resolve') OR (b.phase='apply' AND items.id>b.cursor)))
-            THEN id ELSE versionKey END AS versionKey,
+            THEN id ELSE versionKey END AS versionKey, '' AS urlHash,
         CASE WHEN :legacy=1 AND providerId='' THEN encryptedUrl ELSE '' END AS legacyUrl FROM items WHERE source=:source""")
     suspend fun carryRows(source: String, legacy: Boolean = false): List<CarryRow>
 

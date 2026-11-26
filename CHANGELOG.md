@@ -1,5 +1,12 @@
 # Lumenara sürüm kaydı
 
+## 0.5.9 · 26 Kasım 2026
+
+- Kaynağı silip aynı sunucudan yeniden eklediğinizde izleme geçmişi, kaldığınız yer, favoriler, Listem ve oynatma tercihleri eşleşen içeriklere taşınıyor. Kurtarma kayıtları bu cihazda şifreli olarak 30 gün saklanıyor; belirsiz eşleşmelerde tahmin yapılmıyor, eşleşmeyen kayıtlar süre dolana kadar sonraki yenilemelerde yeniden deneniyor.
+- Canlı kanallarda art arda kumanda tuşlarına basıldığında son hedefe geçiliyor; ara kanalların açılması beklenmiyor. Oynatıcı yeniden kullanılıyor ve komşu kanallar ek yayın bağlantısı açmadan hazırlanıyor.
+- Sessiz kanallarda VLC'ye otomatik geçiş sonraki kanal değişimlerinde korunuyor; VLC'nin desteklemediği canlı akışlarda Media3 kullanılabiliyor.
+- Yerel cihaz testlerinde tekrar denemede geçen testler başarılı kabul ediliyor ve ayrı raporlanıyor.
+
 ## 0.5.8 · 22 Kasım 2026
 
 - Güncellemeden sonra listeler ve ana ekran sayıları artık boş kalmıyor: katalog verileri arka planda yeniden hazırlanırken içerikler eski alanlardan gösteriliyor, hazırlık bitince hızlı yola geçiliyor (0.5.7'de büyük kataloglarda ~14 dakika boş liste görünüyordu).
