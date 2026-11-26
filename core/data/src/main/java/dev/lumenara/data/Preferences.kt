@@ -94,7 +94,8 @@ class Preferences internal constructor(
     }
 
     // Called under the durable restore journal, in the same commit as catalog state migration.
-    internal suspend fun carryItems(ids: Map<String, String>, identities: Map<String, String>): Map<String, String> {
+    internal suspend fun carryItems(ids: Map<String, String>, identities: Map<String, String>,
+        sources: Map<String, String> = emptyMap()): Map<String, String> {
         val subtitleFiles = linkedMapOf<String, String>()
         store.edit { target ->
             val recent = stringPreferencesKey("recent_live")
@@ -103,7 +104,7 @@ class Preferences internal constructor(
             val snapshot = target.asMap()
             for ((key, value) in snapshot) {
                 if (key.name.startsWith("subtitle_delay_")) {
-                    val newName = remapSubtitleDelayKey(key.name, ids) ?: continue
+                    val newName = remapSubtitleDelayKey(key.name, ids, sources) ?: continue
                     val newKey = stringPreferencesKey(newName)
                     if (newKey !in snapshot) (value as? String)?.let { target[newKey] = it }
                     target.remove(key)
@@ -138,9 +139,27 @@ class Preferences internal constructor(
         val identities = carryProductionIdentities(rows)
         return rows.filter { row ->
             val identity = carryPlaybackIdentity(row, identities, parents)
-            row.id in chosen || row.id in recent || listOf("version_", "audio_", "text_", "delay_", "sub_", "subtitle_", "engine_")
+            row.id in chosen || row.id in recent || "subtitle_delay_${row.source}|${row.id}" in names ||
+                "series_expanded_${row.id}" in names || listOf("version_", "audio_", "text_", "delay_", "sub_", "subtitle_", "engine_")
                 .any { it + row.id in names || it + identity in names }
         }.map { it.id }.toSet()
+    }
+
+    // Encrypted with the same device Vault as credentials; excluded from exported backups.
+    internal suspend fun orphanSnapshots(now: Long): List<OrphanHistory> {
+        val encoded = text(orphanHistorySetting).first()
+        val snapshots = decodeOrphanHistory(if (encoded.isEmpty()) "" else decrypt(encoded))
+        val retained = snapshots.filter { it.alive(now) }
+        if (retained.size != snapshots.size) saveOrphanSnapshots(retained)
+        return retained
+    }
+
+    internal suspend fun saveOrphanSnapshots(snapshots: List<OrphanHistory>) {
+        val encoded = snapshots.takeIf { it.isNotEmpty() }?.let { encrypt(encodeOrphanHistory(it)) }
+        store.edit {
+            val key = stringPreferencesKey(orphanHistorySetting)
+            if (encoded == null) it.remove(key) else it[key] = encoded
+        }
     }
 
     internal suspend fun backupSettings(): List<BackupSetting> = withContext(Dispatchers.IO) {
@@ -173,7 +192,8 @@ class Preferences internal constructor(
             saved.copy(name = name, value = value)
         }.filterNotNull()
         require(prepared.map { it.name }.distinct().size == prepared.size) { "Yinelenen ayar adı." }
-        replaceSettings(prepared)
+        // Exported backups cannot replace or erase device-local recovery state.
+        replaceSettings(prepared + rawSettings().filter { it.name == orphanHistorySetting })
     }
 
     // Rollback retains encrypted secrets and catalog validators, but never rewinds updater state.

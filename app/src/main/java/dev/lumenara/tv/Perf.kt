@@ -11,6 +11,19 @@ import java.util.concurrent.ConcurrentHashMap
 /** Fixed event names only: never pass content titles, IDs or addresses. Enabled in release. */
 internal object Perf {
     private val marks = ConcurrentHashMap<String, Long>()
+    private data class Zap(val started: Long, val target: String? = null)
+    private var zap: Zap? = null
+    fun zapStart() {
+        zap = Zap(SystemClock.elapsedRealtime())
+        duration("zap_start", 0)
+    }
+    fun zapCancel() { zap = null }
+    fun zapSelected(id: String) { zap = zap?.copy(target = id) }
+    fun zapFirstFrame(id: String) {
+        val request = zap?.takeIf { it.target == id } ?: return
+        zap = null
+        duration("zap_first_frame", SystemClock.elapsedRealtime() - request.started)
+    }
     fun duration(name: String, millis: Long) { Log.i("LumenaraPerf", "$name ms=$millis") }
     fun mark(name: String) { marks[name] = SystemClock.elapsedRealtime() }
     fun elapsed(name: String, label: String) {

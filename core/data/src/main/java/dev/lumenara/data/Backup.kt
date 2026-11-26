@@ -15,7 +15,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 internal data class BackupSetting(val name: String, val type: String, val value: String)
-internal fun isBackupSetting(name: String) = !name.startsWith("secret_refresh_") &&
+internal fun isBackupSetting(name: String) = name != orphanHistorySetting && !name.startsWith("secret_refresh_") &&
     !name.startsWith("series_expanded_") && !name.startsWith("catalog_identity_") && !name.startsWith("update_")
 internal data class BackupSource(val id: String, val name: String, val spec: SourceSpec)
 internal data class BackupFeed(val id: String, val source: String, val address: String)

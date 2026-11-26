@@ -15,6 +15,15 @@ import okhttp3.Call
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.coroutines.resumeWithException
+
+class UnsupportedVlcInputException(message: String = "Bu akış türü için VLC geçişi desteklenmiyor.") : IOException(message)
 
 /** Only expose media bytes to VLC. All network traffic stays under the source's OkHttp policy. */
 class VlcInput
@@ -34,14 +43,45 @@ private constructor(
         release()
     }
 
-    /** The owner must retain this descriptor until the native player has been released. */
+    /** Retain this descriptor until native stop() returns (or the player is released). */
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         try { cancel() } finally { descriptor.close() }
     }
 
     companion object {
-        fun open(context: Context, url: String, allowHttp: Boolean): VlcInput {
+        /** Cancel a superseded channel's HTTP handshake immediately, before it owns an input. */
+        suspend fun openCancellable(context: Context, url: String, allowHttp: Boolean): VlcInput {
+            var acquired: VlcInput? = null
+            try {
+                return coroutineScope {
+                    suspendCancellableCoroutine<VlcInput> { continuation ->
+                        val opening = AtomicReference<Call?>()
+                        continuation.invokeOnCancellation { opening.get()?.cancel() }
+                        launch(Dispatchers.IO) {
+                            try {
+                                val input = open(context, url, allowHttp) { call ->
+                                    opening.set(call)
+                                    if (!continuation.isActive) call.cancel()
+                                }
+                                continuation.resume(input) { _, abandoned, _ -> abandoned.close() }
+                            } catch (e: Exception) {
+                                continuation.resumeWithException(e)
+                            }
+                        }
+                    }.also { acquired = it }
+                }
+            } catch (e: CancellationException) {
+                // coroutineScope can be cancelled after suspension resumed but before it returns.
+                acquired?.close()
+                throw e
+            }
+        }
+
+        fun open(context: Context, url: String, allowHttp: Boolean): VlcInput =
+            open(context, url, allowHttp) {}
+
+        private fun open(context: Context, url: String, allowHttp: Boolean, opening: (Call) -> Unit): VlcInput {
             val ext = url.toHttpUrl().pathSegments.last().substringAfterLast('.').lowercase()
             val demux =
                 when (ext) {
@@ -52,12 +92,13 @@ private constructor(
                     "mp4",
                     "mov",
                     "m4v" -> "mp4"
-                    else -> throw IOException("Bu akış türü için VLC geçişi desteklenmiyor.")
+                    else -> throw UnsupportedVlcInputException()
                 }
             val request = Request.Builder().url(url).header("Accept-Encoding", "identity").build()
             val client = Transport.client(allowHttp)
             if (demux == "ts") {
                 val call = client.newCall(request)
+                opening(call)
                 val response = call.execute()
                 if (!response.isSuccessful) {
                     response.close()
@@ -76,18 +117,17 @@ private constructor(
                 return VlcInput(pipe[0], demux) { pump.cancel() }
             }
 
-            val length =
-                client
-                    .newCall(request.newBuilder().header("Range", "bytes=0-0").build())
-                    .execute()
+            val lengthCall = client.newCall(request.newBuilder().header("Range", "bytes=0-0").build())
+            opening(lengthCall)
+            val length = lengthCall.execute()
                     .use {
                         if (it.code != 206)
-                            throw IOException("Sağlayıcı dosya konumlandırmayı desteklemiyor.")
+                            throw UnsupportedVlcInputException("Sağlayıcı dosya konumlandırmayı desteklemiyor.")
                         it.header("Content-Range")
                             ?.substringAfterLast('/')
                             ?.toLongOrNull()
                             ?.takeIf { size -> size > 0 }
-                            ?: throw IOException("Dosya uzunluğu alınamadı.")
+                            ?: throw UnsupportedVlcInputException("Dosya uzunluğu alınamadı.")
                     }
             val io = HandlerThread("lumenara-vlc-range").apply { start() }
             val callback =
