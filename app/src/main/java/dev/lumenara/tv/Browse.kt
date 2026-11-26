@@ -293,7 +293,7 @@ internal fun Home(
     val scopedTotals = totals?.takeIf { it.first == source }?.second
     val counts = listOf("LIVE", "MOVIE", "SERIES").map { scopedTotals?.getOrDefault(it, 0) }
     // Capture whether shelves were part of this composition, before draw mutates the state.
-    val shelvesComposed = shellDrawn || rowsReady
+    val shelvesComposed = shellDrawn
     val shellReported = remember { booleanArrayOf(false) }
     WarmVlcAfterHubFrame(backgroundReady)
     val update by model.update.collectAsStateWithLifecycle()
