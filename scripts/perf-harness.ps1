@@ -245,7 +245,8 @@ foreach ($scenario in $Scenarios) {
                 'live_zap' { Drive $Routes.live_play; Start-Sleep -Seconds 8 }
                 'vod_play' { Drive $Routes.movie_play; Start-Sleep -Milliseconds $VodWaitMs }
             }
-            if ($scenario -in @('hub_scroll','grid_all_channels','movie_grid')) {
+            # Reset after navigation so Hub startup frames are not counted against the scenario.
+            if ($scenario -in @('hub_scroll','grid_all_channels','movie_grid','category_open','search')) {
                 $null=Invoke-Adb @('shell','dumpsys','gfxinfo',$Package,'reset')
                 $measurementStart=$watch.Elapsed.TotalSeconds
             }
