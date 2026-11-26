@@ -2,7 +2,9 @@ name: Release
 
 # Pushing a tag such as v0.3.0 builds, signs and publishes the APK to the public
 # kudretakn/Lumenara-releases repository, where the in-app updater looks for new versions.
+# Manual dispatch is for device A/B builds and never publishes.
 on:
+  workflow_dispatch:
   push:
     tags: ['v*']
 
@@ -39,21 +41,26 @@ jobs:
         run: |
           tag="${GITHUB_REF_NAME#v}"
           name="$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts)"
-          if [ "$tag" != "$name" ]; then
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$tag" != "$name" ]; then
             echo "Tag v$tag does not match versionName $name"; exit 1
           fi
           echo "version=$name" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "short_sha=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Check signing secrets
         env:
           KEYSTORE_B64: ${{ secrets.LUMENARA_KEYSTORE_B64 }}
           KEYSTORE_PASSWORD: ${{ secrets.LUMENARA_KEYSTORE_PASSWORD }}
-          RELEASES_TOKEN: ${{ secrets.LUMENARA_RELEASES_TOKEN }}
+          RELEASES_TOKEN: ${{ github.event_name == 'push' && secrets.LUMENARA_RELEASES_TOKEN || '' }}
         run: |
           missing=""
           [ -n "$KEYSTORE_B64" ] || missing="$missing LUMENARA_KEYSTORE_B64"
           [ -n "$KEYSTORE_PASSWORD" ] || missing="$missing LUMENARA_KEYSTORE_PASSWORD"
-          [ -n "$RELEASES_TOKEN" ] || missing="$missing LUMENARA_RELEASES_TOKEN"
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            [ -n "$RELEASES_TOKEN" ] || missing="$missing LUMENARA_RELEASES_TOKEN"
+          fi
           if [ -n "$missing" ]; then echo "Missing repository secrets:$missing"; exit 1; fi
 
       - name: Build release APK
@@ -76,6 +83,9 @@ jobs:
           tools="$ANDROID_HOME/build-tools/36.0.0"
           mkdir -p dist
           out="dist/Lumenara-$VERSION.apk"
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            out="dist/Lumenara-$VERSION-exp-${GITHUB_SHA:0:7}.apk"
+          fi
           "$tools/apksigner" sign --v4-signing-enabled false \
             --ks "$keystore" --ks-type PKCS12 --ks-key-alias "${KEY_ALIAS:-streamora}" \
             --ks-pass env:KEYSTORE_PASSWORD --key-pass env:KEYSTORE_PASSWORD \
@@ -89,6 +99,7 @@ jobs:
           sha256sum "$out" | tee dist/SHA256SUMS.txt
 
       - name: Release notes from CHANGELOG
+        if: github.event_name == 'push'
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
@@ -101,6 +112,7 @@ jobs:
           cat dist/notes.md
 
       - name: Publish to Lumenara-releases
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ secrets.LUMENARA_RELEASES_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
@@ -111,7 +123,8 @@ jobs:
       - name: Keep the signed APK as a workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: lumenara-release
+          name: ${{ github.event_name == 'push' && 'lumenara-release' || format('lumenara-experiment-{0}', steps.version.outputs.short_sha) }}
+          retention-days: ${{ github.event_name == 'workflow_dispatch' && 3 || 0 }}
           path: |
             dist/*.apk
             dist/SHA256SUMS.txt
