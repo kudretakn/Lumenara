@@ -138,17 +138,14 @@ private fun HubChannelShelf(
 
 @Composable
 private fun HubResumeShelf(model: LibraryModel, rows: List<Item>, open: (Item) -> Unit, focus: () -> Unit) {
-    val backgroundReady by model.backgroundReady.collectAsStateWithLifecycle()
-    LaunchedEffect(backgroundReady) {
-        if (backgroundReady) Perf.duration("startup_hub_episode_details_deferred", 0)
-    }
+    val detailsReady by model.hubDetailsReady.collectAsStateWithLifecycle()
     HubShelf("KALDIĞIN YERDEN DEVAM ET", "shelf-Kaldığın yerden devam et") {
         items(rows, key = { it.id }) { item ->
-            val episodes by remember(item.id, backgroundReady) {
-                if (backgroundReady && item.kind == "SERIES") model.repo.episodes(item.id) else flowOf(emptyList<Item>())
+            val episodes by remember(item.id, detailsReady) {
+                if (detailsReady && item.kind == "SERIES") model.repo.episodes(item.id) else flowOf(emptyList<Item>())
             }.collectAsStateWithLifecycle(emptyList())
-            val marks by remember(item.id, backgroundReady) {
-                if (backgroundReady && item.kind == "SERIES") model.repo.library.episodeMarks(item.id) else flowOf(emptyList<Mark>())
+            val marks by remember(item.id, detailsReady) {
+                if (detailsReady && item.kind == "SERIES") model.repo.library.episodeMarks(item.id) else flowOf(emptyList<Mark>())
             }.collectAsStateWithLifecycle(emptyList())
             val continuing by produceState<Item?>(null, episodes, marks) {
                 value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
@@ -195,23 +192,21 @@ private fun HubArtwork(model: LibraryModel, item: Item, address: String?, channe
     val drawn by model.firstDrawn.collectAsStateWithLifecycle()
     val artworkReady by (LocalContext.current.applicationContext as LumenaraApp)
         .hubArtworkReady.collectAsStateWithLifecycle()
-    if (!drawn || !artworkReady) {
-        Box(Modifier.fillMaxSize().background(LumenColors.surface2))
-        return
-    }
+    // Text tiles are part of the first draw, even before Coil or decryption is ready.
     if (channel) {
-        ChannelLogo(model, item, address, Modifier.fillMaxSize())
+        ChannelLogo(model, item, address.takeIf { drawn && artworkReady }, Modifier.fillMaxSize())
         return
     }
     Box(Modifier.fillMaxSize().background(LumenColors.surface2), contentAlignment = Alignment.BottomStart) {
-        if (address == null) {
-            Text(item.title, Modifier.padding(Spacing.cardGap), style = LumenType.label,
-                color = LumenColors.textPrimary, maxLines = 3, overflow = TextOverflow.Ellipsis)
-            LumenIcon(if (item.kind == "SERIES") LumenIcon.Series else LumenIcon.Film,
-                contentDescription = null, modifier = Modifier.align(Alignment.TopEnd).padding(Spacing.cardGap),
-                tint = LumenColors.textPrimary.copy(alpha = .4f))
-        } else Artwork(model, item, address, Modifier.fillMaxSize(),
-            contentScale = ContentScale.Crop, role = "backdrop")
+        Text(item.title, Modifier.padding(Spacing.cardGap), style = LumenType.label,
+            color = LumenColors.textPrimary, maxLines = 3, overflow = TextOverflow.Ellipsis)
+        LumenIcon(if (item.kind == "SERIES") LumenIcon.Series else LumenIcon.Film,
+            contentDescription = null, modifier = Modifier.align(Alignment.TopEnd).padding(Spacing.cardGap),
+            tint = LumenColors.textPrimary.copy(alpha = .4f))
+        if (drawn && artworkReady && address != null) {
+            Artwork(model, item, address, Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop, role = "backdrop")
+        }
     }
 }
 
@@ -285,7 +280,6 @@ internal fun Home(
     val resumeResult = resumeState?.takeIf { it.source == source }?.rows
     val recent = recentResult.orEmpty()
     val resume = resumeResult.orEmpty()
-    val backgroundReady by model.backgroundReady.collectAsStateWithLifecycle()
     val rowsReady = recentResult != null && resumeResult != null
     var shellDrawn by remember(source) { mutableStateOf(false) }
     var rowsDrawn by remember(source) { mutableStateOf(false) }
@@ -295,7 +289,6 @@ internal fun Home(
     // Capture whether shelves were part of this composition, before draw mutates the state.
     val shelvesComposed = shellDrawn || rowsReady
     val shellReported = remember { booleanArrayOf(false) }
-    WarmVlcAfterHubFrame(backgroundReady)
     val update by model.update.collectAsStateWithLifecycle()
     var focused by rememberSaveable { mutableStateOf(lastCard) }
     val entry = remember { FocusRequester() }

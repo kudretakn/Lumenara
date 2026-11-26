@@ -31,6 +31,7 @@ import coil.request.ImageRequest
 import coil.request.ImageResult
 import dev.lumenara.data.Item
 import dev.lumenara.data.Transport
+import dev.lumenara.data.backgroundWork
 import dev.lumenara.data.retainArtworkResult
 import coil.decode.DataSource
 import coil.request.SuccessResult
@@ -173,7 +174,7 @@ internal class ArtworkInterceptor(private val disk: coil.disk.DiskCache,
     }
 }
 
-/** Enqueue at most one row beyond the viewport; dispose requests when the window changes. */
+/** Cache one row beyond the viewport, one image at a time; cancel when the window changes. */
 @Composable
 internal fun PrefetchArtwork(model: LibraryModel, grid: LazyGridState, rows: List<Item>, columns: Int = 6,
     channelSpan: Int = 1, paged: WindowPages? = null, resolvedLogo: ((Item) -> String?)? = null) {
@@ -198,24 +199,22 @@ internal fun PrefetchArtwork(model: LibraryModel, grid: LazyGridState, rows: Lis
         }.distinctUntilChanged().collectLatest { (size, next) ->
             if (size == null) return@collectLatest
             delay(100)
-            val pending = mutableListOf<coil.request.Disposable>()
-            try {
-                var slots = 0
-                for ((candidate, logo) in next) {
-                    val item = candidate ?: break
-                    val span = if (item.kind == "LIVE") channelSpan else 1
-                    if (slots + span > columns) break
-                    slots += span
-                    val address = (if (item.kind == "LIVE" && currentLogo != null) logo
-                        else model.repo.poster(item)) ?: continue
-                    val allow = sources?.firstOrNull { it.id == item.source }?.allowHttp == true
-                    val px = context.resources.displayMetrics.density
-                    val width = if (item.kind == "LIVE") (28 * px).roundToInt() else size.width
-                    val height = if (item.kind == "LIVE") width else (width * 1.5f).toInt()
-                    pending += context.imageLoader.enqueue(artworkRequest(context, address, allow, width, height))
+            var slots = 0
+            for ((candidate, logo) in next) {
+                val item = candidate ?: break
+                val span = if (item.kind == "LIVE") channelSpan else 1
+                if (slots + span > columns) break
+                slots += span
+                val allow = sources?.firstOrNull { it.id == item.source }?.allowHttp == true
+                val px = context.resources.displayMetrics.density
+                val width = if (item.kind == "LIVE") (28 * px).roundToInt() else size.width
+                val height = if (item.kind == "LIVE") width else (width * 1.5f).toInt()
+                val useLogo = item.kind == "LIVE" && currentLogo != null
+                backgroundWork.whenIdle {
+                    val address = (if (useLogo) logo else model.repo.poster(item)) ?: return@whenIdle
+                    context.imageLoader.execute(artworkRequest(context, address, allow, width, height))
                 }
-                kotlinx.coroutines.awaitCancellation()
-            } finally { pending.forEach { it.dispose() } }
+            }
         }
     }
 }

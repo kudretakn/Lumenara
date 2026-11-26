@@ -15,7 +15,6 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.async
@@ -390,30 +389,29 @@ class Repository private constructor(private val context: Context) {
 
     fun tmdbBuiltIn() = metadata.hasBuiltInToken
 
-    private val lock = Mutex()
+    private val lock = backgroundWork.mutex
     private val imports = SourceImports(lock)
     private var versionBackfillJob: kotlinx.coroutines.Job? = null
 
-    /** State-only probe on IO; completed catalogs do not start an upgrade worker. */
-    suspend fun startPendingCatalogBackfill() = withContext(Dispatchers.IO) {
-        if (db.derived().pendingSource() != null) startVersionBackfill()
-    }
-
-    /** Upgrades start immediately on IO; ordinary maintenance keeps its deferred UI gate. */
+    /** Durable upgrade cursors resume only after content draws and remote input is idle. */
     fun startVersionBackfill() {
         synchronized(this) {
             if (versionBackfillJob?.isActive == true) return
             versionBackfillJob = catalogScope.launch(Dispatchers.IO) {
                 try {
-                    StartupPerf.duration("startup_catalog_backfill_started", 0)
                     val backfill = VersionBackfill(db)
                     val derived = CatalogDerivedBackfill(db)
+                    var started = false
                     while (currentCoroutineContext().isActive) {
                         if (!RefreshGate.foreground || RefreshGate.playing || imports.userWaiting) {
                             delay(500)
                             continue
                         }
-                        val more = lock.withLock {
+                        val more = backgroundWork.whenIdle {
+                            if (!started) {
+                                started = true
+                                StartupPerf.duration("startup_catalog_backfill_started", 0)
+                            }
                             if (imports.userWaiting) true else if (backfill.runBatch()) true else {
                                 val source = db.derived().pendingSource()
                                 if (source == null) false else { derived.runBatch(source); true }

@@ -8,6 +8,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.*
 import org.junit.Test
@@ -37,6 +38,46 @@ internal suspend fun prepareTestCatalog(repo: Repository, source: String) {
 }
 
 class CatalogDerivedTest {
+    @Test fun migrationFallbackStaysUsableWhileMaintenanceWaitsAfterFirstDraw() = runBlocking {
+        val db = Room.inMemoryDatabaseBuilder(
+            InstrumentationRegistry.getInstrumentation().targetContext, LibraryDb::class.java).build()
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
+        try {
+            db.library().save(Source("a", "Pending", "", false, 0, 0))
+            db.library().save(listOf(Item("channel", "a", "News", "TV", "LIVE", "", "", "news", 1, "")))
+            val cursor = VersionBackfillState()
+            db.versionBackfill().save(cursor)
+            val gate = StartupIdleGate(scope)
+            val queue = BackgroundWorkQueue(gate)
+            gate.foreground(true)
+            gate.onDraw()
+            val maintenance = scope.launch {
+                queue.whenIdle {
+                    while (VersionBackfill(db).runBatch()) { }
+                    while (CatalogDerivedBackfill(db).runBatch("a")) { }
+                }
+            }
+            assertNull(kotlinx.coroutines.withTimeoutOrNull(100) { maintenance.join(); true })
+            assertEquals(cursor, db.versionBackfill().state())
+            assertNull(db.derived().state("a"))
+            assertEquals("channel", db.library().livePage("a", "", "", "", 10, 0).first().single().id)
+            assertEquals(1, db.library().fallbackHubTotals("a", emptyList()).first().single().count)
+            // User-requested first-run/import writes still bypass the quiet window.
+            queue.run { db.library().save(Mark("channel", favorite = true)) }
+            assertTrue(db.library().mark("channel")!!.favorite)
+            maintenance.cancel()
+            maintenance.join()
+            // Both durable cursors can resume normally on a later launch.
+            while (VersionBackfill(db).runBatch()) { }
+            while (CatalogDerivedBackfill(db).runBatch("a")) { }
+            assertEquals("done", db.versionBackfill().state()!!.phase)
+            assertTrue(db.derived().ready("a").first())
+        } finally {
+            scope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+            db.close()
+        }
+    }
+
     @Test fun pendingDerivedCatalogReturnsContentUntilTheLastBatchCommits() = runBlocking {
         val db = Room.inMemoryDatabaseBuilder(
             InstrumentationRegistry.getInstrumentation().targetContext, LibraryDb::class.java).build()
