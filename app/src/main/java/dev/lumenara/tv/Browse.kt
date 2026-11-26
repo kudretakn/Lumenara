@@ -113,8 +113,7 @@ private fun HubChannelShelf(
         items(rows, key = { it.id }) { item ->
             val current = programmes[item.id]
             val logo by produceState<String?>(null, item.id, item.logo) {
-                model.awaitFirstDraw()
-                value = model.repo.poster(item)
+                value = backgroundWork.whenIdle { model.repo.poster(item) }
             }
             Column(Modifier.width(150.dp), verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
                 HubShelfTile(item, { play(item, rows) }, focus,
@@ -160,10 +159,11 @@ private fun HubResumeShelf(model: LibraryModel, rows: List<Item>, open: (Item) -
             }.collectAsStateWithLifecycle(null)
             val mark = if (item.kind == "SERIES") marks.firstOrNull { it.id == continuing?.id } else observedMark
             val backdrop by produceState<String?>(null, item.id, item.backdrop, item.logo) {
-                model.awaitFirstDraw()
                 // Listing backdrops can be absent even when a provider poster is available.
-                value = model.repo.backdrop(item)?.takeIf(String::isNotBlank)
-                    ?: model.repo.poster(item)?.takeIf(String::isNotBlank)
+                value = backgroundWork.whenIdle {
+                    model.repo.backdrop(item)?.takeIf(String::isNotBlank)
+                        ?: model.repo.poster(item)?.takeIf(String::isNotBlank)
+                }
             }
             val episode = continuing?.seriesEpisode()
             val remaining = mark?.takeIf { it.duration > 0 }?.let {
@@ -224,9 +224,8 @@ private fun HubNavigationCard(
     val artworkReady by (LocalContext.current.applicationContext as LumenaraApp)
         .hubArtworkReady.collectAsStateWithLifecycle()
     val backdrop by produceState<String?>(null, artworkItem?.id, artworkItem?.backdrop) {
-        model.awaitFirstDraw()
         // Only a real wide image is eligible; never substitute a channel logo or poster.
-        value = artworkItem?.let { model.repo.backdrop(it) }
+        value = backgroundWork.whenIdle { artworkItem?.let { model.repo.backdrop(it) } }
     }
     FocusCard(click, modifier, focusedScale = Motion.hubFocusScale) {
         if (!compact && backdrop != null && artworkReady) {
@@ -285,7 +284,6 @@ internal fun Home(
     val resumeResult = resumeState?.takeIf { it.source == source }?.rows
     val recent = recentResult.orEmpty()
     val resume = resumeResult.orEmpty()
-    val backgroundReady by model.backgroundReady.collectAsStateWithLifecycle()
     val rowsReady = recentResult != null && resumeResult != null
     var shellDrawn by remember(source) { mutableStateOf(false) }
     var rowsDrawn by remember(source) { mutableStateOf(false) }
@@ -295,7 +293,6 @@ internal fun Home(
     // Capture whether shelves were part of this composition, before draw mutates the state.
     val shelvesComposed = shellDrawn || rowsReady
     val shellReported = remember { booleanArrayOf(false) }
-    WarmVlcAfterHubFrame(backgroundReady)
     val update by model.update.collectAsStateWithLifecycle()
     var focused by rememberSaveable { mutableStateOf(lastCard) }
     val entry = remember { FocusRequester() }

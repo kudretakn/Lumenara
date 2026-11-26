@@ -395,7 +395,6 @@ internal fun Playback(
     var subtitleNotice by remember(item.id) { mutableStateOf("") }
     var channelQuery by remember { mutableStateOf("") }
     var category by remember { mutableStateOf("") }
-    val slots = remember { decoderSlots() }
     val scope = rememberCoroutineScope()
     val zap = remember(scope) { LiveZapController<Pair<Item, List<Item>>>(scope, targetId = { it.first.id }) }
     SideEffect { zap.synchronize(item.id) }
@@ -774,6 +773,7 @@ internal fun Playback(
                         for (count in listOf(2, 4)) PlayerOption(
                             onClick = {
                                 scope.launch {
+                                    val slots = decoderSlots()
                                     val options = (listOf(item) + group).distinctBy { it.id }
                                     val limits =
                                         options

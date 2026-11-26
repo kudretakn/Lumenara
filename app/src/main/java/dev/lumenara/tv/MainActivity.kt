@@ -21,6 +21,11 @@ class MainActivity : ComponentActivity() {
     private val library: LibraryModel by viewModels()
     private var stopFrameObservation: (() -> Unit)? = null
 
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        dev.lumenara.data.backgroundWork.startup.onInput()
+        return super.dispatchKeyEvent(event)
+    }
+
     override fun onStart() {
         super.onStart()
         stopFrameObservation = Perf.observeFrames(window)
@@ -64,7 +69,6 @@ class MainActivity : ComponentActivity() {
                     reported[0] = true
                     Perf.since("startup_screen", "startup_screen_first_draw")
                     Perf.since("startup_first_frame", "startup_first_frame")
-                    model.onScreenFirstDraw()
                 }
             }) {
                 LumenaraTheme { LibraryScreen(model) {

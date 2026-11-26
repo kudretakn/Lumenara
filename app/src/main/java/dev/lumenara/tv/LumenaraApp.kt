@@ -24,16 +24,19 @@ class LumenaraApp : Application(), ImageLoaderFactory, androidx.work.Configurati
     private val watchNextStarted = java.util.concurrent.atomic.AtomicBoolean()
     private val artworkStarted = java.util.concurrent.atomic.AtomicBoolean()
     private val artworkReady = MutableStateFlow(false)
+    @Volatile private var createdImageLoader: ImageLoader? = null
     internal val hubArtworkReady = artworkReady.asStateFlow()
 
     internal fun prepareHubArtwork() {
         if (artworkStarted.compareAndSet(false, true)) startupScope.launch {
-            Perf.mark("startup_image_loader")
-            // Disk-cache journal, OkHttp/TLS and decoder initialization must not happen in
-            // AsyncImage's first Main-thread composition. Hub callers wait for this result.
-            imageLoader
-            Perf.since("startup_image_loader", "startup_image_loader_ready")
-            artworkReady.value = true
+            backgroundWork.whenIdle {
+                Perf.mark("startup_image_loader")
+                // Decorative Hub artwork can wait; navigation and shelf text are interactive.
+                // Keep disk-cache/OkHttp initialization off Main and out of the CPU15 window.
+                imageLoader
+                Perf.since("startup_image_loader", "startup_image_loader_ready")
+                artworkReady.value = true
+            }
         }
     }
     override val workManagerConfiguration: androidx.work.Configuration
@@ -47,6 +50,7 @@ class LumenaraApp : Application(), ImageLoaderFactory, androidx.work.Configurati
     internal fun startWatchNext() {
         if (watchNextStarted.compareAndSet(false, true)) startupScope.launch {
             delay(20_000)
+            backgroundWork.startup.awaitIdleOrBackground()
             Perf.mark("startup_watch_next")
             WatchNext.get(this@LumenaraApp).start()
             Perf.since("startup_watch_next", "startup_watch_next_started")
@@ -75,7 +79,7 @@ class LumenaraApp : Application(), ImageLoaderFactory, androidx.work.Configurati
         super.onTrimMemory(level)
         if (level >= TRIM_MEMORY_UI_HIDDEN) {
             Repository.get(this).trim()
-            imageLoader.memoryCache?.clear()
+            createdImageLoader?.memoryCache?.clear()
         }
     }
 
@@ -91,7 +95,7 @@ class LumenaraApp : Application(), ImageLoaderFactory, androidx.work.Configurati
             .allowRgb565(true)
             .crossfade(false)
             .components { add(ArtworkInterceptor(disk, memory)); add(SvgDecoder.Factory()) }
-            .build()
+            .build().also { createdImageLoader = it }
     }
 }
 
