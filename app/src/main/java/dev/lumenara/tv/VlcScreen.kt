@@ -517,19 +517,20 @@ internal fun VlcScreen(
                     p.play()
                     android.util.Log.d("LumenaraVlc", "playback play requested generation=$mediaGeneration")
                 }
-                // Vout only means output creation. Poll displayed pictures during this request,
-                // then stop permanently; cancellation follows the playback attempt on zap/exit.
-                if (Perf.transitions.zapPending(perfRequest)) launch {
+                // Vout only means output creation. Stats are explicitly enabled by VlcRuntime.
+                // Read native stats off Main, with a fixed bound and attempt-owned cancellation.
+                if (Perf.transitions.zapPending(perfRequest)) launch(Dispatchers.IO) {
                     val media = p.media
                     try {
-                        withTimeoutOrNull(30_000) {
-                            while (Perf.transitions.zapPending(perfRequest)) {
-                                if ((media?.stats?.displayedPictures ?: 0) > 0) {
+                        repeat(600) {
+                            ensureActive()
+                            if ((media?.stats?.displayedPictures ?: 0) > 0) {
+                                withContext(Dispatchers.Main.immediate) {
                                     Perf.transitions.zapFirstFrame(perfRequest, "vlc")
-                                    break
                                 }
-                                delay(50)
+                                return@launch
                             }
+                            delay(50)
                         }
                     } finally { media?.release() }
                 }

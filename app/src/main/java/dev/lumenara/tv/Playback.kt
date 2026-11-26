@@ -21,6 +21,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.*
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.video.VideoFrameMetadataListener
 import androidx.media3.ui.PlayerView
 import androidx.tv.material3.*
 import dev.lumenara.data.*
@@ -71,6 +73,8 @@ internal fun Video(
     LaunchedEffect(error) { currentFailure(error.isNotEmpty()) }
     var player by remember { mutableStateOf<ExoPlayer?>(null) }
     var listener by remember { mutableStateOf<Player.Listener?>(null) }
+    var frameAnalytics by remember { mutableStateOf<AnalyticsListener?>(null) }
+    var frameMetadata by remember { mutableStateOf<VideoFrameMetadataListener?>(null) }
     var configuration by remember { mutableStateOf<Triple<Boolean, Boolean, String>?>(null) }
     val allowedHttp = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
     val allowedSubtitle = remember { java.util.concurrent.atomic.AtomicReference<android.net.Uri?>(null) }
@@ -87,6 +91,7 @@ internal fun Video(
     LaunchedEffect(item.id, item.encryptedUrl, attempt, subtitle, preview, multi) {
         val perfRequest = if (item.kind == "LIVE" && !preview && !multi)
             Perf.transitions.zapRequest(item.id) else null
+        val playbackScope = this
         withContext(Dispatchers.Main.immediate) {
             error = ""
             playbackActive = false
@@ -150,7 +155,6 @@ internal fun Video(
                         override fun onRenderedFirstFrame() {
                             if (!preview && !multi) {
                                 Perf.since("channel", "channel_first_frame_media3")
-                                Perf.transitions.zapFirstFrame(perfRequest, "media3")
                             }
                         }
                         override fun onCues(cueGroup: androidx.media3.common.text.CueGroup) {
@@ -245,7 +249,39 @@ internal fun Video(
                     }
                 listener = mediaListener
                 engine.addListener(mediaListener)
-                val media = MediaItem.Builder().setUri(url)
+                val inputId = java.util.UUID.randomUUID().toString()
+                if (perfRequest != null) {
+                    // Renderer/surface reuse need not produce another Player first-frame event.
+                    // Arm only when this input reaches the renderer, rejecting buffered old frames.
+                    val inputFormat = java.util.concurrent.atomic.AtomicReference<Format?>(null)
+                    val submitted = java.util.concurrent.atomic.AtomicBoolean(false)
+                    val analytics = object : AnalyticsListener {
+                        override fun onVideoInputFormatChanged(
+                            eventTime: AnalyticsListener.EventTime,
+                            format: Format,
+                            decoderReuseEvaluation: androidx.media3.exoplayer.DecoderReuseEvaluation?,
+                        ) {
+                            val timeline = eventTime.timeline
+                            if (!timeline.isEmpty && timeline.getWindow(eventTime.windowIndex,
+                                    Timeline.Window()).mediaItem.mediaId == inputId) inputFormat.set(format)
+                        }
+                    }
+                    val metadata = VideoFrameMetadataListener { _, releaseTimeNs, format, _ ->
+                        if (format === inputFormat.get() && submitted.compareAndSet(false, true)) {
+                            playbackScope.launch(Dispatchers.Main.immediate) {
+                                // The callback precedes release to the surface; never log early.
+                                kotlinx.coroutines.delay(((releaseTimeNs - System.nanoTime()) / 1_000_000)
+                                    .coerceAtLeast(0))
+                                Perf.transitions.zapFirstFrame(perfRequest, "media3")
+                            }
+                        }
+                    }
+                    frameAnalytics = analytics
+                    frameMetadata = metadata
+                    engine.addAnalyticsListener(analytics)
+                    engine.setVideoFrameMetadataListener(metadata)
+                }
+                val media = MediaItem.Builder().setUri(url).setMediaId(inputId)
                 if (subtitle != null) media.setSubtitleConfigurations(listOf(subtitle))
                 engine.setMediaItem(media.build(), if (item.kind == "LIVE") 0 else start)
                 engine.prepare()
@@ -286,6 +322,10 @@ internal fun Video(
                 model.progress(item, resume, engine.duration)
                 listener?.let(engine::removeListener)
                 listener = null
+                frameAnalytics?.let(engine::removeAnalyticsListener)
+                frameAnalytics = null
+                frameMetadata?.let(engine::clearVideoFrameMetadataListener)
+                frameMetadata = null
                 // setMediaItem replaces live input without disabling the reusable renderers.
                 if (item.kind != "LIVE") engine.stop()
             }

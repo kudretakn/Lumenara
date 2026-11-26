@@ -51,6 +51,26 @@ class PerfTransitionsTest {
         assertEquals(listOf("zap_first_frame ms=500 engine=vlc"), lines)
     }
 
+    @Test fun repeatedSelectionRetainsPlaybackTokenButNewZapToSameChannelDoesNot() {
+        var now = 10L
+        val lines = mutableListOf<String>()
+        val marks = PerfTransitions({ now }, { lines.add(it) })
+        marks.zapStart()
+        marks.zapSelected("a")
+        val request = marks.zapRequest("a")
+        marks.zapSelected("a")
+        assertSame(request, marks.zapRequest("a"))
+        now = 60
+        marks.zapFirstFrame(request, "media3")
+        marks.zapFirstFrame(request, "vlc")
+        assertEquals(listOf("zap_start ms=0", "zap_first_frame ms=50 engine=media3"), lines)
+        marks.zapStart()
+        marks.zapSelected("a")
+        assertNotSame(request, marks.zapRequest("a"))
+        marks.zapFirstFrame(request, "media3")
+        assertTrue(marks.zapPending(marks.zapRequest("a")))
+    }
+
     @Test fun categoryCompletionIsOneShotAndRejectsAbandonedGrids() {
         var now = 10L
         val lines = mutableListOf<String>()

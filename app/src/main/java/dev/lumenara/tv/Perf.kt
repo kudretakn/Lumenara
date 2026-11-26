@@ -21,7 +21,10 @@ internal class PerfTransitions(
     private var category: Request? = null
     fun zapStart() { zap = Request(clock()); emit("zap_start ms=0") }
     fun zapCancel() { zap = null }
-    fun zapSelected(id: String) { zap = Request(zap?.started ?: clock(), id) }
+    // Re-observing a selection during composition/retry/fallback keeps its token.
+    fun zapSelected(id: String) {
+        if (zap?.target != id) zap = Request(zap?.started ?: clock(), id)
+    }
     fun zapRequest(id: String): Request? = zap?.takeIf { it.target == id }
     fun zapPending(request: Request?): Boolean = request != null && zap === request
     fun zapFirstFrame(request: Request?, engine: String) {

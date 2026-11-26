@@ -46,7 +46,7 @@ class VlcRuntime<T : Any> internal constructor(factory: () -> T) {
             VlcRuntime {
                 val began = SystemClock.elapsedRealtime()
                 Log.d("LumenaraVlc", "runtime init start")
-                LibVLC(application, arrayListOf("--quiet", "--no-video-title-show", "--avcodec-threads=2"))
+                LibVLC(application, arrayListOf("--quiet", "--stats", "--no-video-title-show", "--avcodec-threads=2"))
                     .also { Log.d("LumenaraVlc", "runtime init ready ms=${SystemClock.elapsedRealtime() - began}") }
             }.also { shared = it }
         }
