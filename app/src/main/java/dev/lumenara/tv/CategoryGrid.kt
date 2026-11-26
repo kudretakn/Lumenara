@@ -45,7 +45,7 @@ private fun categoryIcon(id: String): LumenIcon? = when (id) {
 
 @Composable
 internal fun CategoryGrid(title: String, entries: List<CategoryEntry>?, choose: (CategoryEntry) -> Unit) {
-    var last by rememberSaveable(title) { mutableStateOf<String?>(null) }
+    val last = rememberSaveable(title) { mutableStateOf<String?>(null) }
     var searching by rememberSaveable(title) { mutableStateOf(false) }
     var query by rememberSaveable(title) { mutableStateOf("") }
     val grid = rememberLazyGridState()
@@ -56,7 +56,7 @@ internal fun CategoryGrid(title: String, entries: List<CategoryEntry>?, choose: 
     var restoreSearch by remember { mutableStateOf(false) }
     var positioned by remember { mutableStateOf(false) }
     var requestPending by remember { mutableStateOf(true) }
-    val restoreId = remember { last }
+    val restoreId = remember { last.value }
     val prepared = remember(entries) {
         entries?.let { input ->
             PreparedCategories(input, input, input.associate { it.id to
@@ -121,14 +121,14 @@ internal fun CategoryGrid(title: String, entries: List<CategoryEntry>?, choose: 
             contentPadding = PaddingValues(top = Spacing.unit, bottom = Spacing.shelfGap),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            if (!ready) items(CATEGORY_COLUMNS * 6, key = { "loading-$it" }) {
+            if (!ready) items(CATEGORY_COLUMNS * 6, key = { "loading-$it" }, contentType = { "loading" }) {
                 Box(Modifier.fillMaxWidth().height(60.dp)
                     .background(LumenColors.surface2, RoundedCornerShape(Radii.card)).testTag("list-loading"))
             }
             if (ready && entries.orEmpty().isNotEmpty() && rows.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
                 Text("Eşleşen kategori yok.", style = LumenType.body, color = LumenColors.textSecondary)
             }
-            itemsIndexed(rows, key = { _, it -> it.id }) { index, entry ->
+            itemsIndexed(rows, key = { _, it -> it.id }, contentType = { _, _ -> "category" }) { index, entry ->
                 if (index == target && positioned && requestPending && !searching) LaunchedEffect(Unit) {
                     withFrameNanos { }
                     focus.requestFocus()
@@ -143,7 +143,7 @@ internal fun CategoryGrid(title: String, entries: List<CategoryEntry>?, choose: 
                     .then(gridFocus.item(index))
                     .semantics { contentDescription = if (entry.countKnown) "${entry.name} · ${entry.count}" else entry.name }
                     .then(if (index == target) Modifier.focusRequester(focus) else Modifier)
-                    .onFocusChanged { if (it.isFocused) last = entry.id }) {
+                    .onFocusChanged { if (it.isFocused) last.value = entry.id }) {
                     Row(Modifier.fillMaxSize().padding(horizontal = Spacing.unit, vertical = Spacing.iconText),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {

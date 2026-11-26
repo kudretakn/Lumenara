@@ -498,10 +498,10 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
             restoreFilterFocus = false
         }
     }
-    var lastPoster by rememberSaveable(source, category, shelf) { mutableStateOf<String?>(null) }
+    val lastPoster = rememberSaveable(source, category, shelf) { mutableStateOf<String?>(null) }
     val restoreOnce = remember { booleanArrayOf(true) }
     val restoreId = remember(source, kind, category, shelf, year, genre, language, rating) {
-        lastPoster.takeIf { restoreOnce[0] }.also { restoreOnce[0] = false }
+        lastPoster.value.takeIf { restoreOnce[0] }.also { restoreOnce[0] = false }
     }
     val paged = rememberCatalogPages(model, source, kind, category, shelf = shelf,
         year = year, genre = genre, language = language, minRating = rating.toDouble(),
@@ -587,7 +587,7 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
                         }
                     }
                 }
-                items(count, key = { it }, span = { index ->
+                items(count, key = { it }, contentType = { if (paged.isLiveSlot(it)) "live" else "poster" }, span = { index ->
                     // The skinny type index remains valid after a page's Item rows are evicted.
                     androidx.compose.foundation.lazy.grid.GridItemSpan(if (paged.isLiveSlot(index)) 2 else 1)
                 }) { index ->
@@ -602,9 +602,9 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
                         .then(if (index == posterTarget) Modifier.focusRequester(posterFocus) else Modifier)
                         .onFocusChanged { if (it.hasFocus) paged.focused(index) }
                     if (paged.isLiveSlot(index)) ChannelCard(model, entry, now,
-                        { entry?.let { play(it, paged.loaded().filter { it.kind == "LIVE" }) } }, { lastPoster = it.id },
+                        { entry?.let { play(it, paged.loaded().filter { it.kind == "LIVE" }) } }, { lastPoster.value = it.id },
                         modifier = cardModifier.testTag("poster-slot-$index"), operations = { entry?.let(open) })
-                    else GridPoster(model, entry, open, { lastPoster = it.id },
+                    else GridPoster(model, entry, open, { lastPoster.value = it.id },
                         modifier = cardModifier.testTag("poster-slot-$index"),
                         artworkHttp = entry?.source in httpSources, artworkWidth = posterWidth, artworkHeight = posterHeight)
                 }
@@ -641,11 +641,11 @@ private fun GridPoster(model: LibraryModel, item: Item?, open: (Item) -> Unit,
     focus: (Item) -> Unit, modifier: Modifier, artworkHttp: Boolean,
     artworkWidth: Int, artworkHeight: Int) {
     var focused by remember { mutableStateOf(false) }
-    LaunchedEffect(item?.id, focused) { if (focused) item?.let(focus) }
+    val observeFocus = rememberCardFocus(item, focus)
     Column(modifier) {
         FocusCard(onClick = { item?.let { focus(it); open(it) } }, modifier = Modifier.fillMaxWidth()
             .semantics { contentDescription = item?.title ?: "Yükleniyor" }
-            .onFocusChanged { focused = it.isFocused; if (it.isFocused) item?.let(focus) }) {
+            .onFocusChanged { focused = it.isFocused; observeFocus(it.isFocused) }) {
             if (item == null) LoadingCard(Modifier.fillMaxWidth().aspectRatio(2f / 3f))
             else Poster(model, item, Modifier.fillMaxWidth().aspectRatio(2f / 3f),
                 allowHttp = artworkHttp, width = artworkWidth, height = artworkHeight)

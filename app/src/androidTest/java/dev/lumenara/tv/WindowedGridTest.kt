@@ -7,6 +7,9 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.lumenara.data.Item
+import dev.lumenara.data.Feed
+import dev.lumenara.data.Mapping
+import dev.lumenara.data.Slot
 import dev.lumenara.data.Repository
 import dev.lumenara.data.Source
 import dev.lumenara.design.LumenaraTheme
@@ -30,6 +33,8 @@ class WindowedGridTest {
             Item("$source-$index", source, title, "Test", kind, "", "", title.lowercase(), 1, "")
         }
         val tag = if (kind == "LIVE") "live-channels" else "poster-grid"
+        val now = System.currentTimeMillis()
+        val programme = Slot(source, "current", now - 60_000, now + 3_600_000, "Grid current", "", "grid current")
         fun focused(index: Int) = screen.onAllNodes(hasContentDescription(rows[index].title) and isFocused())
             .fetchSemanticsNodes().isNotEmpty()
         fun window(): List<Int> = screen.onNodeWithTag(tag).fetchSemanticsNode()
@@ -38,6 +43,11 @@ class WindowedGridTest {
             runBlocking {
                 repo.library.save(Source(source, source, "", false, System.currentTimeMillis(), rows.size))
                 repo.library.save(rows)
+                if (kind == "LIVE") {
+                    repo.guide.put(Feed(source, source, ""))
+                    repo.guide.slots(listOf(programme))
+                    repo.guide.map(Mapping(rows[0].id, source, "current"))
+                }
                 prepareTestCatalog(repo, source)
             }
             screen.runOnUiThread {
@@ -46,6 +56,9 @@ class WindowedGridTest {
             }
             screen.openCategory(if (kind == "LIVE") "Tüm kanallar" else "Tümü")
             screen.waitUntil(10_000) { focused(0) }
+            if (kind == "LIVE") screen.waitUntil(10_000) {
+                screen.onAllNodesWithText("Grid current").fetchSemanticsNodes().isNotEmpty()
+            }
             screen.onNodeWithText("Devamını göster").assertDoesNotExist()
             fun assertHorizontalRow(first: Int) {
                 screen.waitForIdle()
@@ -85,6 +98,17 @@ class WindowedGridTest {
                 assertTrue("At most five pages", metadata[2] <= 5)
                 assertTrue("Bounded Item rows", metadata[3] <= 5 * pageSize)
             }
+            if (kind == "LIVE") {
+                // Update EPG/mapping in a retained page while the first page is evicted.
+                // Its active bulk subscription must refresh without any scroll event.
+                runBlocking {
+                    repo.guide.slots(listOf(programme.copy(title = "Grid updated")))
+                    repo.guide.map(Mapping(rows[steps * columns].id, source, "current"))
+                }
+                screen.waitUntil(10_000) {
+                    screen.onAllNodesWithText("Grid updated").fetchSemanticsNodes().isNotEmpty()
+                }
+            }
             for (row in steps - 1 downTo 0) {
                 screen.dpad(Key.DirectionUp)
                 screen.waitUntil(conditionDescription = "UP to ${row * columns} in $kind grid; keep the column across off-screen rows",
@@ -92,6 +116,11 @@ class WindowedGridTest {
             }
             screen.waitUntil(10_000) { window()[0] == 0 }
             assertTrue("Evicted first row is re-queried with focus intact", focused(0))
+            if (kind == "LIVE") screen.waitUntil(10_000) {
+                screen.onAllNodes(hasText("Grid updated") and
+                    hasAnyAncestor(hasTestTag("live-channel-${rows[0].id}")), useUnmergedTree = true)
+                    .fetchSemanticsNodes().isNotEmpty()
+            }
             screen.onNodeWithText("Devamını göster").assertDoesNotExist()
         } finally {
             screen.runOnUiThread { screen.activity.setContent {} }

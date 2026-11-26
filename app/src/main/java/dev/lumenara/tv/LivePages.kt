@@ -51,8 +51,10 @@ internal fun rememberLivePages(model: LibraryModel, source: String, category: St
                 .map { window ->
                     if (!initial) state.boundaries.clear()
                     initial = false
+                    val retained = state.range()
                     state.boundaries.entries.removeAll { (page, cursor) ->
-                        page !in first..(last + 1) || cursor.revision != window.revision || cursor.hidden != window.hidden
+                        page !in retained.first..(retained.last + 1) ||
+                            cursor.revision != window.revision || cursor.hidden != window.hidden
                     }
                     for (page in first..last) {
                         val item = window.rows.getOrNull((page - first + 1) * LIVE_PAGE_SIZE - 1)
