@@ -4,6 +4,8 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsActions
@@ -23,9 +25,80 @@ import org.junit.Test
 class SearchPlayerPagingTest {
     @get:Rule val screen = createAndroidComposeRule<MainActivity>()
 
+    @Test fun replacementSearchRetainsResultsUntilReadyButClearAndScopeChangesDiscardThem() {
+        val query = mutableStateOf("ava")
+        val incoming = mutableStateOf<List<String>?>(listOf("Avatar", "Avalon"))
+        val source = mutableStateOf("first-source")
+        val hidden = mutableStateOf(emptyList<String>())
+        var displayed = emptyList<String>()
+        screen.runOnUiThread {
+            screen.activity.setContent {
+                val results = key(source.value, hidden.value) {
+                    rememberSearchResults(query.value, incoming.value, emptyList())
+                }
+                SideEffect { displayed = results }
+            }
+        }
+        screen.runOnIdle { assertSame(incoming.value, displayed) }
+        screen.runOnIdle {
+            query.value = "avatar"
+            incoming.value = null
+        }
+        screen.runOnIdle { assertEquals(listOf("Avatar", "Avalon"), displayed) }
+        screen.runOnIdle { incoming.value = listOf("Avatar") }
+        screen.runOnIdle { assertSame(incoming.value, displayed) }
+        screen.runOnIdle { incoming.value = emptyList() }
+        screen.runOnIdle { assertTrue("A completed empty query must replace old results", displayed.isEmpty()) }
+        screen.runOnIdle { incoming.value = listOf("Avatar") }
+        screen.runOnIdle { query.value = ""; incoming.value = null }
+        screen.runOnIdle { assertTrue("Clearing below two characters must clear results", displayed.isEmpty()) }
+        screen.runOnIdle { query.value = "ava"; incoming.value = listOf("Avatar") }
+        screen.runOnIdle { source.value = "second-source"; incoming.value = null }
+        screen.runOnIdle { assertTrue("Another source must not retain old results", displayed.isEmpty()) }
+        screen.runOnIdle { incoming.value = listOf("Hidden channel") }
+        screen.runOnIdle { hidden.value = listOf("Adult"); incoming.value = null }
+        screen.runOnIdle { assertTrue("Visibility changes must discard retained results", displayed.isEmpty()) }
+    }
+
     @Test fun searchRowsLoadEvictAndRestoreWithRemoteFocus() = remoteWindow(search = true)
 
     @Test fun playerChannelRowsLoadEvictAndRestoreWithRemoteFocus() = remoteWindow(search = false)
+
+    @Test fun replacementPagerKeepsFocusAndClickUsesTheNewResult() {
+        val source = "search-replacement-${System.nanoTime()}"
+        fun page(query: String, title: String) =
+            CatalogPages(source, "MOVIE", "", query, "", 20, 1).apply {
+                install(0, 0, listOf(Item("$source-$query", source, title, "Test", "MOVIE",
+                    "", "", title.lowercase(), 1, "")))
+            }
+        val first = page("ava", "Avalon")
+        val next = page("tar", "Tarzan")
+        val query = mutableStateOf("ava")
+        val incoming = mutableStateOf<List<Pair<String, CatalogPages>>?>(listOf("Filmler" to first))
+        var clicked: Item? = null
+        try {
+            screen.runOnUiThread {
+                val model = ViewModelProvider(screen.activity)[LibraryModel::class.java]
+                screen.activity.setContent {
+                    LumenaraTheme {
+                        val shelves = rememberSearchResults(query.value, incoming.value, emptyList())
+                        SearchPagingRow(model, shelves, "replacement", {}, { clicked = it }, { _, _ -> })
+                    }
+                }
+            }
+            screen.onNodeWithTag("search-slot-Filmler:0")
+                .performSemanticsAction(SemanticsActions.RequestFocus).assertIsFocused()
+            screen.runOnIdle { query.value = "tar"; incoming.value = null }
+            screen.onNodeWithTag("search-slot-Filmler:0").assertIsFocused()
+                .assertContentDescriptionEquals("Avalon")
+            screen.runOnIdle { incoming.value = listOf("Filmler" to next) }
+            screen.onNodeWithTag("search-slot-Filmler:0").assertIsFocused()
+                .assertContentDescriptionEquals("Tarzan").performClick()
+            screen.runOnIdle { assertEquals(next[0]?.id, clicked?.id) }
+        } finally {
+            screen.runOnUiThread { screen.activity.setContent {} }
+        }
+    }
 
     @Test fun searchFieldDownKeepsTheFirstResultFocusedWhenShelvesSeparate() {
         val repo = Repository.get(InstrumentationRegistry.getInstrumentation().targetContext)

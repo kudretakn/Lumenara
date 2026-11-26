@@ -2,6 +2,7 @@ package dev.lumenara.tv
 
 import androidx.compose.runtime.*
 import dev.lumenara.data.Item
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 
 /** Absolute slots and a bounded Item window are independent of the Lazy layout's keys. */
@@ -98,7 +99,9 @@ internal fun rememberCatalogPages(model: LibraryModel, source: String, kind: Str
     }
     if (hidden != null) rememberWindowPagesDriver(state,
         page = { first, last -> model.repo.browsePage(source, kind, category, query, shelf,
-            (last - first + 1) * pageSize, first * pageSize, year, genre, language, minRating) },
+            (last - first + 1) * pageSize, first * pageSize, year, genre, language, minRating)
+            // Room's SQL is asynchronous; displayVersion/visibility mapping must be too.
+            .let { if (query.isNotEmpty()) it.flowOn(Dispatchers.Default) else it } },
         total = {
             if (kind.isEmpty()) model.repo.browseKinds(source, kind, category, query, shelf, year, genre, language, minRating)
                 .map { kinds -> state.slotKinds(kinds); kinds.size }
