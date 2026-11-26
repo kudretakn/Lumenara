@@ -8,6 +8,7 @@ import androidx.room.withTransaction
 import androidx.work.*
 import dev.lumenara.catalog.*
 import java.net.URI
+import java.security.GeneralSecurityException
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.*
@@ -25,6 +26,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import org.json.JSONObject
+import org.json.JSONException
 
 data class SourceSpec(
     val address: String,
@@ -513,7 +515,10 @@ class Repository private constructor(private val context: Context) {
 
     private suspend fun carryRows(source: String, xtream: Boolean): List<CarryRow> {
         val rows = library.carryRows(source, legacy = xtream)
-        if (!xtream) return rows
+        return if (xtream) legacyCarryRows(rows) else rows
+    }
+
+    private fun legacyCarryRows(rows: List<CarryRow>): List<CarryRow> {
         val parents = rows.filter { it.kind == "SERIES" }.associate { row -> row.id to row.providerId.ifEmpty {
             legacyProviderId(vault.decrypt(row.legacyUrl), row.kind)
         } }
@@ -538,17 +543,43 @@ class Repository private constructor(private val context: Context) {
         lock.withLock { removeUnlocked(id) }
     }
 
+    // Only decoding belongs in this block: database and preference failures must propagate.
+    private inline fun <T> decodeRemovalSnapshot(block: () -> T): T? = try {
+        block()
+    } catch (_: GeneralSecurityException) {
+        removalSnapshotWarning()
+        null
+    } catch (_: IllegalArgumentException) {
+        removalSnapshotWarning()
+        null
+    } catch (_: JSONException) {
+        removalSnapshotWarning()
+        null
+    }
+
+    private fun removalSnapshotWarning() {
+        android.util.Log.w("LumenaraRepository", "Skipping history carry-over: stored source data could not be decoded")
+    }
+
     // Also used for a cancelled add after its catalog committed: re-save recovered state before cleanup.
     private suspend fun removeUnlocked(id: String) {
         val source = library.source(id) ?: return
-        val spec = SourceSpec.decode(vault.decrypt(source.endpoint))
+        val spec = decodeRemovalSnapshot { SourceSpec.decode(vault.decrypt(source.endpoint)) } ?: run {
+            library.deleteSource(id)
+            return
+        }
         val now = System.currentTimeMillis()
         val snapshots = preferences.orphanSnapshots(now)
-        val rows = if (spec.user.isNotEmpty()) carryRows(id, true) else
-            library.carryRows(id, legacy = true).map { row ->
+        val storedRows = library.carryRows(id, legacy = true)
+        val rows = decodeRemovalSnapshot {
+            if (spec.user.isNotEmpty()) legacyCarryRows(storedRows) else storedRows.map { row ->
                 row.copy(urlHash = row.legacyUrl.takeIf { it.isNotEmpty() }
                     ?.let { contentKey("orphan-url", vault.decrypt(it)) }.orEmpty(), legacyUrl = "")
             }
+        } ?: run {
+            library.deleteSource(id)
+            return
+        }
         val excluded = context.getSharedPreferences("watch_next_state", Context.MODE_PRIVATE)
             .getStringSet("excluded", emptySet()).orEmpty().toSet()
         val provider = orphanProvider(spec)
