@@ -85,6 +85,8 @@ internal fun Video(
     }
         .collectAsStateWithLifecycle("Beyaz")
     LaunchedEffect(item.id, item.encryptedUrl, attempt, subtitle, preview, multi) {
+        val perfRequest = if (item.kind == "LIVE" && !preview && !multi)
+            Perf.transitions.zapRequest(item.id) else null
         withContext(Dispatchers.Main.immediate) {
             error = ""
             playbackActive = false
@@ -148,7 +150,7 @@ internal fun Video(
                         override fun onRenderedFirstFrame() {
                             if (!preview && !multi) {
                                 Perf.since("channel", "channel_first_frame_media3")
-                                Perf.zapFirstFrame(item.id)
+                                Perf.transitions.zapFirstFrame(perfRequest, "media3")
                             }
                         }
                         override fun onCues(cueGroup: androidx.media3.common.text.CueGroup) {
@@ -389,6 +391,10 @@ internal fun Playback(
     sleepTimerExpired: () -> Unit = back,
 ) {
     val activeSleepTimer = sleepTimer ?: remember { dev.lumenara.catalog.SleepTimer() }
+    // Intent/restored launches also get a request; normal selections retain their earlier timestamp.
+    remember(item.id) {
+        if (item.kind == "LIVE" && Perf.transitions.zapRequest(item.id) == null) Perf.zapSelected(item.id)
+    }
     var panel by remember { mutableStateOf(false) }
     var multi by remember { mutableStateOf(emptyList<Item>()) }
     var hint by remember { mutableStateOf("") }

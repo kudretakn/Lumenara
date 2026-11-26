@@ -380,6 +380,7 @@ internal fun VlcScreen(
         }
     }
     LaunchedEffect(layout, item.id, item.encryptedUrl, retry.generation) {
+        val perfRequest = if (item.kind == "LIVE") Perf.transitions.zapRequest(item.id) else null
         val surface = layout
         nativePlaying = false
         activeMediaId = null
@@ -468,8 +469,7 @@ internal fun VlcScreen(
                                 }
                                 MediaPlayer.Event.Vout -> {
                                     if (event.voutCount > 0) {
-                                        Perf.since("channel", "channel_first_frame_vlc")
-                                        Perf.zapFirstFrame(item.id)
+                                        Perf.since("channel", "channel_video_output_ready_vlc")
                                     }
                                     refreshCurrentSlave(p)
                                 }
@@ -516,6 +516,22 @@ internal fun VlcScreen(
                     // Serialize that callback and the initial request on Main.
                     p.play()
                     android.util.Log.d("LumenaraVlc", "playback play requested generation=$mediaGeneration")
+                }
+                // Vout only means output creation. Poll displayed pictures during this request,
+                // then stop permanently; cancellation follows the playback attempt on zap/exit.
+                if (Perf.transitions.zapPending(perfRequest)) launch {
+                    val media = p.media
+                    try {
+                        withTimeoutOrNull(30_000) {
+                            while (Perf.transitions.zapPending(perfRequest)) {
+                                if ((media?.stats?.displayedPictures ?: 0) > 0) {
+                                    Perf.transitions.zapFirstFrame(perfRequest, "vlc")
+                                    break
+                                }
+                                delay(50)
+                            }
+                        }
+                    } finally { media?.release() }
                 }
                 var lastSavedAtMs = 0L
                 wallClockTicks(if (item.kind == "LIVE") 500 else 5000).collect {

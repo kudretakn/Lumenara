@@ -46,12 +46,6 @@ internal fun Timeline(
     val channels = rememberLivePages(model, source, returnId = restoreId)
     var restorePending by remember(channels) { mutableStateOf(true) }
     var positioned by remember(channels) { mutableStateOf(false) }
-    LaunchedEffect(channels[channels.anchor ?: 0] != null) {
-        if (channels[channels.anchor ?: 0] != null) {
-            withFrameNanos { }; withFrameNanos { }
-            Perf.since("category", "category_grid_first_draw")
-        }
-    }
     LaunchedEffect(channels, channels.anchor, channels.count, channels[channels.anchor ?: 0]) {
         if (!positioned) {
             channels.anchor?.let {
@@ -126,6 +120,8 @@ internal fun Timeline(
         }
         LazyColumn(
             state = list,
+            modifier = Modifier.categoryFirstDraw(channels.firstPageLoaded &&
+                (channels.count == 0 || positioned && channels[channels.anchor ?: 0] != null)),
             verticalArrangement = Arrangement.spacedBy(4.dp),
             contentPadding = PaddingValues(3.dp),
         ) {

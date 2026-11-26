@@ -7,23 +7,60 @@ import android.os.Looper
 import android.view.FrameMetrics
 import android.view.Window
 import java.util.concurrent.ConcurrentHashMap
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
+
+/** Main-thread, one-shot transitions. Tokens reject late callbacks, including A -> B -> A. */
+internal class PerfTransitions(
+    private val clock: () -> Long,
+    private val emit: (String) -> Unit,
+) {
+    class Request(val started: Long, val target: String? = null)
+    private var zap: Request? = null
+    private var category: Request? = null
+    fun zapStart() { zap = Request(clock()); emit("zap_start ms=0") }
+    fun zapCancel() { zap = null }
+    fun zapSelected(id: String) { zap = Request(zap?.started ?: clock(), id) }
+    fun zapRequest(id: String): Request? = zap?.takeIf { it.target == id }
+    fun zapPending(request: Request?): Boolean = request != null && zap === request
+    fun zapFirstFrame(request: Request?, engine: String) {
+        if (request == null || zap !== request) return
+        zap = null
+        emit("zap_first_frame ms=${clock() - request.started} engine=$engine")
+    }
+    fun categoryStart() { category = Request(clock()) }
+    fun categoryRequest(): Request? = category
+    fun categoryCancel(request: Request?) { if (category === request) category = null }
+    fun categoryFirstDraw(request: Request?) {
+        if (request == null || category !== request) return
+        category = null
+        emit("category_grid_first_draw ms=${clock() - request.started}")
+    }
+}
+
+/** Runs after grid content draws, never for loading placeholders; empty results also complete. */
+@Composable
+internal fun Modifier.categoryFirstDraw(ready: Boolean, transitions: PerfTransitions = Perf.transitions): Modifier {
+    val request = transitions.categoryRequest()
+    val drawn = remember(request) { booleanArrayOf(false) }
+    DisposableEffect(request) { onDispose { transitions.categoryCancel(request) } }
+    return drawWithContent {
+        drawContent()
+        if (ready && !drawn[0]) {
+            drawn[0] = true
+            transitions.categoryFirstDraw(request)
+        }
+    }
+}
 
 /** Fixed event names only: never pass content titles, IDs or addresses. Enabled in release. */
 internal object Perf {
     private val marks = ConcurrentHashMap<String, Long>()
-    private data class Zap(val started: Long, val target: String? = null)
-    private var zap: Zap? = null
-    fun zapStart() {
-        zap = Zap(SystemClock.elapsedRealtime())
-        duration("zap_start", 0)
-    }
-    fun zapCancel() { zap = null }
-    fun zapSelected(id: String) { zap = zap?.copy(target = id) }
-    fun zapFirstFrame(id: String) {
-        val request = zap?.takeIf { it.target == id } ?: return
-        zap = null
-        duration("zap_first_frame", SystemClock.elapsedRealtime() - request.started)
-    }
+    val transitions = PerfTransitions(SystemClock::elapsedRealtime) { Log.i("LumenaraPerf", it) }
+    fun zapStart() = transitions.zapStart()
+    fun zapCancel() = transitions.zapCancel()
+    fun zapSelected(id: String) = transitions.zapSelected(id)
     fun duration(name: String, millis: Long) { Log.i("LumenaraPerf", "$name ms=$millis") }
     fun mark(name: String) { marks[name] = SystemClock.elapsedRealtime() }
     fun elapsed(name: String, label: String) {

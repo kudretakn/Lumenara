@@ -229,9 +229,6 @@ private fun LiveChannelGrid(model: LibraryModel, title: String, result: List<Ite
             snapshotFlow { grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index }
                 .filterNotNull().collect { paged.visible(it) }
     }
-    LaunchedEffect(targetReady) {
-        if (targetReady) { withFrameNanos { }; withFrameNanos { }; Perf.since("category", "category_grid_first_draw") }
-    }
     Box(Modifier.fillMaxSize().background(LumenColors.bg)) {
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
             Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically,
@@ -258,7 +255,8 @@ private fun LiveChannelGrid(model: LibraryModel, title: String, result: List<Ite
             androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
                 androidx.compose.foundation.lazy.grid.GridCells.Fixed(LIVE_GRID_COLUMNS), state = grid,
                 modifier = Modifier.weight(1f).testTag("live-channels").reportScrollPosition(grid).then(gridFocus.modifier)
-                    .semantics { if (paged != null) pagingWindow = pagingDescription(paged) }.focusRestorer().focusGroup(),
+                    .semantics { if (paged != null) pagingWindow = pagingDescription(paged) }.focusRestorer().focusGroup()
+                    .categoryFirstDraw(!loading && (count == 0 || positioned && targetReady)),
                 contentPadding = PaddingValues(vertical = Spacing.unit),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -296,7 +294,7 @@ private fun LiveChannelGrid(model: LibraryModel, title: String, result: List<Ite
             Panel(Modifier.align(Alignment.TopEnd).padding(top = 56.dp).width(320.dp)) {
                 LazyColumn(Modifier.padding(Spacing.unit)) {
                     itemsIndexed(filters, key = { _, entry -> entry.id }) { index, entry ->
-                        ListRow(onClick = { filtering = false; filter(entry) },
+                        ListRow(onClick = { Perf.transitions.categoryStart(); filtering = false; filter(entry) },
                             modifier = if (index == 0) Modifier.focusRequester(first) else Modifier) {
                             Text(entry.name, style = LumenType.cardTitle)
                         }

@@ -83,10 +83,13 @@ internal fun LibraryScreen(model: LibraryModel = viewModel(), onFirstDraw: () ->
     var playJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     val play: (Item, List<Item>) -> Unit = { item, group ->
         Perf.mark("channel")
+        Perf.zapCancel()
+        if (item.kind == "LIVE") Perf.zapStart()
         playJob?.cancel()
         playJob = playbackScope.launch {
             try {
                 val chosen = model.repo.selectedVersion(item)
+                if (chosen.kind == "LIVE") Perf.zapSelected(chosen.id)
                 siblings = if (chosen.kind == "EPISODE" && chosen.parent != item.parent)
                     model.repo.episodeSnapshot(chosen.parent).seriesOrder()
                     else if (item.kind == "EPISODE") group.seriesOrder() else group
