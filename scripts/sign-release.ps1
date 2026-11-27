@@ -1,67 +1,23 @@
+<#
+WP01: local signing/key creation is retired by PLAN section 5. Releases and
+experimental APKs must be signed by Release CI, using the original certificate.
+This entry point now only verifies a downloaded CI APK: -Apk <path>.
+#>
 [CmdletBinding()]
-param([switch]$CreateKey)
+param([switch]$CreateKey, [string]$Apk = '', [string]$SignTool = '', [string]$Python = '')
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$project = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-# Lumenara was called Streamora before 0.3.0. The personal key may still live in the old folder;
-# its alias inside the PKCS#12 file stays 'streamora' so every release keeps the same certificate.
-$keyDirectory = Join-Path $env:USERPROFILE '.lumenara\signing'
-$keyFile = Join-Path $keyDirectory 'lumenara-personal.p12'
-$legacyDirectory = Join-Path $env:USERPROFILE '.streamora\signing'
-if (-not (Test-Path $keyFile) -and (Test-Path (Join-Path $legacyDirectory 'streamora-personal.p12'))) {
-    $keyDirectory = $legacyDirectory
-    $keyFile = Join-Path $keyDirectory 'streamora-personal.p12'
+if ($CreateKey -or -not $Apk) {
+    throw 'Local release signing/key creation is disabled. Use Release CI (v* tag or workflow_dispatch), then -Apk to verify the downloaded APK.'
 }
-$keyAlias = 'streamora'
-$passwordFile = Join-Path $keyDirectory 'password.dpapi'
-$unsigned = Join-Path $project 'app\build\outputs\apk\release\app-release-unsigned.apk'
-$dist = Join-Path $project 'dist'
-if (-not (Test-Path -LiteralPath $unsigned)) { throw 'Önce .\gradlew.bat :app:assembleRelease çalıştırın.' }
-$signTool = Join-Path $env:ANDROID_HOME 'build-tools\36.0.0\apksigner.bat'
-$keyTool = Join-Path $env:JAVA_HOME 'bin\keytool.exe'
-if (-not (Test-Path -LiteralPath $signTool) -or -not (Test-Path -LiteralPath $keyTool)) { throw 'JDK 17 ve Android Build Tools 36.0.0 gerekli.' }
-
-if ($CreateKey -and -not (Test-Path -LiteralPath $keyDirectory)) {
-    $folder = New-Item -ItemType Directory -Path $keyDirectory -Force
-    $acl = Get-Acl -LiteralPath $folder.FullName
-    $acl.SetAccessRuleProtection($true,$false)
-    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
-    $rule = [Security.AccessControl.FileSystemAccessRule]::new($sid,'FullControl','ContainerInherit,ObjectInherit','None','Allow')
-    $acl.SetAccessRule($rule)
-    Set-Acl -LiteralPath $folder.FullName -AclObject $acl
-}
-if (-not (Test-Path -LiteralPath $passwordFile)) {
-    if (-not $CreateKey -or (Test-Path -LiteralPath $keyFile)) { throw 'Kayıtlı anahtar/parola çifti eksik. Yedeğinizi geri yükleyin.' }
-    $bytes = New-Object byte[] 48
-    $random = [Security.Cryptography.RandomNumberGenerator]::Create()
-    try { $random.GetBytes($bytes) } finally { $random.Dispose() }
-    $value = ConvertTo-SecureString -String ([Convert]::ToBase64String($bytes)) -AsPlainText -Force
-    [Array]::Clear($bytes,0,$bytes.Length)
-    [IO.File]::WriteAllText($passwordFile,($value | ConvertFrom-SecureString))
-    $value.Dispose()
-}
-$protected = (Get-Content -Raw -LiteralPath $passwordFile) | ConvertTo-SecureString
-$pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($protected)
+if (-not $SignTool) { $SignTool = Join-Path $env:ANDROID_HOME 'build-tools/36.0.0/apksigner.bat' }
+if (-not $Python) { $Python = if ($env:WP01_PYTHON) { $env:WP01_PYTHON } elseif (Get-Command python3 -ErrorAction SilentlyContinue) { 'python3' } else { 'python' } }
+$verification = & $SignTool verify --verbose --print-certs $Apk
+if ($LASTEXITCODE -ne 0) { throw 'APK signature verification failed.' }
+$certificateOutput = [IO.Path]::GetTempFileName()
 try {
-    $env:LUMENARA_SIGN_PASS = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)
-    if (-not (Test-Path -LiteralPath $keyFile)) {
-        if (-not $CreateKey) { throw 'İmzalama anahtarı bulunamadı. Güncelleme için özgün anahtarı geri yükleyin.' }
-        & $keyTool -genkeypair -alias $keyAlias -keystore $keyFile -storetype PKCS12 -keyalg RSA -keysize 3072 -validity 10000 -dname 'CN=Lumenara Personal Release' -storepass:env LUMENARA_SIGN_PASS -keypass:env LUMENARA_SIGN_PASS
-        if ($LASTEXITCODE -ne 0) { throw 'Kişisel anahtar oluşturulamadı.' }
-    }
-    New-Item -ItemType Directory -Force -Path $dist | Out-Null
-    $metadata = Get-Content -Raw -LiteralPath (Join-Path (Split-Path $unsigned) 'output-metadata.json') | ConvertFrom-Json
-    $version = $metadata.elements[0].versionName
-    $outputFile = Join-Path $dist "Lumenara-$version-release.apk"
-    $staging = Join-Path $dist "Lumenara-$version-pending.apk"
-    & $signTool sign --v4-signing-enabled false --ks $keyFile --ks-key-alias $keyAlias --ks-pass env:LUMENARA_SIGN_PASS --out $staging $unsigned
-    if ($LASTEXITCODE -ne 0) { throw 'APK imzalanamadı.' }
-    & $signTool verify --verbose --print-certs $staging
-    if ($LASTEXITCODE -ne 0) { throw 'İmza doğrulanamadı.' }
-    Move-Item -Force -LiteralPath $staging -Destination $outputFile
-    Get-FileHash -Algorithm SHA256 -LiteralPath $outputFile
-} finally {
-    Remove-Item Env:\LUMENARA_SIGN_PASS -ErrorAction SilentlyContinue
-    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer)
-    $protected.Dispose()
-}
+    [IO.File]::WriteAllText($certificateOutput, ($verification -join "`n"))
+    & $Python (Join-Path $PSScriptRoot 'test-results/Wp01ReleaseGate.py') certificate $certificateOutput
+    if ($LASTEXITCODE -ne 0) { throw 'APK does not match the original personal release certificate.' }
+    Get-FileHash -Algorithm SHA256 -LiteralPath $Apk
+} finally { Remove-Item -LiteralPath $certificateOutput -ErrorAction SilentlyContinue }
