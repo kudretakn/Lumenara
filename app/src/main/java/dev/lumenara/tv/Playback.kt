@@ -432,8 +432,10 @@ internal fun Playback(
 ) {
     val activeSleepTimer = sleepTimer ?: remember { dev.lumenara.catalog.SleepTimer() }
     // Intent/restored launches also get a request; normal selections retain their earlier timestamp.
-    remember(item.id) {
+    // Initialize before the player's launched effects; recomposition must not re-arm a completed zap.
+    DisposableEffect(item.id) {
         if (item.kind == "LIVE" && Perf.transitions.zapRequest(item.id) == null) Perf.zapSelected(item.id)
+        onDispose { }
     }
     var panel by remember { mutableStateOf(false) }
     var multi by remember { mutableStateOf(emptyList<Item>()) }

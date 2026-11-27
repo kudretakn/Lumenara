@@ -68,7 +68,7 @@ class SearchPlayerPagingTest {
         val source = "search-replacement-${System.nanoTime()}"
         fun page(query: String, title: String) =
             CatalogPages(source, "MOVIE", "", query, "", 20, 1).apply {
-                install(0, 0, listOf(Item("$source-$query", source, title, "Test", "MOVIE",
+                installPage(0, listOf(Item("$source-$query", source, title, "Test", "MOVIE",
                     "", "", title.lowercase(), 1, "")))
             }
         val first = page("ava", "Avalon")
