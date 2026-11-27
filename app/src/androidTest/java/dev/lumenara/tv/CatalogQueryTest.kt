@@ -1,17 +1,160 @@
 package dev.lumenara.tv
 
 import androidx.room.Room
+import androidx.room.withTransaction
 import androidx.sqlite.db.SimpleSQLiteQuery
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.lumenara.data.*
 import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
 
 class CatalogQueryTest {
+    @Test fun preparedTotalsMatchTheOriginalGridForVisibilityRatingsVersionsSourcesAndLegacy() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val db = Room.inMemoryDatabaseBuilder(context, LibraryDb::class.java).build()
+        try {
+            val dao = db.library()
+            for (source in listOf("a", "b")) dao.save(Source(source, source, "sealed", false, 0, 0))
+            val rows = listOf("a", "b").flatMap { source -> listOf("MOVIE", "SERIES").flatMap { kind ->
+                val prefix = "$source:$kind"
+                listOf(item("$prefix:dub", "Kıyı Dublaj", "Adult", kind, source),
+                    item("$prefix:original", "Kıyı", "Film", kind, source),
+                    item("$prefix:sub", "Kıyı Altyazılı", "Other", kind, source),
+                    item("$prefix:single", "Başka", "Film", kind, source),
+                    item("$prefix:negative", "Negatif", "Other", kind, source).copy(rating = "-2"))
+            } }
+            dao.save(rows)
+            dao.assignVersions(rows.versionAssignments())
+            // Empty version keys remain independent, even with an old false representative flag.
+            dao.save(listOf(item("legacy", "Legacy").copy(isRepresentative = false),
+                item("legacy-negative", "Legacy negative", "Other").copy(rating = "-1")))
+            val visibility = listOf("" to emptyList(), "" to listOf("Adult"),
+                "" to listOf("Film"), "" to listOf("Adult", "Film"),
+                "Film" to listOf("Adult"), "Adult" to listOf("Adult"), "Other" to emptyList())
+            suspend fun verify() {
+                for (source in listOf("", "a", "b")) for (kind in listOf("MOVIE", "SERIES")) {
+                    for ((category, hidden) in visibility) for (rating in listOf(-1.0, 0.0, 7.5)) {
+                        // browse's unchanged row query is the reference, including filter-before-merge.
+                        val expected = dao.browse(source, kind, category, "", "", Int.MAX_VALUE,
+                            minRating = rating, hidden = hidden).first().size
+                        assertEquals("source=$source kind=$kind category=$category hidden=$hidden rating=$rating",
+                            expected, dao.browseTotal(source, kind, category, "", "",
+                                minRating = rating, hidden = hidden).first())
+                    }
+                    assertEquals(dao.browse(source, kind, "", "", "recent", Int.MAX_VALUE).first().size,
+                        dao.browseTotal(source, kind, "", "", "recent").first())
+                }
+            }
+            verify() // No derived data: original columns and legacy policy.
+            prepareTestCatalog(db)
+            verify() // Ready data, including productions entirely below the rating threshold.
+            dao.save(rows.filter { it.id.endsWith(":dub") }.map { checkNotNull(dao.item(it.id)).copy(rating = "-1") })
+            verify() // A negative representative must fall back to an eligible sibling.
+            // The prepared totals cannot be used while version keys are partially applied.
+            db.versionBackfill().save(VersionBackfillState(phase = "apply", cursor = "a:MOVIE:original"))
+            verify()
+        } finally { db.close() }
+    }
+
+    @Test fun preparedTotalsUseWholeProductionAndCategoryCountsWithoutDoubleCountingVersions() = runBlocking {
+        val captured = AtomicReference<Pair<String, List<Any?>>>()
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val db = Room.inMemoryDatabaseBuilder(context, LibraryDb::class.java)
+            .setQueryCallback({ sql, args -> if (sql.startsWith("SELECT CASE WHEN")) captured.set(sql to args.toList()) },
+                Executor { it.run() }).build()
+        try {
+            val dao = db.library()
+            dao.save(Source("a", "Test", "sealed", false, 0, 0))
+            val rows = listOf(item("dub", "Kıyı Dublaj", "Adult"), item("sub", "Kıyı Altyazılı", "Film"),
+                item("other", "Başka", "Film"), item("series", "Dizi", kind = "SERIES"))
+            dao.save(rows)
+            dao.assignVersions(rows.versionAssignments())
+            prepareTestCatalog(db)
+            assertEquals(3, dao.categoryCounts("MOVIE", "a").first().sumOf { it.count })
+            assertEquals(2, dao.browseTotal("a", "MOVIE", "", "", "").first())
+            assertTrue(checkNotNull(captured.get()).first.contains("THEN (SELECT COALESCE(SUM(count),0) FROM catalog_stats"))
+            val whole = checkNotNull(captured.get())
+            assertEquals(2, dao.browseTotal("a", "MOVIE", "Film", "", "").first())
+            assertTrue(checkNotNull(captured.get()).first.contains("THEN (SELECT COALESCE(SUM(count),0) FROM category_counts"))
+            assertEquals(2, dao.browseTotal("a", "MOVIE", "", "", "", hidden = listOf("Adult")).first())
+            // Arbitrary hidden categories have no matching whole-catalog prepared policy.
+            assertEquals(1, dao.browseTotal("a", "MOVIE", "", "", "", hidden = listOf("Film")).first())
+            assertEquals(0, dao.browseTotal("missing", "MOVIE", "", "", "").first())
+            assertEquals(1, dao.browseTotal("a", "SERIES", "", "", "").first())
+            // A queued ready statement must fall back if a rebuild starts before it executes.
+            CatalogDerivedBackfill(db).reset("a")
+            assertEquals(2, dao.preparedCatalogCount(SimpleSQLiteQuery(whole.first, whole.second.toTypedArray())).first())
+        } finally { db.close() }
+    }
+
+    @Test fun marksDoNotRerunOrdinaryTotalsButStillRefreshMarkedTotals() = runBlocking {
+        val ordinaryQueries = AtomicInteger()
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val db = Room.inMemoryDatabaseBuilder(context, LibraryDb::class.java)
+            .setQueryCallback({ sql, _ ->
+                if (sql.startsWith("SELECT CASE WHEN") || sql.startsWith("SELECT COUNT(*) FROM (") && !sql.contains("marks"))
+                    ordinaryQueries.incrementAndGet()
+            }, Executor { it.run() }).build()
+        val jobs = mutableListOf<Job>()
+        try {
+            val dao = db.library()
+            dao.save(Source("a", "Test", "sealed", false, 0, 0))
+            val row = item("film", "Film")
+            dao.save(listOf(row))
+            for (ready in listOf(false, true)) {
+                if (ready) prepareTestCatalog(db)
+                val ordinary = Channel<Int>(Channel.UNLIMITED)
+                jobs += launch { dao.browseTotal("a", "MOVIE", "", "", "").collect { ordinary.send(it) } }
+                assertEquals(1, withTimeout(5000) { ordinary.receive() })
+                val initial = ordinaryQueries.get()
+                val shelves = listOf("favorite", "list", "resume").map { shelf ->
+                    Channel<Int>(Channel.UNLIMITED).also { channel ->
+                        jobs += launch { dao.browseTotal("a", "MOVIE", "", "", shelf).collect { channel.send(it) } }
+                        withTimeout(5000) { channel.receive() }
+                    }
+                }
+                repeat(3) { index ->
+                    dao.save(Mark("film", favorite = true, listed = true,
+                        position = (index + 1) * 10L, duration = 1000, updated = index.toLong()))
+                    shelves.forEach { assertEquals(1, withTimeout(5000) { it.receive() }) }
+                    delay(150)
+                    assertEquals(initial, ordinaryQueries.get())
+                    assertTrue(ordinary.tryReceive().isFailure)
+                }
+                // Rating edits must re-evaluate the guard even when the stored sum is unchanged.
+                dao.save(listOf(row.copy(rating = "-1")))
+                assertEquals(0, withTimeout(5000) { ordinary.receive() })
+                dao.save(listOf(row))
+                assertEquals(1, withTimeout(5000) { ordinary.receive() })
+                // Catalog publication still refreshes the prepared sum (or legacy query).
+                db.withTransaction {
+                    dao.save(listOf(row, item("second", "Second")))
+                    if (ready) prepareTestCatalog(db)
+                }
+                assertEquals(2, withTimeout(5000) { ordinary.receive() })
+                jobs.forEach { it.cancelAndJoin() }
+                jobs.clear()
+                dao.prune("a", 2) // Clear both rows and their marks before the ready iteration.
+                dao.save(listOf(row))
+            }
+        } finally {
+            jobs.forEach { it.cancelAndJoin() }
+            db.close()
+        }
+    }
+
     @Test fun xtreamMovieCategoryAndAllReturnOneCardWithEveryStreamAvailable() = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val db = Room.inMemoryDatabaseBuilder(context, LibraryDb::class.java).build()
@@ -204,6 +347,7 @@ class CatalogQueryTest {
                 dao.browse("", "", "", "", "recent", 2).first().map { it.id })
             assertEquals("sub", dao.browse("", "", "", "altyazılı", "", 1).first().single().id)
             assertEquals(3, dao.browse("", "", "", "", "popular", 120).first().size)
+            assertEquals(3, dao.browseTotal("", "", "", "", "").first())
             dao.save(Mark("sub", position = 10, duration = 100, updated = 5))
             assertEquals("sub", dao.browse("", "", "", "", "resume", 1).first().single().id)
         } finally { db.close() }
@@ -222,6 +366,7 @@ class CatalogQueryTest {
             dao.save(rows + item("movie", "Film"))
             assertEquals(2, dao.browse("a", "LIVE", "", "", "", 120).first().size)
             assertEquals(2, dao.browse("", "LIVE", "", "", "", 120).first().size)
+            assertEquals(2, dao.browseTotal("", "LIVE", "", "", "").first())
             assertEquals(3, dao.browse("", "", "", "", "", 120).first().size)
             rows.forEach { dao.save(Mark(it.id, favorite = true)) }
             assertEquals(3, dao.browse("", "LIVE", "", "", "favorite", 120).first().size)
