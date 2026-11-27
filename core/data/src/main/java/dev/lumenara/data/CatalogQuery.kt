@@ -141,6 +141,67 @@ internal fun browseCountQuery(filter: CatalogFilter): SimpleSQLiteQuery {
     return SimpleSQLiteQuery("SELECT COUNT(*) FROM (${statement.sql})", statement.args.toTypedArray())
 }
 
+/** WP06: category totals and whole-production totals have different merge semantics.
+ * Keep the old count as an atomic fallback: schema 13 has no rating-aware totals, and
+ * safe totals only describe hiding exactly the adult categories. CASE evaluates just
+ * the selected branch, so the usual grid skips COUNT and its per-version probes.
+ */
+internal fun preparedBrowseCountQuery(filter: CatalogFilter): SimpleSQLiteQuery? {
+    if (!filter.derived || filter.kind !in listOf("MOVIE", "SERIES") ||
+        filter.query.isNotEmpty() || filter.year.isNotEmpty() || filter.genre.isNotEmpty() ||
+        filter.language.isNotEmpty() || filter.shelf !in listOf("", "recent") ||
+        (filter.minRating != null && filter.minRating != 0.0)) return null
+
+    val args = mutableListOf<Any>()
+    val guards = mutableListOf("""NOT EXISTS(SELECT 1 FROM sources s
+        LEFT JOIN catalog_derived_state d ON d.source=s.id
+        WHERE (d.source IS NULL OR d.phase!='done')${if (filter.source.isNotEmpty()) " AND s.id=?" else ""})""",
+        """NOT EXISTS(SELECT 1 FROM version_backfill_state
+        WHERE id=1 AND phase IN ('normalize','resolve','apply'))""")
+    if (filter.source.isNotEmpty()) args += filter.source
+    // A negative provider rating can remove a whole production or change its eligible
+    // representative. This existence scan is still necessary without rating metadata;
+    // it avoids all sibling probes in the common nonnegative catalog.
+    if (filter.minRating != null) {
+        val eligible = filter.copy(minRating = null).predicate("i")
+        guards += "NOT EXISTS(SELECT 1 FROM items i WHERE ${eligible.sql} AND CAST(i.rating AS REAL)<0)"
+        args.addAll(eligible.args)
+    }
+
+    val parts = mutableListOf("kind=?")
+    val totalArgs = mutableListOf<Any>(filter.kind)
+    if (filter.source.isNotEmpty()) { parts += "source=?"; totalArgs += filter.source }
+    val table = if (filter.category.isNotEmpty()) {
+        parts += "category=?"
+        totalArgs += filter.category
+        if (filter.hidden.isNotEmpty()) {
+            parts += "category NOT IN (${filter.hidden.joinToString { "?" }})"
+            totalArgs.addAll(filter.hidden)
+        }
+        "category_counts"
+    } else {
+        if (filter.hidden.isNotEmpty()) {
+            // Never sum category counts here: one production can occur in multiple
+            // categories. Compare the requested hidden set to the stored adult policy.
+            val scope = parts.joinToString(" AND ")
+            val hidden = filter.hidden.joinToString { "?" }
+            guards += """NOT EXISTS(SELECT 1 FROM category_counts WHERE $scope AND
+                ((isAdult=1 AND category NOT IN ($hidden)) OR (isAdult=0 AND category IN ($hidden))))"""
+            args.addAll(totalArgs)
+            args.addAll(filter.hidden)
+            args.addAll(filter.hidden)
+        }
+        parts += "showAdult=?"
+        totalArgs += if (filter.hidden.isEmpty()) 1 else 0
+        "catalog_stats"
+    }
+    val fallback = browseStatement(filter, ordered = false)
+    return SimpleSQLiteQuery("""SELECT CASE WHEN ${guards.joinToString(" AND ")}
+        THEN (SELECT COALESCE(SUM(count),0) FROM $table WHERE ${parts.joinToString(" AND ")})
+        ELSE (SELECT COUNT(*) FROM (${fallback.sql})) END""",
+        (args + totalArgs + fallback.args).toTypedArray())
+}
+
 /** Only mixed poster/channel grids need this small span index; no artwork/Item is retained. */
 internal fun browseKindsQuery(filter: CatalogFilter): SimpleSQLiteQuery {
     val statement = browseStatement(filter, projectionOnly = "i.kind")
