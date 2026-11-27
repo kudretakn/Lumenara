@@ -1,5 +1,14 @@
 # Lumenara sürüm kaydı
 
+## 0.6.0 · 27 Kasım 2026
+
+- Uygulama boyutu 214 MB'tan 97 MB'a indi: TV kutularında kullanılmayan x86 kütüphaneleri artık pakete girmiyor. Güncellemeler daha hızlı iniyor ve daha az yer kaplıyor.
+- Açılışta ana ekrandaki uzun donma kısaldı (Mi Box 4'te en uzun kare 3,2 sn'den yaklaşık 2,4 sn'ye): raflar, ana ekran iskeleti çizildikten sonra ekleniyor.
+- Açılıştaki arka plan işleri sıraya alındı ve kullanıcı etkileşimdeyken erteleniyor (en çok 20 sn); VLC yalnızca gerektiğinde başlatılıyor, codec yetenekleri yalnızca çoklu izleme açılınca ölçülüyor. İlk 15 saniyedeki işlemci kullanımı yaklaşık %11 azaldı.
+- Canlı kanal ızgarasında kaydırma akıcılaştı: odak değişince yalnızca ilgili kartlar yeniden çiziliyor, logolar sabit boyutta ve paylaşılan önbellekten geliyor, sayfa geçişlerinde okunan satır sayısı beşte birine indi.
+- Aramada yazarken takılma azaldı: önceki sonuçlar yenileri gelene kadar ekranda kalıyor, sonuç eşleme ana iş parçacığından çıktı.
+- Kanal geçişi ve kategori açılışı için performans ölçüm işaretleri eklendi.
+
 ## 0.5.9 · 26 Kasım 2026
 
 - Kaynağı silip aynı sunucudan yeniden eklediğinizde izleme geçmişi, kaldığınız yer, favoriler, Listem ve oynatma tercihleri eşleşen içeriklere taşınıyor. Kurtarma kayıtları bu cihazda şifreli olarak 30 gün saklanıyor; belirsiz eşleşmelerde tahmin yapılmıyor, eşleşmeyen kayıtlar süre dolana kadar sonraki yenilemelerde yeniden deneniyor.

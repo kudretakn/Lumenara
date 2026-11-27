@@ -23,11 +23,21 @@ internal class PagingWindow<T>(val pageSize: Int, val pages: MutableMap<Int, Lis
 
     fun install(range: IntRange, rows: List<T>) {
         require(range.last - range.first < 2 * PAGE_WINDOW_RADIUS + 1)
-        pages.keys.toList().filter { it !in range }.forEach(pages::remove)
+        retain(range)
         range.forEach { page ->
             val start = (page - range.first) * pageSize
-            pages[page] = if (start >= rows.size) emptyList() else rows.subList(start, minOf(start + pageSize, rows.size)).toList()
+            installPage(page, if (start >= rows.size) emptyList() else rows.subList(start, minOf(start + pageSize, rows.size)))
         }
+    }
+
+    fun retain(range: IntRange) {
+        pages.keys.toList().filter { it !in range }.forEach(pages::remove)
+    }
+
+    fun installPage(page: Int, rows: List<T>) {
+        require(page >= 0 && rows.size <= pageSize)
+        // Equal Room emissions must preserve the list and its Item instances.
+        if (pages[page] != rows) pages[page] = rows.toList()
     }
 
     operator fun get(index: Int): T? = if (index < 0) null else pages[index / pageSize]?.getOrNull(index % pageSize)

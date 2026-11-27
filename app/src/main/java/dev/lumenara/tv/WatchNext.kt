@@ -111,6 +111,10 @@ internal class WatchNext private constructor(private val context: Context) {
     private val mutex = kotlinx.coroutines.sync.Mutex()
 
     internal suspend fun sync() = withContext(Dispatchers.IO) {
+        backgroundWork.run { publish() }
+    }
+
+    private suspend fun publish() {
         mutex.withLock {
             val resolver = context.contentResolver
             val redirects = repo.library.redirects().associate { it.oldId to it.newId }

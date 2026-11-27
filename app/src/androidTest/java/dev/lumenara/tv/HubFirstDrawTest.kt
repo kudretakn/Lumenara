@@ -53,6 +53,8 @@ class HubFirstDrawTest {
                 model?.hubRecent?.value?.let { it.source == source && it.rows.isNotEmpty() } == true &&
                     model?.hubResume?.value?.let { it.source == source && it.rows.isNotEmpty() } == true
             }
+            // Keep the shell's draw separate from the recomposition that adds cached shelves.
+            screen.mainClock.autoAdvance = false
             screen.runOnUiThread {
                 val cached = checkNotNull(model)
                 assertFalse(cached.firstDrawn.value)
@@ -71,9 +73,26 @@ class HubFirstDrawTest {
                     }
                 }
             }
+            // setContent replaces the activity's existing ComposeView content on this frame.
+            screen.mainClock.advanceTimeByFrame()
+            screen.waitForIdle()
             screen.waitUntil(10_000) { gateAtFirstDraw.get() != null }
-            assertEquals("Cached shelves must be in the first populated draw", true, gateAtFirstDraw.get())
-            for (tile in listOf(hasTestTag("live-channel-${channel.id}"), hasContentDescription(movie.title))) {
+            assertEquals("The shell draw must leave the populated-content gate closed", false, gateAtFirstDraw.get())
+            screen.runOnIdle { assertFalse(checkNotNull(model).firstDrawn.value) }
+            val shelfTiles = listOf(hasTestTag("live-channel-${channel.id}"), hasContentDescription(movie.title))
+            shelfTiles.forEach { screen.onNode(it).assertDoesNotExist() }
+            // Cached rows must appear promptly after the shell, without waiting on new IO.
+            repeat(3) {
+                screen.mainClock.advanceTimeByFrame()
+                screen.waitForIdle()
+            }
+            shelfTiles.forEach { screen.onNode(it).assertExists() }
+            screen.runOnIdle {
+                assertTrue("Drawing the composed shelves must release the gate within three frames",
+                    checkNotNull(model).firstDrawn.value)
+            }
+            screen.mainClock.autoAdvance = true
+            for (tile in shelfTiles) {
                 screen.onNode(tile).performSemanticsAction(SemanticsActions.RequestFocus)
                 screen.waitUntil(10_000) {
                     screen.onAllNodes(tile and isFocused()).fetchSemanticsNodes().isNotEmpty()
@@ -91,6 +110,7 @@ class HubFirstDrawTest {
                 }
             }
         } finally {
+            screen.mainClock.autoAdvance = true
             screen.runOnUiThread {
                 screen.activity.setContent {}
                 model?.viewModelScope?.cancel()

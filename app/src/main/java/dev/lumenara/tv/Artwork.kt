@@ -31,6 +31,7 @@ import coil.request.ImageRequest
 import coil.request.ImageResult
 import dev.lumenara.data.Item
 import dev.lumenara.data.Transport
+import dev.lumenara.data.backgroundWork
 import dev.lumenara.data.retainArtworkResult
 import coil.decode.DataSource
 import coil.request.SuccessResult
@@ -40,6 +41,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import java.io.IOException
+import kotlin.math.roundToInt
 
 private const val IMAGE_HTTP = "image.allowHttp"
 private const val WEEK_MS = 7L * 24 * 60 * 60 * 1000
@@ -172,12 +174,13 @@ internal class ArtworkInterceptor(private val disk: coil.disk.DiskCache,
     }
 }
 
-/** Enqueue at most one row beyond the viewport; dispose requests when the window changes. */
+/** Cache one row beyond the viewport, one image at a time; cancel when the window changes. */
 @Composable
 internal fun PrefetchArtwork(model: LibraryModel, grid: LazyGridState, rows: List<Item>, columns: Int = 6,
-    channelSpan: Int = 1, paged: WindowPages? = null) {
+    channelSpan: Int = 1, paged: WindowPages? = null, resolvedLogo: ((Item) -> String?)? = null) {
     val context = LocalContext.current
     val sources by model.sources.collectAsStateWithLifecycle()
+    val currentLogo by rememberUpdatedState(resolvedLogo)
     LaunchedEffect(grid, rows, sources, columns, channelSpan, paged) {
         model.backgroundReady.first { it }
         Perf.duration("startup_artwork_prefetch_deferred", 0)
@@ -189,29 +192,29 @@ internal fun PrefetchArtwork(model: LibraryModel, grid: LazyGridState, rows: Lis
             val count = paged?.count ?: rows.size
             val next = if (last == null) emptyList() else
                 (last + 1 until minOf(count, last + 1 + columns)).map { index ->
-                    if (paged != null) paged[index] else rows.getOrNull(index)
+                    val item = if (paged != null) paged[index] else rows.getOrNull(index)
+                    item to item?.takeIf { it.kind == "LIVE" }?.let { currentLogo?.invoke(it) }
                 }
             size to next
         }.distinctUntilChanged().collectLatest { (size, next) ->
             if (size == null) return@collectLatest
             delay(100)
-            val pending = mutableListOf<coil.request.Disposable>()
-            try {
-                var slots = 0
-                for (candidate in next) {
-                    val item = candidate ?: break
-                    val span = if (item.kind == "LIVE") channelSpan else 1
-                    if (slots + span > columns) break
-                    slots += span
-                    val address = model.repo.poster(item) ?: continue
-                    val allow = sources?.firstOrNull { it.id == item.source }?.allowHttp == true
-                    val px = context.resources.displayMetrics.density
-                    val width = if (item.kind == "LIVE") (28 * px).toInt() else size.width
-                    val height = if (item.kind == "LIVE") width else (width * 1.5f).toInt()
-                    pending += context.imageLoader.enqueue(artworkRequest(context, address, allow, width, height))
+            var slots = 0
+            for ((candidate, logo) in next) {
+                val item = candidate ?: break
+                val span = if (item.kind == "LIVE") channelSpan else 1
+                if (slots + span > columns) break
+                slots += span
+                val allow = sources?.firstOrNull { it.id == item.source }?.allowHttp == true
+                val px = context.resources.displayMetrics.density
+                val width = if (item.kind == "LIVE") (28 * px).roundToInt() else size.width
+                val height = if (item.kind == "LIVE") width else (width * 1.5f).toInt()
+                val useLogo = item.kind == "LIVE" && currentLogo != null
+                backgroundWork.whenIdle {
+                    val address = (if (useLogo) logo else model.repo.poster(item)) ?: return@whenIdle
+                    context.imageLoader.execute(artworkRequest(context, address, allow, width, height))
                 }
-                kotlinx.coroutines.awaitCancellation()
-            } finally { pending.forEach { it.dispose() } }
+            }
         }
     }
 }

@@ -12,12 +12,16 @@ android {
         applicationId = "dev.lumenara.tv"
         minSdk = 26
         targetSdk = 36
-        versionCode = 20
-        versionName = "0.5.9"
+        versionCode = 21
+        versionName = "0.6.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures { compose = true; buildConfig = true }
     buildTypes { getByName("debug") { applicationIdSuffix = ".debug" } }
+    // Android TV boxes are ARM; x86 libs (~110 MB of VLC) only serve emulators, which use debug and baseline-profile builds.
+    androidComponents.onVariants(androidComponents.selector().withBuildType("release")) { variant ->
+        variant.packaging.jniLibs.excludes.addAll(listOf("lib/x86/**", "lib/x86_64/**"))
+    }
     sourceSets.getByName("androidTest").assets.srcDir(rootProject.file("core/data/schemas"))
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
 }

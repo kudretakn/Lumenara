@@ -48,6 +48,29 @@ internal fun liveProgrammes(
     }
 }
 
+private class CardFocusObserver {
+    var focused = false
+    var notifiedId: String? = null
+    fun notify(item: Item?, focus: (Item) -> Unit) {
+        if (focused && item != null && notifiedId != item.id) {
+            notifiedId = item.id
+            focus(item)
+        }
+    }
+}
+
+/** Notify once per acquisition, including a focused placeholder becoming a real card. */
+@Composable
+internal fun rememberCardFocus(item: Item?, focus: (Item) -> Unit): (Boolean) -> Unit {
+    val observer = remember { CardFocusObserver() }
+    SideEffect { observer.notify(item, focus) }
+    return { focused ->
+        observer.focused = focused
+        if (!focused) observer.notifiedId = null
+        observer.notify(item, focus)
+    }
+}
+
 @Composable
 internal fun ChannelCard(
     model: LibraryModel,
@@ -60,40 +83,45 @@ internal fun ChannelCard(
     operations: (() -> Unit)? = null,
     compact: Boolean = false,
     categoryName: String? = null,
-    programmes: List<dev.lumenara.data.Slot>? = null,
+    currentProgramme: dev.lumenara.data.Slot? = null,
+    compactLogo: String? = null,
+    compactAllowHttp: Boolean = false,
+    compactLogoSize: Int = 0,
 ) {
     val row = item ?: Item("", "", "", "", "LIVE", "", "", "", 0, "")
-    var focused by remember { mutableStateOf(false) }
-    LaunchedEffect(item?.id, focused) { if (focused) item?.let(focus) }
+    val observeFocus = rememberCardFocus(item, focus)
     var restoreFocus by rememberSaveable(row.id) { mutableStateOf(false) }
     val requester = remember { FocusRequester() }
-    LaunchedEffect(Unit) {
-        if (restoreFocus) {
-            withFrameNanos { }
-            requester.requestFocus()
-            restoreFocus = false
-        }
+    val restoring = remember { restoreFocus }
+    if (restoring) LaunchedEffect(Unit) {
+        withFrameNanos { }
+        requester.requestFocus()
+        restoreFocus = false
     }
-    val slots = programmes ?: if (item == null) emptyList() else liveProgrammes(model, item, now)
-    val current = slots.firstOrNull { now >= it.start && now < it.end }
-    val logo by produceState<String?>(null, row.id, row.logo) { value = item?.let { model.repo.poster(it) } }
+    val current = if (compact) currentProgramme else {
+        val slots = if (item == null) emptyList() else liveProgrammes(model, item, now)
+        slots.firstOrNull { now >= it.start && now < it.end }
+    }
     if (compact) {
+        val name = remember(row.title, categoryName) { channelCardName(row.title, categoryName) }
         FocusCard(
+            focusedScale = 1f,
             onClick = { item?.let { focus(it); restoreFocus = true; play() } },
             onLongClick = operations?.let { action -> { restoreFocus = true; action() } },
             modifier = modifier.height(60.dp).focusRequester(requester)
                 .testTag("live-channel-${row.id}")
                 .semantics { contentDescription = row.title }
-                .onFocusChanged { focused = it.isFocused; if (it.isFocused) item?.let(focus) },
+                .onFocusChanged { observeFocus(it.isFocused) },
         ) {
             Box(Modifier.fillMaxSize()) {
                 Row(Modifier.fillMaxSize().padding(horizontal = Spacing.unit),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {
-                    ChannelLogo(model, row, logo, Modifier.size(40.dp), compact = true)
+                    ChannelLogo(model, row, compactLogo, Modifier.size(40.dp), compact = true,
+                        allowHttp = compactAllowHttp, decodeSize = compactLogoSize)
                     Column(Modifier.weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(channelCardName(row.title, categoryName), Modifier.weight(1f),
+                            Text(name, Modifier.weight(1f),
                                 style = LumenType.label, color = LumenColors.textPrimary,
                                 maxLines = if (current != null) 1 else 2,
                                 overflow = TextOverflow.Ellipsis)
@@ -110,6 +138,7 @@ internal fun ChannelCard(
         }
         return
     }
+    val logo by produceState<String?>(null, row.id, row.logo) { value = item?.let { model.repo.poster(it) } }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
         FocusCard(
             onClick = { item?.let { focus(it); restoreFocus = true; play() } },
@@ -117,7 +146,7 @@ internal fun ChannelCard(
             modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f).focusRequester(requester)
                 .testTag("live-channel-${row.id}")
                 .semantics { contentDescription = row.title }
-                .onFocusChanged { focused = it.isFocused; if (it.isFocused) item?.let(focus) },
+                .onFocusChanged { observeFocus(it.isFocused) },
         ) {
             ChannelLogo(model, row, logo, Modifier.fillMaxSize())
         }
@@ -180,27 +209,36 @@ private val channelTones = listOf(
 
 @Composable
 internal fun ChannelLogo(model: LibraryModel, item: Item, logo: String?, modifier: Modifier = Modifier,
-    compact: Boolean = false) {
+    compact: Boolean = false, allowHttp: Boolean? = null, decodeSize: Int = 0) {
     val context = LocalContext.current
-    val sources by model.sources.collectAsStateWithLifecycle()
-    val permitted = sources?.firstOrNull { it.id == item.source }?.allowHttp == true
-    var measured by remember { mutableStateOf(IntSize.Zero) }
+    val permitted = allowHttp ?: run {
+        val sources by model.sources.collectAsStateWithLifecycle()
+        sources?.firstOrNull { it.id == item.source }?.allowHttp == true
+    }
+    val measured = if (decodeSize > 0) null else remember { mutableStateOf(IntSize.Zero) }
+    val width = if (decodeSize > 0) decodeSize else ((measured?.value?.width ?: 0) * .7f).toInt()
+    val height = if (decodeSize > 0) decodeSize else ((measured?.value?.height ?: 0) * .7f).toInt()
     var loaded by remember(item.id, logo, permitted) { mutableStateOf(false) }
-    val request = remember(context, logo, measured, permitted) {
-        logo?.takeIf { it.isNotBlank() && measured.width > 0 && measured.height > 0 }?.let {
-            artworkRequest(context, it, permitted,
-                (measured.width * .7f).toInt(), (measured.height * .7f).toInt())
+    val request = remember(context, logo, width, height, permitted) {
+        logo?.takeIf { it.isNotBlank() && width > 0 && height > 0 }?.let {
+            artworkRequest(context, it, permitted, width, height)
         }
     }
+    val fallback = remember(item.title, compact) {
+        if (compact) channelCardInitials(item.title)
+        else item.title.trim().split(Regex("\\s+")).take(2).joinToString(" ")
+    }
     val tone = channelTones[Math.floorMod(item.title.hashCode(), channelTones.size)]
-    Box(modifier.onSizeChanged { measured = it }.clip(RoundedCornerShape(Radii.channelLogo))
+    Box((if (decodeSize > 0) modifier else modifier.onSizeChanged { measured?.value = it }).clip(RoundedCornerShape(Radii.channelLogo))
         .background(if (loaded) LumenColors.surface3 else tone), contentAlignment = Alignment.Center) {
-        if (!loaded) Text(if (compact) channelCardInitials(item.title)
-            else item.title.trim().split(Regex("\\s+")).take(2).joinToString(" "),
+        if (!loaded) Text(fallback,
             Modifier.fillMaxWidth(.85f), style = LumenType.label,
             color = LumenColors.textPrimary, maxLines = if (compact) 1 else 2,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center, overflow = TextOverflow.Ellipsis)
-        AsyncImage(request, contentDescription = null, modifier = Modifier.fillMaxSize(.7f),
-            contentScale = ContentScale.Fit, onSuccess = { loaded = true }, onError = { loaded = false })
+        // A text-only tile must not initialize Coil while the first frame is drawing.
+        if (request != null) {
+            AsyncImage(request, contentDescription = null, modifier = Modifier.fillMaxSize(.7f),
+                contentScale = ContentScale.Fit, onSuccess = { loaded = true }, onError = { loaded = false })
+        }
     }
 }

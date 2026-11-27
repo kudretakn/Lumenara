@@ -28,20 +28,17 @@ internal class LibraryModel
 constructor(private val repository: dagger.Lazy<Repository>, val prefs: Preferences) : androidx.lifecycle.ViewModel() {
     // Recovery must finish before exposing repository state, but never block Hilt/UI creation.
     val repo: Repository get() = repository.get()
-    private val screenDraw = FirstDrawGate()
-    fun onScreenFirstDraw() { screenDraw.onDraw() }
     private val firstDraw = FirstDrawGate()
     val firstDrawn = firstDraw.drawn
-    fun onFirstDraw() { firstDraw.onDraw() }
+    fun onFirstDraw() { firstDraw.onDraw(); backgroundWork.startup.onDraw() }
     suspend fun awaitFirstDraw() = firstDraw.await()
     // Cheap visible details may begin after the populated frame; totals start independently.
     val hubDetailsReady = firstDraw.detailsReady
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    // Keep non-visible publishing, scheduling, update checks and native warm-up out of
-    // the startup/remote-input window.
+    // Release optional subscriptions once the populated screen has had a quiet window.
     val backgroundReady = flow {
-        awaitFirstDraw()
-        delay(20_000)
+        backgroundWork.startup.idle.first { it }
+        Perf.duration("startup_background_idle", 0)
         emit(true)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
@@ -119,10 +116,7 @@ constructor(private val repository: dagger.Lazy<Repository>, val prefs: Preferen
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
-            // A DDL-only upgrade must not wait for the populated Hub or its quiet window.
-            // Release IO work after the actual first window frame, even if Hub is loading.
-            screenDraw.await()
-            repo.startPendingCatalogBackfill()
+            // Pending upgrades remain browsable through fallback queries while idle work waits.
             backgroundReady.first { it }
             repo.startVersionBackfill()
         }

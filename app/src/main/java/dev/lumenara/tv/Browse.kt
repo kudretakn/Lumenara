@@ -138,17 +138,14 @@ private fun HubChannelShelf(
 
 @Composable
 private fun HubResumeShelf(model: LibraryModel, rows: List<Item>, open: (Item) -> Unit, focus: () -> Unit) {
-    val backgroundReady by model.backgroundReady.collectAsStateWithLifecycle()
-    LaunchedEffect(backgroundReady) {
-        if (backgroundReady) Perf.duration("startup_hub_episode_details_deferred", 0)
-    }
+    val detailsReady by model.hubDetailsReady.collectAsStateWithLifecycle()
     HubShelf("KALDIĞIN YERDEN DEVAM ET", "shelf-Kaldığın yerden devam et") {
         items(rows, key = { it.id }) { item ->
-            val episodes by remember(item.id, backgroundReady) {
-                if (backgroundReady && item.kind == "SERIES") model.repo.episodes(item.id) else flowOf(emptyList<Item>())
+            val episodes by remember(item.id, detailsReady) {
+                if (detailsReady && item.kind == "SERIES") model.repo.episodes(item.id) else flowOf(emptyList<Item>())
             }.collectAsStateWithLifecycle(emptyList())
-            val marks by remember(item.id, backgroundReady) {
-                if (backgroundReady && item.kind == "SERIES") model.repo.library.episodeMarks(item.id) else flowOf(emptyList<Mark>())
+            val marks by remember(item.id, detailsReady) {
+                if (detailsReady && item.kind == "SERIES") model.repo.library.episodeMarks(item.id) else flowOf(emptyList<Mark>())
             }.collectAsStateWithLifecycle(emptyList())
             val continuing by produceState<Item?>(null, episodes, marks) {
                 value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
@@ -195,23 +192,21 @@ private fun HubArtwork(model: LibraryModel, item: Item, address: String?, channe
     val drawn by model.firstDrawn.collectAsStateWithLifecycle()
     val artworkReady by (LocalContext.current.applicationContext as LumenaraApp)
         .hubArtworkReady.collectAsStateWithLifecycle()
-    if (!drawn || !artworkReady) {
-        Box(Modifier.fillMaxSize().background(LumenColors.surface2))
-        return
-    }
+    // Text tiles are part of the first draw, even before Coil or decryption is ready.
     if (channel) {
-        ChannelLogo(model, item, address, Modifier.fillMaxSize())
+        ChannelLogo(model, item, address.takeIf { drawn && artworkReady }, Modifier.fillMaxSize())
         return
     }
     Box(Modifier.fillMaxSize().background(LumenColors.surface2), contentAlignment = Alignment.BottomStart) {
-        if (address == null) {
-            Text(item.title, Modifier.padding(Spacing.cardGap), style = LumenType.label,
-                color = LumenColors.textPrimary, maxLines = 3, overflow = TextOverflow.Ellipsis)
-            LumenIcon(if (item.kind == "SERIES") LumenIcon.Series else LumenIcon.Film,
-                contentDescription = null, modifier = Modifier.align(Alignment.TopEnd).padding(Spacing.cardGap),
-                tint = LumenColors.textPrimary.copy(alpha = .4f))
-        } else Artwork(model, item, address, Modifier.fillMaxSize(),
-            contentScale = ContentScale.Crop, role = "backdrop")
+        Text(item.title, Modifier.padding(Spacing.cardGap), style = LumenType.label,
+            color = LumenColors.textPrimary, maxLines = 3, overflow = TextOverflow.Ellipsis)
+        LumenIcon(if (item.kind == "SERIES") LumenIcon.Series else LumenIcon.Film,
+            contentDescription = null, modifier = Modifier.align(Alignment.TopEnd).padding(Spacing.cardGap),
+            tint = LumenColors.textPrimary.copy(alpha = .4f))
+        if (drawn && artworkReady && address != null) {
+            Artwork(model, item, address, Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop, role = "backdrop")
+        }
     }
 }
 
@@ -285,7 +280,6 @@ internal fun Home(
     val resumeResult = resumeState?.takeIf { it.source == source }?.rows
     val recent = recentResult.orEmpty()
     val resume = resumeResult.orEmpty()
-    val backgroundReady by model.backgroundReady.collectAsStateWithLifecycle()
     val rowsReady = recentResult != null && resumeResult != null
     var shellDrawn by remember(source) { mutableStateOf(false) }
     var rowsDrawn by remember(source) { mutableStateOf(false) }
@@ -293,9 +287,8 @@ internal fun Home(
     val scopedTotals = totals?.takeIf { it.first == source }?.second
     val counts = listOf("LIVE", "MOVIE", "SERIES").map { scopedTotals?.getOrDefault(it, 0) }
     // Capture whether shelves were part of this composition, before draw mutates the state.
-    val shelvesComposed = shellDrawn || rowsReady
+    val shelvesComposed = shellDrawn
     val shellReported = remember { booleanArrayOf(false) }
-    WarmVlcAfterHubFrame(backgroundReady)
     val update by model.update.collectAsStateWithLifecycle()
     var focused by rememberSaveable { mutableStateOf(lastCard) }
     val entry = remember { FocusRequester() }
@@ -498,22 +491,16 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
             restoreFilterFocus = false
         }
     }
-    var lastPoster by rememberSaveable(source, category, shelf) { mutableStateOf<String?>(null) }
+    val lastPoster = rememberSaveable(source, category, shelf) { mutableStateOf<String?>(null) }
     val restoreOnce = remember { booleanArrayOf(true) }
     val restoreId = remember(source, kind, category, shelf, year, genre, language, rating) {
-        lastPoster.takeIf { restoreOnce[0] }.also { restoreOnce[0] = false }
+        lastPoster.value.takeIf { restoreOnce[0] }.also { restoreOnce[0] = false }
     }
     val paged = rememberCatalogPages(model, source, kind, category, shelf = shelf,
         year = year, genre = genre, language = language, minRating = rating.toDouble(),
         pageSize = POSTER_PAGE_SIZE, columns = POSTER_GRID_COLUMNS, returnId = restoreId)
     val loading = !paged.firstPageLoaded
     val count = paged.count
-    LaunchedEffect(paged, loading) {
-        if (!loading && count > 0) {
-            withFrameNanos { }; withFrameNanos { }
-            Perf.since("category", "category_grid_first_draw")
-        }
-    }
     val sources by model.sources.collectAsStateWithLifecycle()
     val httpSources = remember(sources) { sources.orEmpty().filter { it.allowHttp }.map { it.id }.toSet() }
     val density = LocalDensity.current
@@ -571,7 +558,8 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
                 columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(POSTER_GRID_COLUMNS),
                 state = grid,
                 modifier = Modifier.weight(1f).onSizeChanged { gridWidth = it.width }.testTag("poster-grid").reportScrollPosition(grid).then(gridFocus.modifier)
-                    .semantics { pagingWindow = pagingDescription(paged) }.focusRestorer().focusGroup(),
+                    .semantics { pagingWindow = pagingDescription(paged) }.focusRestorer().focusGroup()
+                    .categoryFirstDraw(!loading && (count == 0 || positioned && paged[posterTarget] != null)),
                 // TV safe area plus the title/year below the focusable poster.
                 contentPadding = PaddingValues(top = 8.dp, bottom = 64.dp),
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -587,7 +575,7 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
                         }
                     }
                 }
-                items(count, key = { it }, span = { index ->
+                items(count, key = { it }, contentType = { if (paged.isLiveSlot(it)) "live" else "poster" }, span = { index ->
                     // The skinny type index remains valid after a page's Item rows are evicted.
                     androidx.compose.foundation.lazy.grid.GridItemSpan(if (paged.isLiveSlot(index)) 2 else 1)
                 }) { index ->
@@ -602,9 +590,9 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
                         .then(if (index == posterTarget) Modifier.focusRequester(posterFocus) else Modifier)
                         .onFocusChanged { if (it.hasFocus) paged.focused(index) }
                     if (paged.isLiveSlot(index)) ChannelCard(model, entry, now,
-                        { entry?.let { play(it, paged.loaded().filter { it.kind == "LIVE" }) } }, { lastPoster = it.id },
+                        { entry?.let { play(it, paged.loaded().filter { it.kind == "LIVE" }) } }, { lastPoster.value = it.id },
                         modifier = cardModifier.testTag("poster-slot-$index"), operations = { entry?.let(open) })
-                    else GridPoster(model, entry, open, { lastPoster = it.id },
+                    else GridPoster(model, entry, open, { lastPoster.value = it.id },
                         modifier = cardModifier.testTag("poster-slot-$index"),
                         artworkHttp = entry?.source in httpSources, artworkWidth = posterWidth, artworkHeight = posterHeight)
                 }
@@ -641,11 +629,11 @@ private fun GridPoster(model: LibraryModel, item: Item?, open: (Item) -> Unit,
     focus: (Item) -> Unit, modifier: Modifier, artworkHttp: Boolean,
     artworkWidth: Int, artworkHeight: Int) {
     var focused by remember { mutableStateOf(false) }
-    LaunchedEffect(item?.id, focused) { if (focused) item?.let(focus) }
+    val observeFocus = rememberCardFocus(item, focus)
     Column(modifier) {
         FocusCard(onClick = { item?.let { focus(it); open(it) } }, modifier = Modifier.fillMaxWidth()
             .semantics { contentDescription = item?.title ?: "Yükleniyor" }
-            .onFocusChanged { focused = it.isFocused; if (it.isFocused) item?.let(focus) }) {
+            .onFocusChanged { focused = it.isFocused; observeFocus(it.isFocused) }) {
             if (item == null) LoadingCard(Modifier.fillMaxWidth().aspectRatio(2f / 3f))
             else Poster(model, item, Modifier.fillMaxWidth().aspectRatio(2f / 3f),
                 allowHttp = artworkHttp, width = artworkWidth, height = artworkHeight)

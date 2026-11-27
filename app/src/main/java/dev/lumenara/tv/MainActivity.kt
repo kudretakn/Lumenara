@@ -3,6 +3,8 @@ package dev.lumenara.tv
 import android.os.Bundle
 import android.app.SearchManager
 import android.content.Intent
+import android.view.KeyEvent
+import android.view.Window
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
@@ -44,6 +46,15 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         Perf.mark("startup_activity")
         super.onCreate(savedInstanceState)
+        // Observe every key (including repeats/up) before normal dispatch, without consuming it.
+        // Window.Callback is public; ComponentActivity's dispatchKeyEvent is restricted.
+        val callback = window.callback
+        window.callback = object : Window.Callback by callback {
+            override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+                dev.lumenara.data.backgroundWork.startup.onInput()
+                return callback.dispatchKeyEvent(event)
+            }
+        }
         // Start the model's launch snapshot before the first composition.
         val model = library
         Perf.since("startup_activity", "startup_activity_model_ready")
@@ -64,7 +75,6 @@ class MainActivity : ComponentActivity() {
                     reported[0] = true
                     Perf.since("startup_screen", "startup_screen_first_draw")
                     Perf.since("startup_first_frame", "startup_first_frame")
-                    model.onScreenFirstDraw()
                 }
             }) {
                 LumenaraTheme { LibraryScreen(model) {

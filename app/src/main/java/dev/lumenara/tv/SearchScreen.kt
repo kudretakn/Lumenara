@@ -44,6 +44,7 @@ import dev.lumenara.design.Spacing
 import java.time.*
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -72,19 +73,21 @@ internal fun SearchScreen(
             restoring = false
         }
     }
-    var query by rememberSaveable { mutableStateOf("") }
+    // Read raw text in the field's composition scope, not in the shelves' scope.
+    val query = rememberSaveable { mutableStateOf("") }
+    val queryBlank by remember { derivedStateOf { query.value.isBlank() } }
     val settledQuery by remember(source) {
-        snapshotFlow { query }.debouncedSearchQuery()
+        snapshotFlow { query.value }.debouncedSearchQuery().flowOn(Dispatchers.Default)
     }.collectAsStateWithLifecycle("")
     val searchPrefill by model.searchPrefill.collectAsStateWithLifecycle()
     LaunchedEffect(searchPrefill) {
-        searchPrefill?.let { query = it.second; model.searchPrefill.value = null }
+        searchPrefill?.let { query.value = it.second; model.searchPrefill.value = null }
     }
 
     val voice = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         if (it.resultCode == Activity.RESULT_OK) {
             it.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
-                ?.let { spoken -> query = spoken }
+                ?.let { spoken -> query.value = spoken }
         }
     }
     fun listen() {
@@ -101,17 +104,24 @@ internal fun SearchScreen(
             listen()
         }
     }
-    val shelves = if (settledQuery.isEmpty()) emptyList() else
-        listOf("Kanallar" to "LIVE", "Filmler" to "MOVIE", "Diziler" to "SERIES").map { (title, kind) ->
-            title to rememberCatalogPages(model, source, kind, query = settledQuery, columns = 1)
-        }
-    LaunchedEffect(source, settledQuery, shelves.map { it.second }) {
+    val hidden by remember(model.repo) { model.repo.hidden }.collectAsState(initial = null)
+    val pendingShelves = key(source, hidden) {
+        if (settledQuery.isEmpty()) emptyList() else
+            listOf("Kanallar" to "LIVE", "Filmler" to "MOVIE", "Diziler" to "SERIES").map { (title, kind) ->
+                title to rememberCatalogPages(model, source, kind, query = settledQuery, pageSize = 20, columns = 1)
+            }
+    }
+    val shelves = key(source, hidden) {
+        rememberSearchResults(settledQuery,
+            pendingShelves.takeIf { rows -> rows.all { it.second.firstPageLoaded } }, emptyList())
+    }
+    LaunchedEffect(source, shelves.map { it.second }) {
         resultsState.scrollToItem(0)
         firstResultsState.scrollToItem(0)
     }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { wallClockTicks(30_000).collect { now = it } }
-    val programResult by remember(source, settledQuery) {
+    val programResult by remember(source, settledQuery, hidden) {
         if (settledQuery.isEmpty()) flowOf(emptyList())
         else model.repo.searchPrograms(source, settledQuery, snapshotFlow { (now - 7 * 86_400_000L) to now })
             .flatMapLatest { hits ->
@@ -121,10 +131,12 @@ internal fun SearchScreen(
                     val byId = items.associateBy { it.id }
                     hits.mapNotNull { hit -> byId[hit.itemId]?.let { hit to it } }
                 }
-            }
+            }.flowOn(Dispatchers.Default)
     }.collectAsLoadingState()
-    val loading = shelves.any { !it.second.firstPageLoaded } || programResult == null
-    val programs = programResult.orEmpty()
+    val loading = pendingShelves.any { !it.second.firstPageLoaded } || programResult == null
+    val programs = key(source, hidden) {
+        rememberSearchResults(settledQuery, programResult, emptyList())
+    }
     val firstCatalogShelf = shelves.firstOrNull { it.second.count > 0 }?.first
     LaunchedEffect(shelves, programs, loading) {
         if (restoring && lastShelf != null && !loading) {
@@ -142,9 +154,10 @@ internal fun SearchScreen(
         verticalArrangement = Arrangement.spacedBy(Spacing.titleGap)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {
-            SearchField(query, { query = it }, entryFocus, { focused ->
-                if (fieldFocused && !focused && query.isNotBlank()) {
-                    recentSearches = (listOf(query.trim()) + recentSearches.filterNot { it.equals(query.trim(), true) }).take(6)
+            SearchField(query, entryFocus, { focused ->
+                val text = query.value.trim()
+                if (fieldFocused && !focused && text.isNotEmpty()) {
+                    recentSearches = (listOf(text) + recentSearches.filterNot { it.equals(text, true) }).take(6)
                 }
                 fieldFocused = focused
             }, Modifier.weight(1f), if (firstCatalogShelf != null) {
@@ -163,12 +176,12 @@ internal fun SearchScreen(
             }
         }
         if (notice.isNotEmpty()) Text(notice, color = LumenColors.textSecondary, style = LumenType.meta)
-        if (query.isBlank() && !fieldFocused && recentSearches.isNotEmpty()) {
+        if (queryBlank && !fieldFocused && recentSearches.isNotEmpty()) {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
                 Text("SON ARAMALAR", style = LumenType.caption, color = LumenColors.textSecondary)
                 Row(horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {
                     recentSearches.forEach { term ->
-                        LumenButton(onClick = { query = term }, style = LumenButtonStyle.Secondary) {
+                        LumenButton(onClick = { query.value = term }, style = LumenButtonStyle.Secondary) {
                             Text(term, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
@@ -177,35 +190,33 @@ internal fun SearchScreen(
         }
         LazyColumn(Modifier.weight(1f).testTag("search-results").reportScrollPosition(resultsState).focusRestorer().focusGroup(), state = resultsState,
             contentPadding = PaddingValues(bottom = Spacing.unit), verticalArrangement = Arrangement.spacedBy(Spacing.shelfGap)) {
-            if (query.isBlank() && recentSearches.isEmpty()) item {
+            if (queryBlank && recentSearches.isEmpty()) item(key = "hint") {
                 Text("Kanal, film veya dizi ara", style = LumenType.meta)
             }
-            if (loading) item {
+            if (loading && shelves.none { it.second.count > 0 } && programs.isEmpty()) item(key = "loading") {
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     items(8) { LoadingCard(Modifier.width(140.dp).aspectRatio(2f / 3f)) }
                 }
             }
-            if (!loading && programs.isEmpty() && shelves.all { it.second.count == 0 }) item { Text("Eşleşen içerik yok.", color = LumenColors.textSecondary, style = LumenType.body) }
+            if (!loading && programs.isEmpty() && shelves.all { it.second.count == 0 }) item(key = "empty") { Text("Eşleşen içerik yok.", color = LumenColors.textSecondary, style = LumenType.body) }
             val populated = shelves.filter { it.second.count > 0 }
             val displayed = if (fieldFocused && populated.isNotEmpty()) listOf(populated)
                 else populated.map { listOf(it) }
-            items(displayed, key = { it.first().first }) { rowShelves ->
+            items(displayed, key = { it.first().first }, contentType = { "catalog" }) { rowShelves ->
                 val title = rowShelves.first().first
                 Column(verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
                     Text(if (fieldFocused) "SONUÇLAR" else title,
                         style = if (fieldFocused) LumenType.caption else LumenType.cardTitle,
                         color = if (fieldFocused) LumenColors.textSecondary else LumenColors.textPrimary)
                     // The first shelf keeps its LazyRow and focused slot when DPAD leaves the field.
-                    key(shelves.map { it.second }) {
-                        SearchPagingRow(model, rowShelves,
-                            if (!fieldFocused && title == "Kanallar") "channel-shelf-$title" else "search-shelf-$title",
-                            { lastShelf = it }, open, play,
-                            if (title == firstCatalogShelf) firstResultFocus else null,
-                            if (title == firstCatalogShelf) firstResultsState else rememberLazyListState())
-                    }
+                    SearchPagingRow(model, rowShelves,
+                        if (!fieldFocused && title == "Kanallar") "channel-shelf-$title" else "search-shelf-$title",
+                        { lastShelf = it }, open, play,
+                        if (title == firstCatalogShelf) firstResultFocus else null,
+                        if (title == firstCatalogShelf) firstResultsState else rememberLazyListState())
                 }
             }
-            if (programs.isNotEmpty()) item {
+            if (programs.isNotEmpty()) item(key = "programs") {
                 Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
                     Text("Programlar", style = LumenType.cardTitle)
                     LazyRow(Modifier.testTag("search-shelf-Programlar").focusRestorer().focusGroup(),
@@ -233,15 +244,24 @@ internal fun SearchScreen(
     }
 }
 
+/** Null means a replacement is still loading; empty results are a completed search. */
+@Composable
+internal fun <T> rememberSearchResults(query: String, incoming: T?, empty: T): T {
+    var previous by remember { mutableStateOf(empty) }
+    val displayed = if (query.isEmpty()) empty else incoming ?: previous
+    SideEffect { previous = displayed }
+    return displayed
+}
+
 @Composable
 private fun SearchField(
-    value: String,
-    onValueChange: (String) -> Unit,
+    query: MutableState<String>,
     requester: FocusRequester,
     onFocus: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
     onDown: (() -> Unit)? = null,
 ) {
+    val value by query
     Row(modifier.height(56.dp).background(LumenColors.surface3, RoundedCornerShape(8.dp))
         .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -249,7 +269,7 @@ private fun SearchField(
         LumenIcon(LumenIcon.Search, contentDescription = null, tint = LumenColors.textSecondary)
         BasicTextField(
             value = value,
-            onValueChange = onValueChange,
+            onValueChange = { query.value = it },
             modifier = Modifier.weight(1f).fillMaxHeight().wrapContentHeight(Alignment.CenterVertically)
                 .onPreviewKeyEvent { event ->
                     if (event.key == Key.DirectionDown && onDown != null) {
@@ -308,7 +328,7 @@ internal fun SearchPagingRow(
         items(counts.sum(), key = { index ->
             val (shelf, local) = slot(index)
             "${shelves[shelf].first}:$local"
-        }) { index ->
+        }, contentType = { "search-result" }) { index ->
             val (shelf, local) = slot(index)
             val (title, pages) = shelves[shelf]
             val entry = pages[local]
@@ -348,11 +368,14 @@ private fun SearchResultCard(model: LibraryModel, item: Item?, slot: String,
                 .testTag("search-slot-$slot")
                 .semantics { contentDescription = item?.title ?: "Yükleniyor" }
                 .onFocusChanged { if (it.isFocused) focus() }) {
-                if (item == null) Box(Modifier.fillMaxSize().background(LumenColors.surface2))
-                else if (item.kind == "LIVE") {
-                    val logo by produceState<String?>(null, item.id, item.logo) { value = model.repo.poster(item) }
-                    ChannelLogo(model, item, logo, Modifier.fillMaxSize())
-                } else Poster(model, item, Modifier.fillMaxSize())
+                // Keep the focus slot, but never show the previous item's artwork in it.
+                key(item?.id) {
+                    if (item == null) Box(Modifier.fillMaxSize().background(LumenColors.surface2))
+                    else if (item.kind == "LIVE") {
+                        val logo by produceState<String?>(null, item.id, item.logo) { value = model.repo.poster(item) }
+                        ChannelLogo(model, item, logo, Modifier.fillMaxSize())
+                    } else Poster(model, item, Modifier.fillMaxSize())
+                }
             }
         }
         Text(item?.title ?: " ", Modifier.padding(top = 8.dp), style = LumenType.label,
