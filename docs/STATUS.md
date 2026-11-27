@@ -1,16 +1,16 @@
 # Durum
 
-Son güncelleme: 26 Kasım 2026 (0.5.9 portu, Codex çalışma dalı)
+Son güncelleme: 27 Kasım 2026 (Oracle sunucusu; 0.5.9 yayını ve A/B dalları)
 
 > **Başlangıç:** `git fetch --all --prune && git switch main && git pull`, sonra bu dosyayı ve `CLAUDE.md`'yi oku.
 > **Çalışma düzeni (18 Kasım 2026, kullanıcı kararı):** sen ekip liderisin. Yalnız **Codex** ajanları kullan (`gpt-6-luna` basit, `gpt-6.1-sol` orta/zor, `gpt-6-astra` çok zor); Claude alt ajanı açma (inceleme ve log analizi de Codex'e). Kendin kod yazma (yalnız birleştirme çakışması ve tek satırlık mekanik düzeltme). Kullanıcıyla Türkçe, kısa konuş; commit ve PR metinleri İngilizce.
 
 ## Şu an
-- **0.5.9 hazırlığı** (`feat/0.5.9-carry-zap`, yerel değişiklikler; commit/push yok): 18 Kasım carry/zap/PowerShell yamaları güncel v0.5.8 tabanına taşındı. Sürüm `0.5.9`, versionCode `20`; Room şeması **13** kaldı. Katalog yenilemede mevcut `prepareCatalog` (sürüm grupları + türetilmiş veriler), 0.5.8 eski alanlardan okuma yolu ve performans işaretleri korunuyor. Gradle, APK ve cihaz doğrulaması liderde.
+- **v0.5.9 YAYINLANDI** (26 Kasım, tag `v0.5.9`, Lumenara-releases): watch-history carry-over (eşleşme sırası ve 30 günlük saklama), hızlı canlı kanal geçişi (80 ms kuyruk, eski istekleri iptal etme, oynatıcıyı yeniden kullanma) ve `local-device-tests.ps1` RETRIED düzeltmesi yayımlandı. İlk CI cihaz çalışması, boş endpoint'li fixture kaynakları silinirken çözülememesi nedeniyle başarısız oldu; `73b03c0` ile düzeltildi.
 - **Geçmiş kurtarma:** kaynak silinmeden önce yalnız kullanıcı durumu ve eşleşme için gerekli kimlikler cihaz Vault'u ile şifrelenir; Room silme ve DataStore yazma mevcut dayanıklı geri alma günlüğüyle birlikte yapılır. Favori/Listem bayrakları birleştirilir, ilerlemede en yeni kayıt kazanır. Eşleşmeyen/belirsiz kayıtlar 30 gün boyunca saklanır ve sonraki katalog yenilemelerinde yeniden denenir. Yedek dışıdır; yedek içe aktarması yerel kurtarma kayıtlarını tüketmez. Ayrıntılı eşleşme kuralı: `docs/plans/history-carry-0.5.9.md`.
 - **Hızlı kanal geçişi:** CH/PAGE/DPAD aynı 80 ms son hedef kuyruğunu kullanır; eski sorgu ve VLC HTTP açılışı iptal edilir. VLC oynatıcı/görüntü bağlantısı canlı oturum boyunca, Media3 renderers canlı geçişte korunur; komşu URL/DNS hazırlığı ek IPTV akışı açmaz. Sessiz kanalda otomatik VLC geçişi oturumda korunur; desteklenmeyen canlı akışta otomatik Media3 dönüşü döngüye girmez. Yeniden bağlanma politikası değişmedi. `zap_start` / `zap_first_frame` mevcut `channel_first_frame_*` ölçümlerine eklendi (VLC'de Vout sinyali).
-- **Yerel doğrulama (Gradle çalıştırılmadı):** önbellekteki Kotlin/JUnit ile 66 benzersiz JVM testi geçti: 13 kurtarma, 10 mevcut taşıma, 11 geri alma günlüğü, 14 zap, 12 yeniden bağlanma, 6 VLC veri pompası. Güncel Kotlin/Compose kaynak kontrolü de geçti (geçici kaynak kimlikleriyle; Android paketleme/kod üretimi değil). Room/KSP, lint, APK ve cihaz doğrulaması yapılmadı.
-- **0.5.9 kabul kontrolü:** lider tüm modül JVM testlerini/lint/APK derlemesini ve emülatör testlerini çalıştırmalı. Mi Box'ta hızlı ve ters yönlü tuş serileri, liste sınırı, numara/rehberden doğrudan seçim, sessiz kanalda VLC geçişi, HLS kanalına dönüş, yeniden bağlanma ve kaynak sil/ekle + kısmi eşleşme denenmeli; zap süreleri önceki 1,0–1,7 sn ile karşılaştırılmalı.
+- **TV'de denenecek (0.5.9 kabul kontrolü):** Mi Box'ta hızlı ve ters yönlü tuş serileri, liste sınırı, numara/rehberden doğrudan seçim, sessiz kanalda VLC geçişi, HLS kanalına dönüş, yeniden bağlanma ve kaynak sil/ekle + kısmi eşleşme denenmeli; zap süreleri önceki 1,0–1,7 sn ile karşılaştırılmalı.
+- **Performans A/B denemeleri (26–27 Kasım):** PR #39, Mi Box'a yan yana derlemeler kurmak için manuel ve yayın yapmayan bir release iş akışı ekledi (`workflow_dispatch`, bir dalda). 26 Kasım'da şu dallar başarıyla derlendi: `perf/fast-grid` (dar odak durumu, daha hafif kanal/film ızgara kartları), `perf/fast-cpu` (ilk çizimden hemen sonra görünür Hub görsellerini yükle; boşta ertelemeyi sınırla), `perf/fast-marks` (Media3 ve VLC'de zap başına ilk-kare işaretleri bir kez çalışır), `perf/fast-search` (arama yazarken ana iş parçacığındaki işi azaltır), `exp/hub-shell-first` (deney: Hub raflarını yalnız kabuk çizildikten sonra oluştur). Sahipten Mi Box ölçümleri bekleniyor; her dal için birleştir veya bırak kararı verilecek. Ölçüm kontrol listesi: `startup_hub_first_draw`, Hub tam çizim, ilk 15 sn CPU, “Tüm kanallar” için `category_grid_first_draw`, ilk zap karesi (CH+/CH− serisi), arama yazma gecikmesi.
 - **Son sürüm v0.5.8** (21 Kasım, PR #36 birleşti ve yayımlandı): türetilmiş katalog arka planda doldurulurken eski alanlardan okuma, backfill'in hemen başlaması, Hub raflarının ilk çizime katılması ve alt raf başlıklarının kesilmesi düzeltmesi (`HubShelf`, başlık ve alt yazılar dahil tüm raf için `bringIntoView` istiyor). `fix/derived-fallback` ve Hub raf başlığı işleri tamamlandı. v0.5.7 (PR #34/#35) yayımlandı; açık PR yok.
 - **Doğrulama bekleyenler:** 0.5.6/0.5.7/0.5.8 için TV ölçümü henüz yok; aşağıdaki ölçümler 0.5.5'e ait. `HubFirstDrawTest` / `DenseGridTest` son raf senaryosu cihazda çalıştırılmadı. Mi Box'ta güncelleme sonrası ilk açılış, +18, kanal sırası/numarası, DPAD raf odağı (alt raf/sağ-sol gezinmesi dahil) ve açılış CPU/süre ölçümü bekliyor.
 - 0.5.5 TV ölçümü (Mi Box 4, 39.682 içerik):
@@ -31,9 +31,9 @@ Son güncelleme: 26 Kasım 2026 (0.5.9 portu, Codex çalışma dalı)
 - U3 (ebeveyn kilidi/PIN, kanal sıralama) kullanıcı kararıyla planlardan SİLİNDİ (18 Kasım); önerme, yapma. Remux testi: kullanıcı "geç" dedi. Baseline profile cihazda ÜRETİLMEYECEK (kullanıcı kararı, 18 Kasım).
 - Kontrol: altyazı arama ekranında arkada kitaplık görünmesi, sessiz kanallarda VLC'ye geçiş, canlı yayın yeniden bağlanmanın sahada tetiklenmesi, altyazı gecikmesinin TV'de denenmesi.
 
-### Sunucudaki commit edilmemiş işler (18 Kasım, Oracle sunucusu)
+### Sunucudaki commit edilmemiş işler (27 Kasım, Oracle sunucusu)
 
-- Yalnız `tools/perf-harness`: `scripts/perf/` işi eski `6c43fa5` tabanında commit edilmemiş durumda kaldı; bu porta dahil değil.
+- carry/zap/ps1 işleri 0.5.9'a taşındı ve yayımlandı; yalnız `tools/perf-harness` kaldı (`scripts/perf/` yama yedeği sunucuda).
 - Eski yama yedekleri `~/lumenara-wip-backup-2026-11-24/*.patch` altında korunuyor; silinmedi.
 
 ## TV ölçümleri (17 Kasım 2026, Mi Box 4, v0.5.0, Wi-Fi)
