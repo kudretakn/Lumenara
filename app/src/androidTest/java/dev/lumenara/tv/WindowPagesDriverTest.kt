@@ -37,7 +37,8 @@ class WindowPagesDriverTest {
                 }, total = { flowOf(rows.size) }, index = { 2 * size })
             }
         }
-        screen.waitUntil(10_000) { state.pages.keys == (0..4).toSet() }
+        // SnapshotStateMap's key view uses identity equality; compare a value snapshot.
+        screen.waitUntil(10_000) { state.pages.keys.toSet() == (0..4).toSet() }
         var retained: List<Item>? = null
         screen.runOnIdle {
             assertArrayEquals(intArrayOf(1, 1, 1, 1, 1, 0, 0, 0, 0), starts)
@@ -47,10 +48,10 @@ class WindowPagesDriverTest {
         screen.waitUntil(10_000) { starts[5] == 1 && stops[0] == 1 }
         screen.runOnIdle {
             assertSame("Existing cards remain usable while the next page waits", retained, state.pages[2])
-            assertEquals((1..4).toSet(), state.pages.keys)
+            assertEquals((1..4).toSet(), state.pages.keys.toSet())
             nextPage.complete(Unit)
         }
-        screen.waitUntil(10_000) { state.pages.keys == (1..5).toSet() }
+        screen.waitUntil(10_000) { state.pages.keys.toSet() == (1..5).toSet() }
         screen.runOnIdle {
             assertArrayEquals(intArrayOf(1, 1, 1, 1, 1, 1, 0, 0, 0), starts)
             assertSame("Overlap retains the original Items", retained, state.pages[2])
@@ -60,7 +61,7 @@ class WindowPagesDriverTest {
         }
         screen.waitUntil(10_000) { state[2 * size]?.title == "Updated while retained" }
         screen.runOnIdle { state.focused(2 * size) }
-        screen.waitUntil(10_000) { state.pages.keys == (0..4).toSet() && stops[5] == 1 }
+        screen.waitUntil(10_000) { state.pages.keys.toSet() == (0..4).toSet() && stops[5] == 1 }
         screen.runOnIdle {
             assertArrayEquals(intArrayOf(2, 1, 1, 1, 1, 1, 0, 0, 0), starts)
             assertEquals(rows[0], state[0])

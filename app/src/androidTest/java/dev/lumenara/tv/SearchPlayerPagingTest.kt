@@ -93,8 +93,12 @@ class SearchPlayerPagingTest {
                 .assertContentDescriptionEquals("Avalon")
             screen.runOnIdle { incoming.value = listOf("Filmler" to next) }
             screen.onNodeWithTag("search-slot-Filmler:0").assertIsFocused()
-                .assertContentDescriptionEquals("Tarzan").performClick()
-            screen.runOnIdle { assertEquals(next[0]?.id, clicked?.id) }
+                .assertContentDescriptionEquals("Tarzan")
+            // TV Material Surface handles remote OK; performClick injects a touch tap.
+            screen.ok()
+            screen.runOnIdle {
+                assertEquals("Remote OK must open the replacement result", checkNotNull(next[0]), clicked)
+            }
         } finally {
             screen.runOnUiThread { screen.activity.setContent {} }
         }
