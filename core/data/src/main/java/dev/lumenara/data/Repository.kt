@@ -956,39 +956,60 @@ class Repository private constructor(private val context: Context) {
         val spec = SourceSpec.decode(vault.decrypt(source.endpoint))
         if (spec.user.isEmpty()) return library.episodeSnapshot(series.id)
         suspend fun fetch(): List<Item> {
-            val token = System.currentTimeMillis()
             val listings = Xtream(spec)
                 .episodes(vault.decrypt(series.encryptedUrl), series.title)
                 .distinctBy { it.url }
+            val previous = library.episodeSnapshot(series.id)
+            val token = maxOf(System.currentTimeMillis(), (previous.maxOfOrNull { it.generation } ?: 0) + 1)
             val entries = listings.map { item(source.id, token, it).copy(parent = series.id) }
-            db.withTransaction {
+            val oldRows = legacyCarryRows((previous + series).map {
+                it.carryRow().copy(legacyUrl = if (it.providerId.isEmpty()) it.encryptedUrl else "")
+            })
+            val parent = oldRows.single { it.id == series.id }
+            val incoming = entries.map { it.carryRow() }
+            val matches = wp03EpisodeMatches(parent, oldRows, incoming)
+            val commit: suspend () -> Unit = {
                 library.save(entries)
+                val preferenceReferences = preferences.carryReferences(oldRows)
+                val excluded = context.getSharedPreferences("watch_next_state", Context.MODE_PRIVATE)
+                    .getStringSet("excluded", emptySet()).orEmpty().toSet()
+                val references = preferenceReferences + excluded + library.redirects().map { it.newId }
+                // Keep unresolved state AND its ambiguity peers. A later refresh must not
+                // turn a duplicate into a unique match just because an unmarked peer was pruned.
+                val pending = orphanHistory(source.id, "", token, oldRows, emptyList(), emptyList(),
+                    library.carryProtectedIds(source.id).toSet() + references)
+                carryRoomState(db, matches.ids, references)
                 val siblings = if (entries.isEmpty()) emptyList() else allVersions(series)
                     .filter { it.id != series.id }.flatMap { library.episodeSnapshot(it.id) }
-                // Android 9 SQLite allows 999 binds: normally one IN query, bounded for
-                // very long series. Read current and sibling marks together, never per episode.
+                // Read after carry so new IDs already contain the newest local progress.
+                // Android 9 SQLite allows 999 binds; leave room for long series.
                 val marks = (entries + siblings).map { it.id }.distinct().chunked(900)
                     .flatMap { library.marksByIds(it) }.associateBy { it.id }
-                val shared = siblings.groupBy { it.seriesEpisode().let { n -> n.season to n.episode } }
-                    .mapValues { (_, episodes) -> episodes.mapNotNull { marks[it.id] }.maxByOrNull { it.updated } }
+                val shared = wp03SiblingMarks(incoming, siblings.map { it.carryRow() }, marks)
                 listings.zip(entries).forEach { (listing, episode) ->
                     val existing = marks[episode.id]
-                    var mark = existing ?: Mark(episode.id)
-                    var changed = false
+                    var mark = shared[episode.id]?.let { mergeCarryMark(it, existing, episode.id) }
+                        ?: existing ?: Mark(episode.id)
                     if (mark.duration <= 0 && listing.durationMs > 0)
-                        mark = mark.copy(duration = listing.durationMs).also { changed = true }
-                    if (mark.updated == 0L) {
-                        val number = episode.seriesEpisode()
-                        shared[number.season to number.episode]?.let {
-                            mark = it.copy(id = episode.id)
-                            changed = true
-                        }
-                    }
-                    if (changed) library.save(mark)
+                        mark = mark.copy(duration = listing.durationMs)
+                    if (mark != existing && (existing != null || shared[episode.id] != null || mark.duration > 0))
+                        library.save(mark)
                 }
+                val incomingIds = entries.map { it.id }.toSet()
+                wp03UnresolvedEpisodeIds(pending, incomingIds, matches.ids.keys)
+                    .chunked(900).forEach { library.retainCarryRows(it, token) }
                 library.pruneEpisodes(series.id, token)
+                // Forced expansion runs inside backup restore's existing journal; that path
+                // restores its own settings and must not create a nested recovery transaction.
+                if (!force && matches.ids.isNotEmpty()) {
+                    val subtitleKeys = preferences.carryItems(matches.ids,
+                        carryPreferenceIdentities(oldRows, incoming + parent, matches.ids))
+                    subtitles.cache.carryKeys(subtitleKeys)
+                }
             }
-            return entries
+            if (!force && matches.ids.isNotEmpty()) restoreTransaction.run { commit() }
+            else db.withTransaction { commit() }
+            return library.episodeSnapshot(series.id)
         }
         return if (force) fetch() else seriesExpansionCache.get(series.id,
             cached = { library.episodeSnapshot(series.id) }, fetch = { fetch() })
