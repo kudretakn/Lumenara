@@ -1,0 +1,7 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- WP11: same UID Binder access only; never merged into release. -->
+        <service android:name=".RecoveryProbe" android:process=":wp11_recovery"
+            android:exported="false" android:stopWithTask="true" />
+    </application>
+</manifest>
