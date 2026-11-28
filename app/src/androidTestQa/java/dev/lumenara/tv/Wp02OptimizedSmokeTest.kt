@@ -89,7 +89,8 @@ class Wp02OptimizedSmokeTest {
 
             // Age only our fixture, then recreate the Activity/ViewModel. The real startup
             // path queues a stale-source check. Foreground refresh defers, so a successful
-            // startup-refresh plus deferred-refresh proves default WorkerFactory + doWork.
+            // startup-refresh plus an enqueued deferred-refresh proves default WorkerFactory
+            // + doWork; the five-minute follow-up itself should not run during this wait.
             SQLiteDatabase.openDatabase(context.getDatabasePath("lumenara.db").path, null,
                 SQLiteDatabase.OPEN_READWRITE).use { database ->
                 database.compileStatement("UPDATE sources SET refreshed = 0 WHERE id = ?").use { statement ->
@@ -101,7 +102,8 @@ class Wp02OptimizedSmokeTest {
             launch(recreate = true)
             await("recreated Hub") { nodeWithTag("hub") != null }
             await("successful worker and deferred follow-up", 45_000) {
-                val database = context.getDatabasePath("androidx.work.workdb")
+                // WorkManager 2.11.1 opens its database in no_backup, not databases/.
+                val database = java.io.File(context.noBackupFilesDir, "androidx.work.workdb")
                 database.exists() && runCatching { readScalar(database.path,
                     """SELECT w.id FROM WorkSpec w JOIN WorkName n ON n.work_spec_id = w.id
                         WHERE n.name = 'startup-refresh' AND w.worker_class_name = ?
