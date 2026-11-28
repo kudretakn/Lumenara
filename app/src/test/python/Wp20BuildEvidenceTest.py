@@ -1,5 +1,7 @@
 """Exercise build evidence orchestration without starting Gradle or a compiler."""
+import contextlib
 import importlib.util
+import io
 import json
 from pathlib import Path
 import subprocess
@@ -86,6 +88,25 @@ class Wp20BuildEvidenceTest(unittest.TestCase):
         self.timeout = True
         self.assertEqual(124, self.measure())
         self.assertEqual(124, self.report()["samples"][0]["exit_code"])
+
+    def test_long_failure_prints_exception_and_missing_artifacts_before_stack_trace(self):
+        content = ("FAILURE: Build failed with an exception.\n"
+                   "Dependency verification failed for configuration 'classpath'\n"
+                   "  - parent-1.0.pom (example:parent:1.0)\n" +
+                   "\tat org.gradle.example.Stack.frame(Stack.java:1)\n" * 200 +
+                   "Caused by: DependencyVerificationException\nBUILD FAILED in 21s\n")
+
+        def fail(command, **kwargs):
+            kwargs["stdout"].write(content)
+            return subprocess.CompletedProcess(command, 1)
+
+        self.output.mkdir()
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            sample = BUILD.run_sample(["fake-gradle"], "ordinary", self.output, ROOT, fail, self.timer)
+        self.assertEqual(1, sample["exit_code"])
+        self.assertEqual(content + "\n", stderr.getvalue())
+        self.assertEqual(content, (self.output / "ordinary.log").read_text())
 
     def test_missing_configuration_reuse_is_a_failed_comparison(self):
         self.reuse = False

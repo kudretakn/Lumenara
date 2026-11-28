@@ -57,7 +57,9 @@ def run_sample(command, label, directory, root, run=subprocess.run, timer=time.m
               "log_sha256": hashlib.sha256(log_path.read_bytes()).hexdigest()}
     print(f"WP20 {label}: {elapsed:.3f}s, exit={code}, tasks={sample['tasks']}", flush=True)
     if code:
-        print("\n".join(content.splitlines()[-60:]), file=sys.stderr)
+        # A stack trace can push the exception and missing-artifact list out of
+        # a short tail. Keep the complete failure visible in the CI job log.
+        print(content, file=sys.stderr)
     return sample
 
 

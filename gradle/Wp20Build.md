@@ -48,6 +48,17 @@ artifact fails SHA-256 verification and an unrecorded version/configuration fail
 strict locking; restore the trusted inputs afterwards. Do not bypass validation
 with lenient locking, verification off, ignored artifacts, or test exclusions.
 
+Include a Linux x86_64 CI run in that validation. An ARM host's
+`android.aapt2FromMavenOverride` can avoid resolving the Maven AAPT2 executable;
+it is a local host accommodation, not a CI setting to copy. Fresh dependency
+resolution can also read parent POMs and imported BOM/module metadata absent
+from a warm-cache bootstrap, even when the selected dependency versions match.
+The initial CI run exposed missing `guava-parent:33.3.1-jre` POM,
+`junit-bom:5.11.0-M2` module and `kotlinx-coroutines-bom:1.8.0` POM checksums
+on the root plugin classpath. Their SHA-256 entries record direct Maven Central
+download origins. The Python evidence check validates the recorded entries'
+structure; only strict Gradle resolution proves coverage of a host's inputs.
+
 Plugin versions are pinned in the catalog and plugin artifacts are verified.
 Project configurations are dependency-locked; the plugins DSL's separate internal
 resolution graph is not represented as a fabricated project lockfile.
@@ -65,6 +76,8 @@ logs, commands, wall-clock seconds, task states and configuration-cache reuse as
 JSON and Markdown artifacts, with SHA-256 of the build inputs, wrapper and dependency
 evidence. Existing APK handoff, native/mapping reports, debug
 API28 plus all three API36 shards, QA API28/API36 and aggregate `device` are kept.
+On failure the complete Gradle output is also printed to the job log so long
+stack traces cannot hide the exception and missing-artifact list above them.
 
 For two consecutive uncached and two consecutive cached clean builds, use the
 Android CI `workflow_dispatch` input `wp20_cache_evidence=true`, or have the lead run:
