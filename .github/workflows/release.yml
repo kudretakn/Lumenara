@@ -79,21 +79,30 @@ jobs:
           fi
           if [ -n "$missing" ]; then echo "Missing repository secrets:$missing"; exit 1; fi
 
-      - name: Build release APK
+      - name: Build standalone ARM APKs and the transition fallback
         env:
           OPENSUBTITLES_API_KEY: ${{ secrets.OPENSUBTITLES_API_KEY }}
           TMDB_READ_TOKEN: ${{ secrets.TMDB_READ_TOKEN }}
-        run: ./gradlew test :app:assembleRelease --stacktrace
+        run: ./gradlew -Pwp15.abiSplits=true test :app:assembleRelease --stacktrace
 
       - name: Verify release native stripping and record build evidence
         run: |
           set -euo pipefail
-          apk="app/build/outputs/apk/release/app-release-unsigned.apk"
-          python3 scripts/apk-size-report.py "$apk" --output app/build/reports/wp10/release-unsigned-size.json
-          python3 scripts/verify-native.py "$apk" --ndk "$ANDROID_HOME/ndk/$WP10_NDK_VERSION" \
-            --merged-libs app/build/intermediates/merged_native_libs/release/mergeReleaseNativeLibs/out/lib \
-            --require-abi armeabi-v7a --require-abi arm64-v8a \
-            --output app/build/reports/wp10/release-native.json
+          shopt -s nullglob
+          apks=(app/build/outputs/apk/release/*.apk)
+          [[ "${#apks[@]}" -eq 3 ]] || { echo "Expected two ABI APKs and one universal fallback"; exit 1; }
+          for abi in armeabi-v7a arm64-v8a universal; do
+            apk="app/build/outputs/apk/release/app-$abi-release-unsigned.apk"
+            abis=(--require-abi "$abi")
+            if [[ "$abi" == universal ]]; then
+              abis=(--require-abi armeabi-v7a --require-abi arm64-v8a)
+            fi
+            python3 scripts/apk-size-report.py "$apk" --output "app/build/reports/wp10/release-$abi-unsigned-size.json"
+            # verify-native checks exact ABI equality, so a second payload fails publication.
+            python3 scripts/verify-native.py "$apk" --ndk "$ANDROID_HOME/ndk/$WP10_NDK_VERSION" \
+              --merged-libs app/build/intermediates/merged_native_libs/release/mergeReleaseNativeLibs/out/lib \
+              "${abis[@]}" --output "app/build/reports/wp10/release-$abi-native.json"
+          done
           test -s app/build/outputs/mapping/release/mapping.txt
 
       - name: Sign and verify
@@ -109,25 +118,35 @@ jobs:
           printf '%s' "$KEYSTORE_B64" | base64 -d > "$keystore"
           tools="$ANDROID_HOME/build-tools/36.0.0"
           mkdir -p dist
-          out="dist/Lumenara-$VERSION.apk"
+          stem="Lumenara-$VERSION"
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-            out="dist/Lumenara-$VERSION-exp-${GITHUB_SHA:0:7}.apk"
+            stem="$stem-exp-${GITHUB_SHA:0:7}"
           fi
-          "$tools/apksigner" sign --v4-signing-enabled false \
-            --ks "$keystore" --ks-type PKCS12 --ks-key-alias "${KEY_ALIAS:-streamora}" \
-            --ks-pass env:KEYSTORE_PASSWORD --key-pass env:KEYSTORE_PASSWORD \
-            --out "$out" app/build/outputs/apk/release/app-release-unsigned.apk
-          certs="$("$tools/apksigner" verify --verbose --print-certs "$out")"
-          echo "$certs" | grep -E 'Verified using v2 scheme|Verified using v3 scheme|certificate SHA-256'
-          printf '%s\n' "$certs" > "$RUNNER_TEMP/Wp01-certificate.txt"
-          python3 scripts/test-results/Wp01ReleaseGate.py certificate "$RUNNER_TEMP/Wp01-certificate.txt"
-          sha256sum "$out" | tee dist/SHA256SUMS.txt
+          version_code="$(sed -n 's/.*versionCode = \([0-9]*\).*/\1/p' app/build.gradle.kts)"
+          test -n "$version_code"
+          : > dist/SHA256SUMS.txt
+          for abi in armeabi-v7a arm64-v8a universal; do
+            out="dist/$stem-$abi.apk"
+            "$tools/apksigner" sign --v4-signing-enabled false \
+              --ks "$keystore" --ks-type PKCS12 --ks-key-alias "${KEY_ALIAS:-streamora}" \
+              --ks-pass env:KEYSTORE_PASSWORD --key-pass env:KEYSTORE_PASSWORD \
+              --out "$out" "app/build/outputs/apk/release/app-$abi-release-unsigned.apk"
+            certs="$("$tools/apksigner" verify --verbose --print-certs "$out")"
+            echo "$certs" | grep -E 'Verified using v2 scheme|Verified using v3 scheme|certificate SHA-256'
+            printf '%s\n' "$certs" > "$RUNNER_TEMP/Wp01-certificate.txt"
+            python3 scripts/test-results/Wp01ReleaseGate.py certificate "$RUNNER_TEMP/Wp01-certificate.txt"
+            # All three must update the same installed package without ABI version-code offsets.
+            package_line="$("$tools/aapt" dump badging "$out" | sed -n '1p')"
+            [[ "$package_line" == "package: name='dev.lumenara.tv' versionCode='$version_code' versionName='$VERSION'"* ]]
+            sha256sum "$out" | tee -a dist/SHA256SUMS.txt
+          done
 
       - name: Measure the signed APK
         run: |
           set -euo pipefail
           for apk in dist/*.apk; do
-            python3 scripts/apk-size-report.py "$apk" --output app/build/reports/wp10/release-signed-size.json
+            name="$(basename "$apk" .apk)"
+            python3 scripts/apk-size-report.py "$apk" --output "app/build/reports/wp10/$name-signed-size.json"
           done
 
       - name: Keep release mapping and measured size/native reports
@@ -164,7 +183,11 @@ jobs:
           # Recheck immediately before publication: a cancelled/failed rerun blocks release.
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           GH_TOKEN="$SOURCE_GH_TOKEN" python3 scripts/test-results/Wp01ReleaseGate.py ci --sha "$GITHUB_SHA" --repository "$GITHUB_REPOSITORY"
-          gh release create "v$VERSION" "dist/Lumenara-$VERSION.apk" \
+          # The single *-universal.apk is required by the pre-WP15 API asset selector.
+          gh release create "v$VERSION" \
+            "dist/Lumenara-$VERSION-armeabi-v7a.apk" \
+            "dist/Lumenara-$VERSION-arm64-v8a.apk" \
+            "dist/Lumenara-$VERSION-universal.apk" \
             --repo "$RELEASES_REPO" --title "Lumenara $VERSION" --notes-file dist/notes.md --latest
 
       - name: Keep the signed APK as a workflow artifact
