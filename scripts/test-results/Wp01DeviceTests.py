@@ -188,7 +188,7 @@ def run_device(args):
         log = out / (name + ".txt")
         start = time.monotonic()
         code = deadline.run(adb + argv, log, cap, artifacts)
-        commands.append({"name": name, "exit_code": code,
+        commands.append({"name": name, "argv": adb + argv, "exit_code": code,
                          "seconds": round(time.monotonic() - start, 3)})
         return log, code
 
@@ -206,7 +206,7 @@ def run_device(args):
             ("animation-transition", ["shell", "settings", "put", "global", "transition_animation_scale", "0"]),
             ("animation-animator", ["shell", "settings", "put", "global", "animator_duration_scale", "0"]),
             ("install-app", ["install", "-r", "-g", app_apk]),
-            ("install-tests", ["install", "-r", "-g", test_apk]),
+            ("install-tests", ["install", "-r", "-t", "-g", test_apk]),
         ]:
             if command(name, argv, 120)[1] != 0:
                 raise GateError("Setup failed: " + name)
@@ -218,8 +218,10 @@ def run_device(args):
         first = instrument("instrument", selected)
         first["expected"] = sorted(inventory["results"])
         attempts.append(first)
-        # Continue missing tests for diagnostics, but preserve every infrastructure error.
-        for part in range(1, 4):
+        # Stateful QA uses a single execution, like connectedQaAndroidTest. Starting
+        # instrumentation again force-stops the app but retains its WorkManager DB.
+        # Default debug policy still continues missing tests and retries failures.
+        for part in ([] if args.single_run else range(1, 4)):
             done = set().union(*(set(a["results"]) for a in attempts))
             missing = sorted(set(inventory["results"]) - done)
             if not missing or deadline.remaining() <= 0:
@@ -228,7 +230,7 @@ def run_device(args):
             continued["expected"] = missing
             attempts.append(continued)
         failed = sorted({test for a in attempts for test, status in a["results"].items() if status == "FAIL"})
-        for index, test in enumerate(failed, 1):
+        for index, test in enumerate([] if args.single_run else failed, 1):
             if deadline.remaining() <= 0:
                 setup_errors.append("Total time budget exhausted before retries")
                 break
@@ -262,6 +264,7 @@ def run_device(args):
     report = {"schema_version": 1, "success": not errors, "inventory": inventory,
               "attempts": attempts, "results": final, "errors": errors, "allowed_skips": allowed,
               "commands": commands, "elapsed_seconds": round(time.monotonic() - deadline.started, 3),
+              "single_run": args.single_run,
               "total_timeout_seconds": args.total_timeout, "artifact_reserve_seconds": args.artifact_reserve}
     (out / "Wp01-results.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print("\n".join(lines))
@@ -277,6 +280,8 @@ def main():
     parser.add_argument("--package", default="dev.lumenara.tv.debug")
     parser.add_argument("--runner", default="dev.lumenara.tv.debug.test/androidx.test.runner.AndroidJUnitRunner")
     parser.add_argument("--class", dest="test_class", default="")
+    parser.add_argument("--single-run", action="store_true",
+                        help="Execute inventory once; no continuations or retries against persisted state")
     parser.add_argument("--serial", default=os.environ.get("ANDROID_SERIAL", ""))
     parser.add_argument("--adb", default="adb")
     parser.add_argument("--total-timeout", type=float, default=1800)

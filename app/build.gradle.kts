@@ -8,6 +8,8 @@ plugins {
 android {
     namespace = "dev.lumenara.tv"
     compileSdk = 36
+    // WP10: AGP's native strip task and CI verification use this exact NDK.
+    ndkVersion = "28.2.13676358"
     defaultConfig {
         applicationId = "dev.lumenara.tv"
         minSdk = 26
@@ -53,6 +55,7 @@ android {
         variant.packaging.jniLibs.excludes.addAll(listOf("lib/x86/**", "lib/x86_64/**"))
     }
     androidComponents.onVariants(androidComponents.selector().withBuildType("qa")) { variant ->
+        // API28 Android TV is x86-only; API36 uses x86_64. Keep both for QA.
         variant.packaging.jniLibs.excludes.addAll(listOf("lib/armeabi-v7a/**", "lib/arm64-v8a/**"))
     }
     sourceSets.getByName("androidTest").assets.srcDir(rootProject.file("core/data/schemas"))
