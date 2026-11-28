@@ -16,6 +16,10 @@ internal class VlcInputPump(
 ) {
     private val cancelled = AtomicBoolean(false)
     private val cancellationLock = Any()
+    @Volatile private var stage = "idle"
+
+    /** Lock-free: diagnostics must remain readable while socket/pipe IO is blocked. */
+    fun diagnosticState() = "pump=$stage"
 
     fun cancel() = synchronized(cancellationLock) {
         if (cancelled.compareAndSet(false, true)) {
@@ -30,22 +34,30 @@ internal class VlcInputPump(
             response.use {
                 try {
                     output.use { out ->
-                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                        // Do not keep consuming buffered body bytes after cancellation.
-                        while (!cancelled.get()) {
-                            val count = source.read(buffer)
-                            if (count < 0 || cancelled.get()) break
-                            out.write(buffer, 0, count)
-                        }
+                        try {
+                            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                            // Do not keep consuming buffered body bytes after cancellation.
+                            while (!cancelled.get()) {
+                                stage = "socket-read"
+                                val count = source.read(buffer)
+                                if (count < 0 || cancelled.get()) break
+                                stage = "pipe-write"
+                                out.write(buffer, 0, count)
+                            }
+                        } finally { stage = "writer-close" }
                     }
                 } finally {
                     // A cancelled read may exit before Call.cancel itself returns. Wait for
                     // socket cancellation to finish before closing the body (which can discard).
+                    stage = "wait-cancel"
                     synchronized(cancellationLock) { }
+                    stage = "response-close"
                 }
             }
         } catch (e: IOException) {
             if (!cancelled.get()) onFailure(e)
+        } finally {
+            stage = "finished"
         }
     }
 }

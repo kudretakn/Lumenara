@@ -8,6 +8,8 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteQuery
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -41,7 +43,7 @@ data class Source(
     indices = [Index("source", "kind", "category", "title"),
         Index("kind", "category", "title"),
         Index("kind", "isRepresentative", "title"), Index("kind", "title"),
-        Index("parent"), Index("versionKey"), Index("source", "kind", "sortKey", "id"),
+        Index("parent"), Index("parent", "episodeSeason", "episodeNumber", "id"), Index("versionKey"), Index("source", "kind", "sortKey", "id"),
         Index("kind", "sortKey", "id"), Index("source", "channelNumber"), Index("source", "safeChannelNumber"), Index("source", "id"),
         Index("source", "kind", "category", "sortKey", "id"), Index("kind", "category", "sortKey", "id")],
 )
@@ -83,6 +85,11 @@ data class Item(
     @ColumnInfo(defaultValue = "0") val isAdult: Boolean = isAdultCategory(category),
     @ColumnInfo(defaultValue = "0") val channelNumber: Int = 0,
     @ColumnInfo(defaultValue = "0") val safeChannelNumber: Int = 0,
+    @ColumnInfo(defaultValue = "0") val episodeSeason: Int = 0,
+    @ColumnInfo(defaultValue = "0") val episodeNumber: Int = 0,
+    @ColumnInfo(defaultValue = "''") val episodeSeries: String = "",
+    @ColumnInfo(defaultValue = "''") val episodeTitle: String = "",
+    @ColumnInfo(defaultValue = "0") val episodeVersion: Int = 0,
 )
 
 @Entity(
@@ -145,7 +152,7 @@ data class VersionCandidate(
 }
 
 @Dao
-interface LibraryDao {
+interface LibraryDao : Wp19SearchDao, Wp22Dao, Wp22SeriesDao {
     @Query("""SELECT NOT EXISTS(SELECT 1 FROM sources s
         LEFT JOIN catalog_derived_state d ON d.source=s.id
         WHERE (:source='' OR s.id=:source) AND (d.source IS NULL OR d.phase!='done'))""")
@@ -230,6 +237,11 @@ interface LibraryDao {
 
     @RawQuery(observedEntities = [Item::class, Mark::class, VersionBackfillState::class])
     fun catalogKinds(query: SupportSQLiteQuery): Flow<List<String>>
+
+    @RawQuery(observedEntities = [Item::class, Mark::class, VersionBackfillState::class])
+    fun wp19SpanInvalidations(query: SupportSQLiteQuery): Flow<Int>
+
+    @RawQuery fun wp19SpanCursor(query: SupportSQLiteQuery): android.database.Cursor
 
     @RawQuery(observedEntities = [CategoryCount::class])
     fun catalogCategoryCounts(query: SupportSQLiteQuery): Flow<List<LiveCategoryCount>>
@@ -407,21 +419,37 @@ interface LibraryDao {
 
     @Upsert suspend fun save(source: Source)
 
-    @Upsert suspend fun save(items: List<Item>)
+    @Upsert suspend fun wp19SaveItems(items: List<Item>)
 
-    @Upsert fun writeBatch(items: List<Item>)
+    @Transaction suspend fun save(items: List<Item>) {
+        wp19SaveItems(items.map { it.wp22ProjectEpisode() })
+        items.forEach { wp19Index(it.id, it.search) }
+    }
+
+    @Upsert fun wp19WriteItems(items: List<Item>)
+
+    @Transaction fun writeBatch(items: List<Item>) {
+        wp19WriteItems(items.map { it.wp22ProjectEpisode() })
+        items.forEach { wp19Index(it.id, it.search) }
+    }
 
     @androidx.room.Update(entity = Item::class)
     suspend fun assignVersions(rows: List<VersionAssignment>)
 
     @androidx.room.Update(entity = Item::class)
-    suspend fun assignTmdb(rows: List<TmdbAssignment>)
+    suspend fun wp19AssignTmdb(rows: List<TmdbAssignment>)
+
+    @Transaction suspend fun assignTmdb(rows: List<TmdbAssignment>) {
+        rows.forEach { wp22Dirty(it.id) }
+        wp19AssignTmdb(rows)
+        rows.forEach { row -> wp19SearchText(row.id)?.let { wp19Index(row.id, it) } }
+    }
 
     @Query("SELECT * FROM items WHERE id IN (:ids) AND kind IN ('MOVIE','SERIES')")
     suspend fun versionSeeds(ids: List<String>): List<Item>
 
     // CatalogStage.read has a synchronous callback, already inside the IO import transaction.
-    @Query("SELECT * FROM items WHERE id IN (:ids) AND kind IN ('MOVIE','SERIES')")
+    @Query("SELECT * FROM items WHERE id IN (:ids)")
     fun importedVersionSeeds(ids: List<String>): List<Item>
 
     @RawQuery
@@ -465,12 +493,19 @@ interface LibraryDao {
     @Query("SELECT * FROM marks WHERE id=:id") fun observeMark(id: String): Flow<Mark?>
 
     @Query("""SELECT * FROM items WHERE parent=:id AND category NOT IN (:hidden)
-        AND NOT EXISTS(SELECT 1 FROM items s WHERE s.id=:id AND s.category IN (:hidden)) ORDER BY items.rowid""")
+        AND NOT EXISTS(SELECT 1 FROM items s WHERE s.id=:id AND s.category IN (:hidden)) ORDER BY episodeSeason,episodeNumber,id""")
     fun episodes(id: String, hidden: List<String> = emptyList()): Flow<List<Item>>
 
     @Query("""SELECT * FROM items WHERE parent=:id AND category NOT IN (:hidden)
-        AND NOT EXISTS(SELECT 1 FROM items s WHERE s.id=:id AND s.category IN (:hidden))""")
+        AND NOT EXISTS(SELECT 1 FROM items s WHERE s.id=:id AND s.category IN (:hidden)) ORDER BY episodeSeason,episodeNumber,id""")
     suspend fun episodeSnapshot(id: String, hidden: List<String> = emptyList()): List<Item>
+
+    @Query("SELECT COALESCE(MAX(generation),0) FROM items WHERE parent=:id")
+    suspend fun wp22EpisodeGeneration(id: String): Long
+    @Query("""SELECT id,source,title,category,kind,tvgId,year,parent,providerId,tvgName,tvgGroup,
+        versionKey,'' AS urlHash,CASE WHEN providerId='' THEN encryptedUrl ELSE '' END AS legacyUrl
+        FROM items WHERE parent=:id""")
+    suspend fun wp22EpisodeCarry(id: String): List<CarryRow>
 
     @Query("SELECT marks.* FROM marks JOIN items USING(id) WHERE items.parent=:id")
     fun episodeMarks(id: String): Flow<List<Mark>>
@@ -551,9 +586,9 @@ interface LibraryDao {
         language: String = "",
         minRating: Double = 0.0,
         hidden: List<String> = emptyList(),
-    ): Flow<List<Item>> = withCatalog(source) { ready ->
+    ): Flow<List<Item>> = withWp19Search(source, query) { ready, indexed ->
         val sql = browseQuery(CatalogFilter(source, kind, category, query, shelf, year, genre,
-            language, minRating, hidden, derived = ready), queryLimit)
+            language, minRating, hidden, derived = ready, searchGram = indexed), queryLimit)
         if (shelf in listOf("favorite", "list", "resume")) markedCatalogRows(sql)
             else catalogRows(sql)
     }
@@ -565,18 +600,18 @@ interface LibraryDao {
 
     fun browsePage(source: String, kind: String, category: String, query: String, shelf: String,
         limit: Int, offset: Int, year: String = "", genre: String = "", language: String = "",
-        minRating: Double = 0.0, hidden: List<String> = emptyList()): Flow<List<Item>> = withCatalog(source) { ready ->
+        minRating: Double = 0.0, hidden: List<String> = emptyList()): Flow<List<Item>> = withWp19Search(source, query) { ready, indexed ->
         val sql = browseQuery(CatalogFilter(source, kind, category, query, shelf, year, genre,
-            language, minRating, hidden, derived = ready), limit, offset)
+            language, minRating, hidden, derived = ready, searchGram = indexed), limit, offset)
         val rows = if (shelf in listOf("favorite", "list", "resume")) markedCatalogRows(sql) else catalogRows(sql)
         rows.map { page -> page.map(Item::displayVersion) }
     }
 
     fun browseTotal(source: String, kind: String, category: String, query: String, shelf: String,
         year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0,
-        hidden: List<String> = emptyList()): Flow<Int> = withCatalog(source) { ready ->
+        hidden: List<String> = emptyList()): Flow<Int> = withWp19Search(source, query) { ready, indexed ->
         val filter = CatalogFilter(source, kind, category, query, shelf, year, genre,
-            language, minRating, hidden, derived = ready)
+            language, minRating, hidden, derived = ready, searchGram = indexed)
         val prepared = preparedBrowseCountQuery(filter)
         when {
             prepared != null -> preparedCatalogCount(prepared)
@@ -587,16 +622,16 @@ interface LibraryDao {
 
     fun browseKinds(source: String, kind: String, category: String, query: String, shelf: String,
         year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0,
-        hidden: List<String> = emptyList()): Flow<List<String>> = withCatalog(source) { ready ->
+        hidden: List<String> = emptyList()): Flow<List<String>> = withWp19Search(source, query) { ready, indexed ->
         catalogKinds(browseKindsQuery(CatalogFilter(source, kind, category, query, shelf, year, genre,
-            language, minRating, hidden, derived = ready)))
+            language, minRating, hidden, derived = ready, searchGram = indexed)))
     }
 
     suspend fun browseIndex(source: String, kind: String, category: String, query: String, shelf: String,
         id: String, year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0,
         hidden: List<String> = emptyList()): Int? = livePosition(browseIndexQuery(
             CatalogFilter(source, kind, category, query, shelf, year, genre, language, minRating, hidden,
-                derived = catalogReady(source).first()), id))
+                derived = catalogReady(source).first(), searchGram = if (query.isNotEmpty() && wp19SearchReady().first()) wp19SelectiveGram(query) else null), id))
 
     @Query("SELECT * FROM items WHERE id=:id")
     suspend fun item(id: String): Item?
@@ -662,8 +697,15 @@ data class ItemRedirect(@PrimaryKey val oldId: String, val newId: String)
             CatalogDerivedState::class,
             CategoryCount::class,
             CatalogStat::class,
+            Wp19SearchDocument::class,
+            Wp19SearchGram::class,
+            Wp19SearchState::class,
+            Wp22CatalogState::class,
+            Wp22Input::class,
+            Wp22Dirty::class,
+            Wp22ProjectionState::class,
         ],
-    version = 14,
+    version = 16,
     exportSchema = true,
     autoMigrations =
         [
@@ -681,6 +723,21 @@ abstract class LibraryDb : RoomDatabase() {
     abstract fun derived(): CatalogDerivedDao
 
     companion object {
+        val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                StartupPerf.measure("migration_15_16") {
+                    wp22CreateTables(db)
+                    wp22CreateProjection(db)
+                }
+            }
+        }
+
+        val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                StartupPerf.measure("migration_14_15") { wp19CreateSearchTables(db) }
+            }
+        }
+
         val MIGRATION_13_14 = object : Migration(13, 14) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 StartupPerf.measure("migration_13_14") {
@@ -776,7 +833,7 @@ abstract class LibraryDb : RoomDatabase() {
         }
 
         private val migrations: Array<Migration> = arrayOf(MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
-            MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14)
+            MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16)
 
         fun build(context: android.content.Context): LibraryDb =
             androidx.room.Room.databaseBuilder(context.applicationContext, LibraryDb::class.java, "lumenara.db")
@@ -787,4 +844,14 @@ abstract class LibraryDb : RoomDatabase() {
     abstract fun library(): LibraryDao
 
     abstract fun guide(): GuideDao
+}
+
+/** Switch only when the durable backfill completes; no partially indexed catalog is queried. */
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+internal fun <T> LibraryDao.withWp19Search(source: String, query: String,
+    read: (Boolean, Long?) -> Flow<T>): Flow<T> = withCatalog(source) { derived ->
+    if (wp19ProbeGrams(query).isEmpty()) read(derived, null)
+    else wp19SearchReady().distinctUntilChanged().flatMapLatest { ready ->
+        flow { emitAll(read(derived, if (ready) wp19SelectiveGram(query) else null)) }
+    }
 }

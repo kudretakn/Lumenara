@@ -2,6 +2,8 @@ package dev.lumenara.tv
 
 import androidx.compose.runtime.*
 import dev.lumenara.data.Item
+import dev.lumenara.data.Wp19SpanWindow
+import dev.lumenara.data.wp19SpanWindow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.*
@@ -38,15 +40,23 @@ internal open class WindowPages(val pageSize: Int, val columns: Int) {
 @Stable
 internal class CatalogPages(val source: String, val kind: String, val category: String,
     val query: String, val shelf: String, pageSize: Int, columns: Int) : WindowPages(pageSize, columns) {
+    private var slotOffset by mutableIntStateOf(0)
     private var liveSlots by mutableStateOf(BooleanArray(0))
     private var slotColumns by mutableStateOf(IntArray(0))
-    fun isLiveSlot(index: Int): Boolean = kind == "LIVE" || (liveSlots.getOrNull(index) ?: (get(index)?.kind == "LIVE"))
+    fun isLiveSlot(index: Int): Boolean = kind == "LIVE" || (liveSlots.getOrNull(index - slotOffset) ?: (get(index)?.kind == "LIVE"))
     fun columnOf(index: Int): Int = when (kind) {
-        "" -> slotColumns.getOrNull(index) ?: 0
+        "" -> slotColumns.getOrNull(index - slotOffset) ?: 0
         "LIVE" -> index % (columns / 2) * 2
         else -> index % columns
     }
+    fun installSpans(window: Wp19SpanWindow) {
+        slotOffset = window.offset
+        liveSlots = window.live.toBooleanArray()
+        slotColumns = window.columns.toIntArray()
+    }
+    // Retained for callers supplying an already bounded, first-page fixture.
     fun slotKinds(kinds: List<String>) {
+        slotOffset = 0
         liveSlots = BooleanArray(kinds.size) { kinds[it] == "LIVE" }
         var column = 0
         slotColumns = IntArray(kinds.size) { index ->
@@ -119,11 +129,19 @@ internal fun rememberCatalogPages(model: LibraryModel, source: String, kind: Str
             // Room's SQL is asynchronous; displayVersion/visibility mapping must be too.
             .let { if (query.isNotEmpty()) it.flowOn(Dispatchers.Default) else it } },
         total = {
-            if (kind.isEmpty()) model.repo.browseKinds(source, kind, category, query, shelf, year, genre, language, minRating)
-                .map { kinds -> state.slotKinds(kinds); kinds.size }
-            else model.repo.browseCount(source, kind, category, query, shelf, year, genre, language, minRating)
+            model.repo.browseCount(source, kind, category, query, shelf, year, genre, language, minRating)
         },
         index = { restore?.let { model.repo.browseIndex(source, kind, category, query, shelf, it,
             year, genre, language, minRating) } ?: 0 })
+    if (hidden != null && kind.isEmpty() && state.anchor != null) {
+        val range = state.range()
+        LaunchedEffect(state, range) {
+            withContext(Dispatchers.Main.immediate) {
+                model.repo.library.wp19SpanWindow(source, category, query, shelf, year, genre, language,
+                    minRating, hidden.orEmpty(), range.first * pageSize,
+                    (range.last - range.first + 1) * pageSize, columns).collect(state::installSpans)
+            }
+        }
+    }
     return state
 }

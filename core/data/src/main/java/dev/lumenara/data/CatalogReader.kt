@@ -6,8 +6,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 
-/** Room projections and visibility only; no import, restore or maintenance scheduling. */
+/** Room projections/visibility and idle search-index maintenance; no import or restore. */
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 internal class CatalogReader(
     private val db: LibraryDb,
@@ -22,7 +25,8 @@ internal class CatalogReader(
         { kind, source, hidden -> library.categoryCounts(kind, source, hidden) },
         { source, hidden -> library.sourceCategoryCounts(source, hidden) },
         preferences.showAdult, catalogScope, StartupPerf::duration, preclassified = true)
-    val hidden: Flow<List<String>> = catalog.hidden
+    // Start only when a published reader is consumed, never during Repository recovery.
+    val hidden: Flow<List<String>> = catalog.hidden.onStart { startSearchBackfill() }
     // Upgraded rows use their original category until stored classification is available.
     private fun Flow<List<Item>>.storedVisibility(): Flow<List<Item>> =
         combine(preferences.showAdult) { rows, show -> rows.visibleStoredRows(show) }
@@ -127,6 +131,30 @@ internal class CatalogReader(
         }
     }
     init { db.invalidationTracker.addObserver(liveInvalidation) }
+
+    private var searchBackfillJob: Job? = null
+    private var searchBackfillFinished = false
+    @Synchronized private fun startSearchBackfill() {
+        if (searchBackfillFinished || searchBackfillJob?.isActive == true) return
+        searchBackfillJob = catalogScope.launch(Dispatchers.IO) {
+            try {
+                val backfill = Wp19SearchBackfill(db)
+                Wp07MaintenanceRunner(backgroundWork, { false }, android.os.SystemClock::elapsedRealtime) { limit ->
+                    backfill.runBatch(limit.coerceAtMost(16))
+                }.run()
+                val series = Wp22SeriesBackfill(db)
+                Wp07MaintenanceRunner(backgroundWork, { false }, android.os.SystemClock::elapsedRealtime) { limit ->
+                    series.runBatch(limit.coerceAtMost(100))
+                }.run()
+                synchronized(this@CatalogReader) { searchBackfillFinished = true }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // The old query remains available; a new process resumes the committed cursor.
+                StartupPerf.duration("wp19_search_backfill_failed", 0)
+            }
+        }
+    }
 
     /** Only requested IDs; pending upgrades use the same provider order as live pages. */
     fun liveChannelNumbers(source: String, ids: List<String>): Flow<Map<String, Int>> =

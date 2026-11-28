@@ -104,7 +104,7 @@ class Wp02OptimizedSmokeTest {
 
             // Real Room-generated implementation and Vault write path, through the real UI.
             val sourceId = scalar("SELECT id FROM sources WHERE name = ?", name)!!
-            assertEquals("14", scalar("PRAGMA user_version"))
+            assertEquals("16", scalar("PRAGMA user_version"))
             val endpoint = scalar("SELECT endpoint FROM sources WHERE id = ?", sourceId)!!
             assertFalse(endpoint.contains("wp02-token"))
             assertFalse(endpoint.startsWith("http"))

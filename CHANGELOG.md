@@ -1,5 +1,22 @@
 # Lumenara sürüm kaydı
 
+## 0.7.0 · 28 Kasım 2026
+
+Bu sürüm 0.6.0'daki hızlandırmaları ve yeniden düzenlemenin ilk beş dalgasını (#42 planı) içerir. 0.6.0 ayrı olarak yayımlanmadı.
+
+- **Daha küçük güncelleme:** her cihaz yalnız kendi işlemci mimarisinin paketini indiriyor; Mi Box 4 için paket 100 MB'tan yaklaşık 45 MB'a indi. Uygulama kodu R8 ile küçültüldü (DEX 33,7 MB → 5,3 MB). Eski sürümlerin güncelleyicisi için tek bir ARM-universal paket de yayımlanıyor.
+- **Dizi yenilemede kayıp yok:** bölüm adresleri, uzantıları veya parolası değişse de izleme geçmişi, kaldığınız yer, favoriler ve Listem eşleşen bölümlere taşınıyor; belirsiz eşleşmeler silinmiyor, sonraki yenilemede yeniden deneniyor. Bozuk tek bir bölüm kaydı artık tüm diziyi düşürmüyor.
+- **Yedekten geri yüklemede doğru eşleşme:** değişen liste adresinde de izleme durumu ve son kanallar korunuyor; belirsiz kayıtlar şifreli bekletiliyor. Ağ işleri geri yükleme işleminin dışında yapılıyor.
+- **Oynatıcı daha güvenilir:** iptal edilen bir hazırlık başka bir içeriğe yanlış konum yazmıyor; ilk kare 15 sn içinde gelmezse yayın yeniden deneniyor; VLC'de ses odağı (Asistan, bildirim sesleri) ve ekran açık tutma düzgün yönetiliyor. Media3 ve VLC tek bir oynatma oturumu altında çalışıyor.
+- **Açılış:** arka plan yenilemesi artık hiç başlamadığı bir durumda takılmıyor (yeni bir pencere açılırken önceki pencerenin kapanması yenilemeyi engelliyordu); ertelenen yenileme kalıcı olarak sıraya alınıyor. Görünmeyen ekranların veri abonelikleri kapanıyor.
+- **Daha hızlı listeler ve rehber:** film/dizi ızgarası sayıları hazır tablolardan geliyor; izlendi/favori işaretlemek sayımları yeniden çalıştırmıyor. Rehber aramasında indeks kullanılıyor ve gizli kanallar sonuçları kesmiyor. Arama için ek indeks eklendi; sonuçlar eskisiyle birebir aynı.
+- **Aramadan dönüş:** 60. sonuçtan detaya veya oynatmaya girip geri dönünce aynı sonuç ve kaydırma konumu geri geliyor.
+- **Ayarlar:** ayar değerleri sabit kimliklerle saklanıyor; eski değerler kayıpsız okunuyor.
+- **Gizlilik:** kaynak indirmesi sırasında geçici dosya şifreli; diskte düz metin adres/parola kalmıyor.
+- Ekranda görünmeyen saat/altyazı/oynatıcı kontrolleri artık boşuna işlemci harcamıyor; dizi sezon/bölüm hazırlığı ana iş parçacığından çıktı.
+- Veritabanı şeması 13 → 15 (yalnız ekleme: rehber ve arama indeksleri). Geri dönüş (downgrade) desteklenmez.
+- Geliştirme: test kapısı çöken veya takılan testi artık "yeniden denemede geçti" saymıyor (bu sayede gizli bir ekran çökmesi bulunup düzeltildi); cihaz testleri API 28 ve API 36'da, küçültülmüş sürüm ayrıca iki motorla test ediliyor.
+
 ## 0.6.0 · 27 Kasım 2026
 
 - Uygulama boyutu 214 MB'tan 97 MB'a indi: TV kutularında kullanılmayan x86 kütüphaneleri artık pakete girmiyor. Güncellemeler daha hızlı iniyor ve daha az yer kaplıyor.

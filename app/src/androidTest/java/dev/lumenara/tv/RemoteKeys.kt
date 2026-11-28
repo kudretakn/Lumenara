@@ -52,23 +52,15 @@ fun <R : TestRule, A : ComponentActivity> AndroidComposeTestRule<R, A>.returnToH
 
 fun <R : TestRule, A : ComponentActivity> AndroidComposeTestRule<R, A>.openHubCard(name: String) {
     returnToHub()
-    onNodeWithTag("hub").performScrollToNode(hasTestTag("hub-$name"))
-    val card = onNodeWithTag("hub-$name")
-    card.performSemanticsAction(SemanticsActions.RequestFocus)
-    waitUntil(30_000) { onAllNodes(hasTestTag("hub-$name") and isFocused()).fetchSemanticsNodes().isNotEmpty() }
+    wp21ScrollTo("hub", hasTestTag("hub-$name"))
+    wp21Focus(hasTestTag("hub-$name"))
     ok()
     waitUntil(30_000) { onAllNodesWithTag("section-$name").fetchSemanticsNodes().isNotEmpty() }
 }
 
 fun ComposeContentTestRule.openCategory(name: String) {
-    waitUntil(30_000) {
-        runCatching {
-            onNodeWithTag("category-grid").performScrollToNode(hasTestTag("category-$name"))
-            onAllNodesWithTag("category-$name").fetchSemanticsNodes().isNotEmpty()
-        }.getOrDefault(false)
-    }
-    onNodeWithTag("category-$name").performSemanticsAction(SemanticsActions.RequestFocus)
-    waitUntil(30_000) { onAllNodes(hasTestTag("category-$name") and isFocused()).fetchSemanticsNodes().isNotEmpty() }
+    wp21ScrollTo("category-grid", hasTestTag("category-$name"))
+    wp21Focus(hasTestTag("category-$name"))
     ok()
     waitUntil(30_000) { onAllNodesWithTag("category-grid").fetchSemanticsNodes().isEmpty() }
 }

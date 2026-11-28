@@ -29,8 +29,8 @@ internal fun SeriesDetails(model: LibraryModel, series: Item, play: (Item, List<
         .collectAsStateWithLifecycle(emptyList())
     val mark by remember(series.id) { model.repo.library.observeMark(series.id) }
         .collectAsStateWithLifecycle(null)
-    val catalog = rememberWp14SeriesCatalog(raw.orEmpty())
-    val progress = rememberWp14SeriesProgress(catalog, marks)
+    val catalog = rememberWp22SeriesCatalog(raw.orEmpty())
+    val progress = rememberWp22SeriesProgress(catalog, marks)
     val episodes = catalog?.items.orEmpty()
     val byId = progress.marks
     val seasons = catalog?.seasons.orEmpty()

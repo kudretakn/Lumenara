@@ -55,7 +55,7 @@ class FullscreenTest {
             } catch (e: ComposeTimeoutException) {
                 throw AssertionError(
                     "Beklenen: $matcher, present=$present\n" + screen.onRoot().printToString() +
-                        "\ncurrentFocus=${screen.activity.currentFocus?.javaClass?.name}", e
+                        "\ncurrentFocus=${screen.runOnUiThread { screen.activity.currentFocus?.javaClass?.name }}", e
                 )
             }
         }
@@ -113,7 +113,7 @@ class FullscreenTest {
                         }
                     }
                 }
-                await(hasContentDescription("Tam ekran oynatıcı") and isFocused())
+                screen.wp21AwaitLiveFrame(channels[0].id)
                 screen.dpad(Key.DirectionLeft)
                 await(hasTestTag("mini-guide"))
                 screen.onNodeWithContentDescription("For Adults").assertDoesNotExist()
