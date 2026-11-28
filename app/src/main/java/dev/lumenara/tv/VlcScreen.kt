@@ -413,7 +413,8 @@ internal fun VlcScreen(
             var ownStop = false
             var paused = false
             var reconnectRequested = false
-            var liveProgress = LiveProgress()
+            var buffering = false
+            var terminalError = false
             fun reconnect() {
                 if (reconnectRequested || ownStop) return
                 reconnectRequested = true
@@ -423,175 +424,185 @@ internal fun VlcScreen(
                 }
             }
             try {
-                val source = model.repo.library.source(item.source) ?: error("Kaynak kaldırıldı")
-                val address = if (item.kind == "LIVE") liveUrls.address(item) else model.repo.address(item)
-                val mark = model.repo.library.mark(item.id)
-                val start = session.startPosition(mark?.let {
-                        if (item.kind == "EPISODE") dev.lumenara.catalog.resumePosition(it.position, it.duration)
-                        else it.position.takeIf { position -> it.duration <= 0 || position < it.duration * .95 } ?: 0
-                    } ?: 0)
-                withContext(Dispatchers.IO) {
-                    // Warm/await native code before opening a short-lived live HTTP stream.
-                    val runtimeStart = android.os.SystemClock.elapsedRealtime()
-                    android.util.Log.d("LumenaraVlc", "playback runtime acquire start")
-                    val lib = VlcRuntime.get(context)
-                    android.util.Log.d("LumenaraVlc", "playback runtime acquired ms=${android.os.SystemClock.elapsedRealtime() - runtimeStart}")
-                    ensureActive()
-                    val p = engineHolder[0] ?: MediaPlayer(lib).also { engineHolder[0] = it }
-                    engine = p
-                    val inputStart = android.os.SystemClock.elapsedRealtime()
-                    android.util.Log.d("LumenaraVlc", "playback input open start")
-                    input = VlcInput.openCancellable(context, address, source.allowHttp)
-                    android.util.Log.d("LumenaraVlc", "playback input ready demux=${input!!.demux} ms=${android.os.SystemClock.elapsedRealtime() - inputStart}")
-                    ensureActive()
-                    val media = Media(lib, input!!.descriptor.fileDescriptor)
-                    try {
-                        media.addOption(":demux=" + input!!.demux)
-                        if (start > 0 && item.kind != "LIVE") media.addOption(":start-time=${start/1000.0}")
-                        p.media = media
-                    } finally {
-                        media.release()
+                wp09WatchPlayback(
+                    monitorStalls = item.kind == "LIVE",
+                    snapshot = {
+                        Wp09PlaybackSample(engine?.takeIf { bound }?.time,
+                            paused = paused || !session.wantsPlay || reconnectRequested || terminalError,
+                            buffering = buffering)
+                    },
+                    onPrepared = { if (!reconnectRequested) { retry.playing(); message = "" } },
+                ) { watchdog ->
+                    val source = model.repo.library.source(item.source) ?: error("Kaynak kaldırıldı")
+                    val address = if (item.kind == "LIVE") liveUrls.address(item) else model.repo.address(item)
+                    val mark = model.repo.library.mark(item.id)
+                    val start = session.startPosition(mark?.let {
+                            if (item.kind == "EPISODE") dev.lumenara.catalog.resumePosition(it.position, it.duration)
+                            else it.position.takeIf { position -> it.duration <= 0 || position < it.duration * .95 } ?: 0
+                        } ?: 0)
+                    withContext(Dispatchers.IO) {
+                        // Warm/await native code before opening a short-lived live HTTP stream.
+                        val runtimeStart = android.os.SystemClock.elapsedRealtime()
+                        android.util.Log.d("LumenaraVlc", "playback runtime acquire start")
+                        val lib = VlcRuntime.get(context)
+                        android.util.Log.d("LumenaraVlc", "playback runtime acquired ms=${android.os.SystemClock.elapsedRealtime() - runtimeStart}")
+                        ensureActive()
+                        val p = engineHolder[0] ?: MediaPlayer(lib).also { engineHolder[0] = it }
+                        engine = p
+                        val inputStart = android.os.SystemClock.elapsedRealtime()
+                        android.util.Log.d("LumenaraVlc", "playback input open start")
+                        input = VlcInput.openCancellable(context, address, source.allowHttp)
+                        android.util.Log.d("LumenaraVlc", "playback input ready demux=${input!!.demux} ms=${android.os.SystemClock.elapsedRealtime() - inputStart}")
+                        ensureActive()
+                        val media = Media(lib, input!!.descriptor.fileDescriptor)
+                        try {
+                            media.addOption(":demux=" + input!!.demux)
+                            if (start > 0 && item.kind != "LIVE") media.addOption(":start-time=${start/1000.0}")
+                            p.media = media
+                        } finally {
+                            media.release()
+                        }
                     }
-                }
-                val p = checkNotNull(engine)
-                withContext(Dispatchers.Main.immediate) {
-                    session.bind(binding, bindingId, if (item.kind == "LIVE") 0 else start)
-                    bound = true
-                    val focusOwner = PlaybackAudioFocus.create(context, playback = { play ->
-                        if (!play) {
-                            paused = true
-                            nativePlaying = false
-                            liveProgress = LiveProgress()
-                            surface.keepScreenOn = false
-                        }
-                        if (!p.isReleased) {
-                            // libVLC 3.7.7 pause() calls set_pause(1), including while buffering.
-                            if (play && !ownStop) p.play() else p.pause()
-                        }
-                    }, intentChanged = { session.wantsPlay = it })
-                    attemptFocus = focusOwner
-                    playbackFocus = focusOwner
-                    // Listener registration creates a Handler; UI writes stay on Main.
-                    // Install it before attaching views, which can start playback.
-                    p.setEventListener { event ->
-                        playbackScope.launch(Dispatchers.Main.immediate) {
-                            if (ownStop || p !== player || currentItemId != item.id ||
-                                !session.owns(binding, bindingId)) return@launch
-                            when (event.type) {
-                                MediaPlayer.Event.Opening -> {
-                                    nativePlaying = false
-                                    mediaGeneration++
-                                    android.util.Log.d("LumenaraVlc", "playback Opening generation=$mediaGeneration")
-                                }
-                                MediaPlayer.Event.Playing -> {
-                                    // A late surface callback must obey focus and the user's pause intent.
-                                    if (!focusOwner.canPlay) {
-                                        p.pause()
+                    val p = checkNotNull(engine)
+                    withContext(Dispatchers.Main.immediate) {
+                        session.bind(binding, bindingId, if (item.kind == "LIVE") 0 else start)
+                        bound = true
+                        val focusOwner = PlaybackAudioFocus.create(context, playback = { play ->
+                            paused = !play
+                            if (!play) {
+                                nativePlaying = false
+                                surface.keepScreenOn = false
+                            }
+                            if (!p.isReleased) {
+                                // libVLC 3.7.7 pause() calls set_pause(1), including while buffering.
+                                if (play && !ownStop) p.play() else p.pause()
+                            }
+                        }, intentChanged = { session.wantsPlay = it })
+                        attemptFocus = focusOwner
+                        playbackFocus = focusOwner
+                        // Listener registration creates a Handler; UI writes stay on Main.
+                        // Install it before attaching views, which can start playback.
+                        p.setEventListener { event ->
+                            playbackScope.launch(Dispatchers.Main.immediate) {
+                                if (ownStop || p !== player || currentItemId != item.id ||
+                                    !session.owns(binding, bindingId)) return@launch
+                                when (event.type) {
+                                    MediaPlayer.Event.Opening -> {
                                         nativePlaying = false
-                                        surface.keepScreenOn = false
-                                        return@launch
+                                        mediaGeneration++
+                                        android.util.Log.d("LumenaraVlc", "playback Opening generation=$mediaGeneration")
                                     }
-                                    paused = false
-                                    nativePlaying = true
-                                    inputHasPlayed = true
-                                    surface.keepScreenOn = true
-                                    android.util.Log.d("LumenaraVlc", "playback Playing generation=$mediaGeneration")
-                                    if (item.kind == "LIVE") currentLivePlaying()
-                                    if (!reconnectRequested) { retry.playing(); message = "" }
-                                    if (!recorded) {
-                                        recorded = true
-                                        model.started(item)
+                                    MediaPlayer.Event.Buffering -> {
+                                        buffering = event.buffering < 100f
+                                    }
+                                    MediaPlayer.Event.Playing -> {
+                                        // A late surface callback must obey focus and the user's pause intent.
+                                        if (!focusOwner.canPlay) {
+                                            p.pause()
+                                            nativePlaying = false
+                                            surface.keepScreenOn = false
+                                            return@launch
+                                        }
+                                        paused = false
+                                        buffering = false
+                                        nativePlaying = true
+                                        inputHasPlayed = true
+                                        surface.keepScreenOn = true
+                                        android.util.Log.d("LumenaraVlc", "playback Playing generation=$mediaGeneration")
+                                        if (item.kind == "LIVE") currentLivePlaying()
+                                        if (watchdog.prepared && !reconnectRequested) { retry.playing(); message = "" }
+                                        if (!recorded) {
+                                            recorded = true
+                                            model.started(item)
+                                        }
+                                    }
+                                    MediaPlayer.Event.Paused -> {
+                                        paused = true
+                                        nativePlaying = false
+                                    }
+                                    MediaPlayer.Event.Vout -> {
+                                        if (event.voutCount > 0) {
+                                            Perf.since("channel", "channel_video_output_ready_vlc")
+                                        }
+                                        refreshCurrentSlave(p)
+                                    }
+                                    MediaPlayer.Event.ESAdded, MediaPlayer.Event.ESDeleted, MediaPlayer.Event.ESSelected -> {
+                                        refreshCurrentSlave(p)
+                                    }
+                                    MediaPlayer.Event.EncounteredError -> {
+                                        nativePlaying = false
+                                        focusOwner.stopped(item.kind == "LIVE")
+                                        if (item.kind == "LIVE") reconnect()
+                                        else {
+                                            terminalError = true
+                                            message = "VLC bu yayını oynatamadı."
+                                            panel = true
+                                        }
+                                    }
+                                    MediaPlayer.Event.EndReached -> {
+                                        nativePlaying = false
+                                        focusOwner.stopped(item.kind == "LIVE")
+                                        if (liveShouldReconnect(item.kind, LivePlaybackSignal.END_REACHED,
+                                                ownStop = ownStop, paused = paused)) reconnect()
+                                        if (item.kind != "LIVE") {
+                                            completed = true
+                                            model.progress(item, p.length, p.length)
+                                        }
+                                        if (item.kind == "EPISODE") {
+                                            fullscreen.finished = group.nextItem(item) != null
+                                            episodeEnded()
+                                        }
+                                    }
+                                    MediaPlayer.Event.Stopped -> {
+                                        nativePlaying = false
+                                        focusOwner.stopped(item.kind == "LIVE")
+                                        android.util.Log.d("LumenaraVlc", "playback Stopped generation=$mediaGeneration")
+                                        if (liveShouldReconnect(item.kind, LivePlaybackSignal.STOPPED,
+                                                ownStop = ownStop, paused = paused)) reconnect()
                                     }
                                 }
-                                MediaPlayer.Event.Paused -> {
-                                    paused = true
-                                    nativePlaying = false
-                                    liveProgress = LiveProgress()
-                                }
-                                MediaPlayer.Event.Vout -> {
-                                    if (event.voutCount > 0) {
-                                        Perf.since("channel", "channel_video_output_ready_vlc")
-                                    }
-                                    refreshCurrentSlave(p)
-                                }
-                                MediaPlayer.Event.ESAdded, MediaPlayer.Event.ESDeleted, MediaPlayer.Event.ESSelected -> {
-                                    refreshCurrentSlave(p)
-                                }
-                                MediaPlayer.Event.EncounteredError -> {
-                                    nativePlaying = false
-                                    focusOwner.stopped(item.kind == "LIVE")
-                                    if (item.kind == "LIVE") reconnect()
-                                    else {
-                                        message = "VLC bu yayını oynatamadı."
-                                        panel = true
-                                    }
-                                }
-                                MediaPlayer.Event.EndReached -> {
-                                    nativePlaying = false
-                                    focusOwner.stopped(item.kind == "LIVE")
-                                    if (liveShouldReconnect(item.kind, LivePlaybackSignal.END_REACHED,
-                                            ownStop = ownStop, paused = paused)) reconnect()
-                                    if (item.kind != "LIVE") {
-                                        completed = true
-                                        model.progress(item, p.length, p.length)
-                                    }
-                                    if (item.kind == "EPISODE") {
-                                        fullscreen.finished = group.nextItem(item) != null
-                                        episodeEnded()
-                                    }
-                                }
-                                MediaPlayer.Event.Stopped -> {
-                                    nativePlaying = false
-                                    focusOwner.stopped(item.kind == "LIVE")
-                                    android.util.Log.d("LumenaraVlc", "playback Stopped generation=$mediaGeneration")
-                                    if (liveShouldReconnect(item.kind, LivePlaybackSignal.STOPPED,
-                                            ownStop = ownStop, paused = paused)) reconnect()
-                                }
+                                refreshCurrentUi(p)
                             }
-                            refreshCurrentUi(p)
                         }
+                        val needsSurface = player !== p
+                        activeMediaId = item.id
+                        mediaGeneration++
+                        player = p
+                        if (needsSurface) p.attachViews(surface, null, true, false)
+                        // libVLC may also call play() from its surface-created callback.
+                        // Serialize that callback and the initial request on Main.
+                        if (session.wantsPlay) focusOwner.play() else focusOwner.pause()
+                        android.util.Log.d("LumenaraVlc", "playback play requested generation=$mediaGeneration")
                     }
-                    val needsSurface = player !== p
-                    activeMediaId = item.id
-                    mediaGeneration++
-                    player = p
-                    if (needsSurface) p.attachViews(surface, null, true, false)
-                    // libVLC may also call play() from its surface-created callback.
-                    // Serialize that callback and the initial request on Main.
-                    if (session.wantsPlay) focusOwner.play() else focusOwner.pause()
-                    android.util.Log.d("LumenaraVlc", "playback play requested generation=$mediaGeneration")
-                }
-                // Vout only means output creation. Stats are explicitly enabled by VlcRuntime.
-                // Read native stats off Main, with a fixed bound and attempt-owned cancellation.
-                if (Perf.transitions.zapPending(perfRequest)) launch(Dispatchers.IO) {
-                    val media = p.media
-                    try {
-                        repeat(600) {
-                            ensureActive()
-                            if ((media?.stats?.displayedPictures ?: 0) > 0) {
-                                withContext(Dispatchers.Main.immediate) {
-                                    Perf.transitions.zapFirstFrame(perfRequest, "vlc")
+                    // Vout only means output creation. Stats are explicitly enabled by VlcRuntime.
+                    // Read native stats off Main, with a fixed bound and attempt-owned cancellation.
+                    val measureFrame = Perf.transitions.zapPending(perfRequest)
+                    launch(Dispatchers.IO) {
+                        val media = p.media
+                        try {
+                            repeat(600) {
+                                ensureActive()
+                                if (!measureFrame && watchdog.prepared) return@launch
+                                if ((media?.stats?.displayedPictures ?: 0) > 0) {
+                                    withContext(Dispatchers.Main.immediate) {
+                                        watchdog.firstFrame()
+                                        Perf.transitions.zapFirstFrame(perfRequest, "vlc")
+                                    }
+                                    return@launch
                                 }
-                                return@launch
+                                delay(50)
                             }
-                            delay(50)
-                        }
-                    } finally { media?.release() }
-                }
-                var lastSavedAtMs = 0L
-                wallClockTicks(if (item.kind == "LIVE") 500 else 5000).collect {
-                    val now = android.os.SystemClock.elapsedRealtime()
-                    val playing = p.isPlaying
-                    val time = p.time
-                    liveProgress = liveProgress.sample(time, now,
-                        active = playing && !paused && !reconnectRequested)
-                    if (liveShouldReconnect(item.kind, ownStop = ownStop, paused = paused,
-                            playing = playing, positionAdvanced = liveProgress.positionAdvanced,
-                            unchangedForMs = liveProgress.unchangedForMs(now))) reconnect()
-                    if (playing && now - lastSavedAtMs >= 5000) {
-                        lastSavedAtMs = now
-                        session.capture(binding, bindingId, time, p.length)?.let {
-                            model.progress(item, it.position, it.duration)
+                        } finally { media?.release() }
+                    }
+                    var lastSavedAtMs = 0L
+                    wallClockTicks(if (item.kind == "LIVE") 500 else 5000).collect {
+                        val now = android.os.SystemClock.elapsedRealtime()
+                        val playing = p.isPlaying
+                        if (playing && now - lastSavedAtMs >= 5000) {
+                            lastSavedAtMs = now
+                            session.capture(binding, bindingId, p.time, p.length)?.let {
+                                model.progress(item, it.position, it.duration)
+                            }
                         }
                     }
                 }
@@ -604,7 +615,8 @@ internal fun VlcScreen(
                     retry.stop()
                     unsupportedLive()
                 } else if (item.kind != "LIVE" || e !is java.io.IOException || !retry.failed()) {
-                    message = "VLC bu kaynakta TS, MKV veya konumlandırılabilir MP4 dosyası gerektirir."
+                    message = if (e is Wp09PlaybackTimeoutException) "Yayın yanıt vermedi. Yeniden deneyin."
+                        else "VLC bu kaynakta TS, MKV veya konumlandırılabilir MP4 dosyası gerektirir."
                     panel = true
                 }
             } finally {

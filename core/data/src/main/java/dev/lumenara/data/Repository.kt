@@ -2,7 +2,6 @@ package dev.lumenara.data
 
 import android.content.Context
 import android.net.Uri
-import androidx.room.Room
 import androidx.room.InvalidationTracker
 import androidx.room.withTransaction
 import androidx.work.*
@@ -23,7 +22,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.isActive
+import kotlinx.coroutines.cancel
 import org.json.JSONObject
 import org.json.JSONException
 
@@ -58,10 +57,7 @@ data class LiveWindow(val rows: List<Item>, val revision: Long, val hidden: List
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class Repository private constructor(private val context: Context) {
-    private val db = Room.databaseBuilder(context, LibraryDb::class.java, "lumenara.db")
-        .addMigrations(LibraryDb.MIGRATION_7_8, LibraryDb.MIGRATION_8_9, LibraryDb.MIGRATION_9_10,
-            LibraryDb.MIGRATION_10_11, LibraryDb.MIGRATION_11_12, LibraryDb.MIGRATION_12_13)
-        .build()
+    private val db = LibraryDb.build(context)
     val library = db.library()
     val guide = db.guide()
     private val vault = Vault(context)
@@ -89,11 +85,18 @@ class Repository private constructor(private val context: Context) {
         override suspend fun clearPending() = db.restoreJournal().clear()
         override suspend fun <T> transaction(block: suspend () -> T): T = db.withTransaction { block() }
     })
-    // Constructors and workers must not expose Room/preferences until crash recovery finishes.
-    init { kotlinx.coroutines.runBlocking(Dispatchers.IO) {
-        StartupPerf.measure("startup_room_open") { db.openHelper.writableDatabase }
-        StartupPerf.measure("startup_room_recovery") { restoreTransaction.recover() }
-    } }
+    // Called on IO by the process coordinator, before publishing this instance.
+    private suspend fun recoverBeforePublication() {
+        try {
+            StartupPerf.measure("startup_room_open") { db.openHelper.writableDatabase }
+            StartupPerf.measure("startup_room_recovery") { restoreTransaction.recover() }
+        } catch (error: Throwable) {
+            catalogScope.cancel()
+            liveScope.cancel()
+            db.close()
+            throw error
+        }
+    }
     private val catalogScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val catalog = CatalogStreams(library.visibleAdultCategoryNames(),
         { kind, source, hidden -> library.categoryCounts(kind, source, hidden) },
@@ -402,24 +405,22 @@ class Repository private constructor(private val context: Context) {
                     val backfill = VersionBackfill(db)
                     val derived = CatalogDerivedBackfill(db)
                     var started = false
-                    while (currentCoroutineContext().isActive) {
-                        if (!RefreshGate.foreground || RefreshGate.playing || imports.userWaiting) {
-                            delay(500)
-                            continue
+                    var versionsPending = true
+                    Wp07MaintenanceRunner(backgroundWork, { imports.userWaiting },
+                        android.os.SystemClock::elapsedRealtime) { limit ->
+                        if (!started) {
+                            started = true
+                            StartupPerf.duration("startup_catalog_backfill_started", 0)
                         }
-                        val more = backgroundWork.whenIdle {
-                            if (!started) {
-                                started = true
-                                StartupPerf.duration("startup_catalog_backfill_started", 0)
-                            }
-                            if (imports.userWaiting) true else if (backfill.runBatch()) true else {
-                                val source = db.derived().pendingSource()
-                                if (source == null) false else { derived.runBatch(source); true }
-                            }
+                        // Never start two transactions under one gate check.
+                        if (versionsPending) {
+                            versionsPending = backfill.runBatch(limit, timeBudgetMs = 20)
+                            true
+                        } else {
+                            val source = db.derived().pendingSource()
+                            if (source == null) false else { derived.runBatch(source, limit); true }
                         }
-                        if (!more) break
-                        delay(50)
-                    }
+                    }.run()
                 } catch (error: kotlinx.coroutines.CancellationException) {
                     throw error
                 } catch (_: Exception) {
@@ -471,11 +472,25 @@ class Repository private constructor(private val context: Context) {
     companion object {
         @Volatile private var instance: Repository? = null
 
-        fun get(context: Context): Repository =
-            instance
-                ?: synchronized(this) {
-                    instance ?: Repository(context.applicationContext).also { instance = it }
+        @Volatile private var coordinator: StartupCoordinator? = null
+
+        fun startup(context: Context): StartupCoordinator = coordinator ?: synchronized(this) {
+            coordinator ?: StartupCoordinator {
+                Repository(context.applicationContext).also {
+                    it.recoverBeforePublication()
+                    instance = it
                 }
+            }.also { coordinator = it }
+        }
+
+        /** Memory callbacks must only peek: no lock, allocation, Room or recovery. */
+        fun readyInstance(): Repository? = instance
+
+        suspend fun awaitReady(context: Context): Repository = startup(context).awaitReady()
+
+        // Compatibility for existing non-suspending callers. UI startup uses awaitReady.
+        fun get(context: Context): Repository = instance
+            ?: kotlinx.coroutines.runBlocking { awaitReady(context) }
     }
 
     suspend fun add(name: String, spec: SourceSpec, progress: ImportProgress? = null) =
@@ -1040,6 +1055,24 @@ class Repository private constructor(private val context: Context) {
         (siblings + item).distinctBy { it.id }.forEach { library.save(result.copy(id = it.id)) }
     }
 
+    private val pendingRefresh by lazy {
+        Wp07PendingRefresh(
+            read = { preferences.text(wp07PendingRefreshKey, "false").first().toBoolean() },
+            write = { preferences.set(wp07PendingRefreshKey, it.toString()) },
+            enqueueUnique = { workName -> withContext(Dispatchers.IO) {
+                WorkManager.getInstance(context).enqueueUniqueWork(workName, ExistingWorkPolicy.KEEP,
+                    OneTimeWorkRequestBuilder<RefreshWorker>()
+                        .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                        .setBackoffCriteria(BackoffPolicy.LINEAR, 30, TimeUnit.SECONDS)
+                        .setInputData(workDataOf(wp07PendingWorker to true)).build()).result.get()
+                Unit
+            } })
+    }
+    internal suspend fun requestPendingRefresh() = pendingRefresh.request()
+    internal suspend fun hasPendingRefresh() = pendingRefresh.isPending()
+    internal suspend fun completePendingRefresh() = pendingRefresh.completed()
+    suspend fun retryPendingRefresh() = pendingRefresh.retryIfPending()
+
     suspend fun schedule(hours: Long, checkNow: Boolean = false): Unit = withContext(Dispatchers.IO) {
         val constraints =
             Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
@@ -1048,6 +1081,7 @@ class Repository private constructor(private val context: Context) {
                 .setInitialDelay(hours, TimeUnit.HOURS)
                 .setConstraints(constraints)
                 .build()
+        retryPendingRefresh()
         val manager = WorkManager.getInstance(context)
         manager.enqueueUniquePeriodicWork("iptv", ExistingPeriodicWorkPolicy.UPDATE, request)
         if (
@@ -1069,58 +1103,61 @@ class Repository private constructor(private val context: Context) {
 }
 
 class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
-    private fun postponeIfBusy(forceAll: Boolean = false): Result? {
+    private val legacyPendingWorker: Boolean get() = inputData.getLong("deferUntil", 0) > 0
+    private val isPendingWorker: Boolean get() = inputData.getBoolean(wp07PendingWorker, false) || legacyPendingWorker
+
+    private suspend fun postponeIfBusy(repo: Repository): Result? {
         if (!RefreshGate.busy) return null
-        val now = System.currentTimeMillis()
-        val deadline = inputData.getLong("deferUntil", 0).takeIf { it > 0 }
-            ?: (now + TimeUnit.MINUTES.toMillis(30))
-        if (RefreshGate.defer(now, deadline)) {
-            WorkManager.getInstance(applicationContext).enqueueUniqueWork(
-                "deferred-refresh", ExistingWorkPolicy.APPEND_OR_REPLACE,
-                OneTimeWorkRequestBuilder<RefreshWorker>()
-                    .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-                    .setInitialDelay(minOf(TimeUnit.MINUTES.toMillis(5), deadline - now), TimeUnit.MILLISECONDS)
-                    .setInputData(workDataOf("deferUntil" to deadline,
-                        "staleHours" to if (forceAll) 0L else inputData.getLong("staleHours", 0)))
-                    .build())
-        }
-        // At 30 minutes skip this occurrence, rather than starting heavy work during playback.
-        return Result.success()
+        repo.requestPendingRefresh()
+        // A pending worker retains its own durable WorkManager request indefinitely.
+        // Periodic/startup occurrences hand off to that unique request and finish.
+        return if (isPendingWorker) Result.retry() else Result.success()
     }
 
     private class RefreshBusy : kotlinx.coroutines.CancellationException()
 
-    override suspend fun doWork(): Result = coroutineScope {
-        val refresh = async { refreshSources() }
-        val monitor = launch {
-            while (refresh.isActive) {
-                delay(500)
-                if (RefreshGate.busy) {
-                    refresh.cancel(RefreshBusy())
-                    break
-                }
-            }
-        }
+    override suspend fun doWork(): Result = wp07RefreshWorkerLock.withLock {
         try {
-            refresh.await()
-        } catch (_: RefreshBusy) {
-            // Cancellation may follow a catalog commit but precede its guide; resume both.
-            postponeIfBusy(forceAll = true) ?: Result.retry()
-        } finally {
-            monitor.cancel()
+            val repo = Repository.awaitReady(applicationContext)
+            coroutineScope {
+                val refresh = async { refreshSources(repo) }
+                val monitor = launch {
+                    while (refresh.isActive) {
+                        delay(500)
+                        if (RefreshGate.busy) {
+                            refresh.cancel(RefreshBusy())
+                            break
+                        }
+                    }
+                }
+                try { refresh.await() }
+                catch (_: RefreshBusy) {
+                    // A commit may precede cancellation of its guide. Retry all sources.
+                    repo.requestPendingRefresh()
+                    if (isPendingWorker) Result.retry() else Result.success()
+                } finally { monitor.cancel() }
+            }
+        } catch (error: kotlinx.coroutines.CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            // Includes recovery/DataStore/enqueue failures; never acknowledge lost work.
+            Result.retry()
         }
     }
 
-    private suspend fun refreshSources(): Result {
-        postponeIfBusy()?.let { return it }
-        val repo = Repository.get(applicationContext)
+    private suspend fun refreshSources(repo: Repository): Result {
+        // Requests persisted by the previous version also adopt the non-expiring policy.
+        if (legacyPendingWorker && !repo.hasPendingRefresh()) repo.requestPendingRefresh()
+        if (isPendingWorker && !repo.hasPendingRefresh()) return Result.success()
+        postponeIfBusy(repo)?.let { return it }
+        val forceAll = repo.hasPendingRefresh()
         var failed = false
         val prefs = Preferences(applicationContext)
         for (source in repo.library.snapshot()) {
-            postponeIfBusy()?.let { return it }
+            postponeIfBusy(repo)?.let { return it }
             val threshold = inputData.getLong("staleHours", 0)
             if (
-                threshold > 0 &&
+                !forceAll && threshold > 0 &&
                     runAttemptCount == 0 &&
                     System.currentTimeMillis() - source.refreshed <
                         TimeUnit.HOURS.toMillis(threshold)
@@ -1137,8 +1174,10 @@ class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorke
                 prefs.set("sync_${source.id}", "Yenileme başarısız")
             }
         }
+        if (!failed) repo.completePendingRefresh()
         return when {
             !failed -> Result.success()
+            isPendingWorker -> Result.retry()
             runAttemptCount < 2 -> Result.retry()
             else -> Result.failure()
         }

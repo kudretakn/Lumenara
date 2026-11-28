@@ -216,8 +216,8 @@ internal fun PrefetchArtwork(model: LibraryModel, grid: LazyGridState, rows: Lis
                 val width = if (item.kind == "LIVE") (28 * px).roundToInt() else size.width
                 val height = if (item.kind == "LIVE") width else (width * 1.5f).toInt()
                 val useLogo = item.kind == "LIVE" && currentLogo != null
-                backgroundWork.whenIdle {
-                    val address = (if (useLogo) logo else model.repo.poster(item)) ?: return@whenIdle
+                backgroundWork.speculative {
+                    val address = (if (useLogo) logo else model.repo.poster(item)) ?: return@speculative
                     context.imageLoader.execute(artworkRequest(context, address, allow, width, height))
                 }
             }

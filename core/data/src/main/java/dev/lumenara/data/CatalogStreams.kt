@@ -22,29 +22,29 @@ internal class CatalogStreams(
         val start = System.nanoTime()
         try { if (show) emptyList() else if (preclassified) names else names.filter(::isAdultCategory) }
         finally { traceWork("startup_default_work_hidden_categories", (System.nanoTime() - start) / 1_000_000) }
-    }.distinctUntilChanged().stateIn(scope, SharingStarted.Lazily, null).filterNotNull()
+    }.distinctUntilChanged().stateIn(scope, SharingStarted.WhileSubscribed(0, replayExpirationMillis = 0), null).filterNotNull()
 
-    private val sharedCounts = mutableMapOf<Pair<String, String>, Flow<List<LiveCategoryCount>>>()
-    private val sharedSourceCounts = mutableMapOf<String, Flow<List<KindCategoryCount>>>()
-
-    private fun countsForSource(source: String): Flow<List<KindCategoryCount>> = synchronized(sharedSourceCounts) {
-        sharedSourceCounts.getOrPut(source) {
-            hidden.flatMapLatest { sourceCounts(source, it) }.distinctUntilChanged()
-                .stateIn(scope, SharingStarted.Lazily, null).filterNotNull()
-        }
+    private class SourceStreams(val counts: Flow<List<KindCategoryCount>>) {
+        val kinds = mutableMapOf<String, Flow<List<LiveCategoryCount>>>()
     }
+    // One cache entry per source scope (including all-source). No sharing job survives
+    // an evicted scope's last observer; active screens retain their own valid flow.
+    private val sources = LinkedHashMap<String, SourceStreams>(8, .75f, true)
+    internal val cachedScopeCount: Int get() = synchronized(sources) { sources.size }
 
-    fun categoryCounts(kind: String, source: String): Flow<List<LiveCategoryCount>> = synchronized(sharedCounts) {
-        sharedCounts.getOrPut(kind to source) {
-            // Lazily stays subscribed between screens. Only catalog invalidation or a changed
-            // hidden list reruns SQL; another collector just receives the cached result.
+    fun categoryCounts(kind: String, source: String): Flow<List<LiveCategoryCount>> = synchronized(sources) {
+        val entry = sources.getOrPut(source) {
+            SourceStreams(hidden.flatMapLatest { sourceCounts(source, it) }
+                .distinctUntilChanged().wp07Observed(scope))
+        }
+        while (sources.size > 8) sources.remove(sources.keys.first())
+        entry.kinds.getOrPut(kind) {
             val groups = if (kind in listOf("LIVE", "MOVIE", "SERIES")) {
-                countsForSource(source).map { rows ->
+                entry.counts.map { rows ->
                     rows.filter { it.kind == kind }.map { LiveCategoryCount(it.category, it.count, it.searchKey) }
                 }
-            } else hidden.flatMapLatest { counts(kind, source, it) }
+            } else hidden.flatMapLatest { counts(kind, source, it) }.wp07Observed(scope)
             groups.distinctUntilChanged()
-                .stateIn(scope, SharingStarted.Lazily, null).filterNotNull()
         }
     }
 }

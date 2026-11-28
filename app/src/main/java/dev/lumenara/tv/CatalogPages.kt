@@ -3,6 +3,7 @@ package dev.lumenara.tv
 import androidx.compose.runtime.*
 import dev.lumenara.data.Item
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.*
 
 /** Absolute slots and a bounded Item window are independent of the Lazy layout's keys. */
@@ -67,14 +68,20 @@ internal fun rememberWindowPagesDriver(state: WindowPages,
     val currentTotal by rememberUpdatedState(total)
     val currentIndex by rememberUpdatedState(index)
     LaunchedEffect(state) {
-        state.anchor = currentIndex().coerceAtLeast(0)
-        state.center = checkNotNull(state.anchor) / state.pageSize
+        withContext(Dispatchers.Main.immediate) {
+            state.anchor = currentIndex().coerceAtLeast(0)
+            state.center = checkNotNull(state.anchor) / state.pageSize
+        }
     }
     LaunchedEffect(state) {
-        snapshotFlow { state.firstPageLoaded }.first { it }
-        // First indexed LIMIT has published visible cards before COUNT/adjacent work starts.
-        withFrameNanos { }; withFrameNanos { }
-        currentTotal().collect { state.count = it; state.countLoaded = true }
+        // Room can resume unconfined Compose test continuations on its query executor.
+        // Both page publication and snapshot observation belong to the UI dispatcher.
+        withContext(Dispatchers.Main.immediate) {
+            snapshotFlow { state.firstPageLoaded }.first { it }
+            // First indexed LIMIT has published visible cards before COUNT/adjacent work starts.
+            withFrameNanos { }; withFrameNanos { }
+            currentTotal().collect { state.count = it; state.countLoaded = true }
+        }
     }
     if (state.anchor != null) {
         val range = state.range()
@@ -84,7 +91,9 @@ internal fun rememberWindowPagesDriver(state: WindowPages,
         // Each retained subscription still refreshes on ordering/mark invalidation.
         for (pageIndex in range) key(state, pageIndex) {
             LaunchedEffect(state, pageIndex) {
-                currentPage(pageIndex, pageIndex).collect { rows -> state.installPage(pageIndex, rows) }
+                withContext(Dispatchers.Main.immediate) {
+                    currentPage(pageIndex, pageIndex).collect { rows -> state.installPage(pageIndex, rows) }
+                }
             }
         }
     }
@@ -95,7 +104,7 @@ internal fun rememberCatalogPages(model: LibraryModel, source: String, kind: Str
     category: String = "", query: String = "", shelf: String = "", year: String = "",
     genre: String = "", language: String = "", minRating: Double = 0.0,
     pageSize: Int = 80, columns: Int = 8, returnId: String? = null): CatalogPages {
-    val hidden by remember(model.repo) { model.repo.hidden }.collectAsState(initial = null)
+    val hidden by remember(model.repo) { model.repo.hidden }.collectAsState(initial = null, context = Dispatchers.Main.immediate)
     val state = remember(source, kind, category, query, shelf, year, genre, language, minRating, pageSize, columns, hidden) {
         CatalogPages(source, kind, category, query, shelf, pageSize, columns)
     }
