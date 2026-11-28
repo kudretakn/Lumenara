@@ -18,7 +18,7 @@ import org.junit.Test
 
 /** Small deterministic CI fixture. Actual 39,682-row API28 TV p95 remains a lead measurement. */
 class Wp19SearchCostTest {
-    @Test fun reportsAllocatedBytesBackfillRefreshAndFirstPageCost() = runBlocking {
+    @Test fun reportsAllocatedBytesBackfillRefreshAndFirstPageCost(): Unit = runBlocking {
         withTimeout(60_000) {
             val context = InstrumentationRegistry.getInstrumentation().targetContext
             val name = "wp19-cost-${System.nanoTime()}.db"
