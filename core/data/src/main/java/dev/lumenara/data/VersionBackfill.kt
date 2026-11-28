@@ -82,8 +82,9 @@ class VersionBackfill(private val db: LibraryDb, private val source: String? = n
     private val work = db.versionBackfill()
 
     /** True means another batch is needed; cancellation rolls back the cursor with its rows. */
-    suspend fun runBatch(limit: Int = 500): Boolean {
+    suspend fun runBatch(limit: Int = 500, timeBudgetMs: Long = Long.MAX_VALUE): Boolean {
         require(limit in 1..500)
+        require(timeBudgetMs > 0)
         var measured = false
         var done: VersionBackfillState? = null
         val batchStart = SystemClock.elapsedRealtime()
@@ -115,7 +116,10 @@ class VersionBackfill(private val db: LibraryDb, private val source: String? = n
                 "resolve" -> {
                     val rows = if (source == null) work.rows(state.cursor, limit)
                         else work.sourceRows(source, state.cursor, limit)
+                    var processed = 0
+                    var cursor = state.cursor
                     for (row in rows) {
+                        if (processed > 0 && SystemClock.elapsedRealtime() - start >= timeBudgetMs) break
                         val years = work.years(row.bucket)
                         val year = row.year.ifEmpty { years.singleOrNull().orEmpty() }
                         val ids = work.tmdbIds(row.bucket, year, years.size == 1)
@@ -131,20 +135,27 @@ class VersionBackfill(private val db: LibraryDb, private val source: String? = n
                             else -> "${row.bucket}|$year"
                         }
                         work.resolve(row.id, key)
+                        cursor = row.id
+                        processed++
                     }
                     next = if (rows.isEmpty()) state.copy(phase = "apply", cursor = "")
-                        else state.copy(cursor = rows.last().id)
+                        else state.copy(cursor = cursor)
                 }
                 "apply" -> {
                     val rows = if (source == null) work.rows(state.cursor, limit)
                         else work.sourceRows(source, state.cursor, limit)
-                    db.library().assignVersions(rows.map { row ->
+                    val assignments = ArrayList<VersionAssignment>()
+                    var cursor = state.cursor
+                    for (row in rows) {
+                        if (assignments.isNotEmpty() && SystemClock.elapsedRealtime() - start >= timeBudgetMs) break
                         val rank = work.rank(row.resolvedKey, row.audio, row.id)
-                        VersionAssignment(row.id, row.resolvedKey, rank == 0, row.title,
+                        assignments += VersionAssignment(row.id, row.resolvedKey, rank == 0, row.title,
                             row.year.ifEmpty { work.groupYears(row.resolvedKey).singleOrNull().orEmpty() }, rank)
-                    })
+                        cursor = row.id
+                    }
+                    db.library().assignVersions(assignments)
                     next = if (rows.isEmpty()) state.copy(phase = "clean", cursor = "")
-                        else state.copy(cursor = rows.last().id)
+                        else state.copy(cursor = cursor)
                 }
                 "clean" -> {
                     val deleted = if (source == null) work.clean(limit) else work.cleanSource(source, limit)

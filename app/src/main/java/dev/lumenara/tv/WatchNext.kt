@@ -111,7 +111,7 @@ internal class WatchNext private constructor(private val context: Context) {
     private val mutex = kotlinx.coroutines.sync.Mutex()
 
     internal suspend fun sync() = withContext(Dispatchers.IO) {
-        backgroundWork.run { publish() }
+        backgroundWork.speculative(allowBackground = true) { publish() }
     }
 
     private suspend fun publish() {
