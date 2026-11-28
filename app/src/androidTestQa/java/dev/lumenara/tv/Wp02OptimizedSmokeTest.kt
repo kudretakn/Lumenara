@@ -195,11 +195,13 @@ class Wp02OptimizedSmokeTest {
     }
 
     private fun openSources() {
-        for (attempt in 0 until 10) {
+        for (attempt in 0 until 4) {
             if (nodeWithTag("hub") != null) break
             device.pressBack()
             device.waitForIdle()
         }
+        // The voice-search player has no Hub behind it; Back may leave the app.
+        if (nodeWithTag("hub") == null) launch()
         await("Hub return") { nodeWithTag("hub") != null }
         activate { nodeWithTag("hub-Ayarlar") }
         activate { nodeWithTag("settings-group-Kaynaklar") }
