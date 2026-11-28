@@ -79,9 +79,16 @@ class LumenaraApp : Application(), ImageLoaderFactory, androidx.work.Configurati
     @androidx.annotation.OptIn(coil.annotation.ExperimentalCoilApi::class)
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        if (level >= TRIM_MEMORY_UI_HIDDEN) {
-            Repository.get(this).trim()
+        wp07TrimMemory(level, Repository::readyInstance, Repository::trim) {
             createdImageLoader?.memoryCache?.clear()
+        }
+    }
+
+    internal fun retryPendingRefresh() {
+        startupScope.launch {
+            try { Repository.readyInstance()?.retryPendingRefresh() }
+            catch (error: CancellationException) { throw error }
+            catch (_: Exception) { /* Durable intent remains for the next schedule/worker. */ }
         }
     }
 
@@ -112,6 +119,10 @@ object Services {
             Perf.since("startup_repository", "startup_repository_ready")
         }
     }
+
+    @Provides
+    @Singleton
+    fun startup(@ApplicationContext context: Context): StartupCoordinator = Repository.startup(context)
 
     @Provides
     @Singleton

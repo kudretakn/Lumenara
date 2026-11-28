@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.first
 internal fun LibraryScreen(model: LibraryModel = viewModel(), onFirstDraw: () -> Unit = {}) {
     val sources by model.sources.collectAsStateWithLifecycle()
     val startInSetup by model.startInSetup.collectAsStateWithLifecycle()
+    val startupState by model.startupState.collectAsStateWithLifecycle()
     val launchPending = sources == null || startInSetup == null
     var slowLaunch by remember(model) { mutableStateOf(false) }
     LaunchedEffect(model, launchPending) {
@@ -37,7 +38,10 @@ internal fun LibraryScreen(model: LibraryModel = viewModel(), onFirstDraw: () ->
     // Submit a cheap skeleton immediately; explain a slow migration without touching
     // the lazy repository or composing the navigation graph before its IO snapshot.
     if (launchPending) {
-        if (slowLaunch) MigrationLoadingScreen()
+        if (startupState is Wp07StartupState.Error) {
+            Text("Kitaplık açılamadı. Kurtarmayı yeniden denemek için uygulamayı yeniden başlatın.",
+                Modifier.padding(Spacing.screenHorizontal))
+        } else if (slowLaunch) MigrationLoadingScreen()
         else Column(Modifier.fillMaxSize().background(LumenColors.bg)
             .padding(horizontal = Spacing.screenHorizontal, vertical = Spacing.screenVertical),
             verticalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
@@ -61,6 +65,15 @@ internal fun LibraryScreen(model: LibraryModel = viewModel(), onFirstDraw: () ->
     var detail by remember { mutableStateOf<Item?>(null) }
     var playing by remember { mutableStateOf<Item?>(null) }
     val showingHub = section == "Ana Sayfa" && detail == null && playing == null
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(model, lifecycle, showingHub) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, _ ->
+            model.setHubVisible(showingHub && lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED))
+        }
+        lifecycle.addObserver(observer)
+        model.setHubVisible(showingHub && lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED))
+        onDispose { lifecycle.removeObserver(observer); model.setHubVisible(false) }
+    }
     LaunchedEffect(model, showingHub) {
         // Home releases the gate after its cheap history rows draw. Setup, restored screens
         // and playback/search intents must release it too, even if Home is never visited.

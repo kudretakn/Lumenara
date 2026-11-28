@@ -25,9 +25,13 @@ internal data class HubRows(val source: String, val rows: List<Item>)
 @dagger.hilt.android.lifecycle.HiltViewModel
 internal class LibraryModel
 @javax.inject.Inject
-constructor(private val repository: dagger.Lazy<Repository>, val prefs: Preferences) : androidx.lifecycle.ViewModel() {
+constructor(private val repository: dagger.Lazy<Repository>, val prefs: Preferences,
+    private val startup: StartupCoordinator = StartupCoordinator { repository.get() }) : androidx.lifecycle.ViewModel() {
     // Recovery must finish before exposing repository state, but never block Hilt/UI creation.
-    val repo: Repository get() = repository.get()
+    val repo: Repository get() = checkNotNull(startup.readyOrNull) { "Repository is not ready" }
+    val startupState = startup.state
+    private val hubVisible = MutableStateFlow(true)
+    fun setHubVisible(visible: Boolean) { hubVisible.value = visible }
     private val firstDraw = FirstDrawGate()
     val firstDrawn = firstDraw.drawn
     fun onFirstDraw() { firstDraw.onDraw(); backgroundWork.startup.onDraw() }
@@ -45,12 +49,14 @@ constructor(private val repository: dagger.Lazy<Repository>, val prefs: Preferen
     val startInSetup: StateFlow<Boolean?> = MutableStateFlow<Boolean?>(null).also { state ->
         viewModelScope.launch(Dispatchers.IO) {
             Perf.mark("startup_sources")
-            state.value = repo.sourceSnapshot().isEmpty()
+            try { state.value = startup.awaitReady().sourceSnapshot().isEmpty() }
+            catch (error: CancellationException) { throw error }
+            catch (_: Exception) { /* Startup state exposes the recovery error. */ }
             Perf.since("startup_sources", "startup_sources_ready")
         }
     }.asStateFlow()
-    val sources = flow { emitAll(withContext(Dispatchers.IO) { repo }.library.sources()) }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    val sources = flow { emitAll(startup.awaitReady().library.sources()) }
+        .wp07StartupErrors().stateIn(viewModelScope, SharingStarted.WhileSubscribed(500), null)
     private val hubScope = CoroutineScope(viewModelScope.coroutineContext + Dispatchers.IO)
     private val hubSource = MutableStateFlow("")
     fun selectHubSource(source: String) { hubSource.value = source }
@@ -59,29 +65,29 @@ constructor(private val repository: dagger.Lazy<Repository>, val prefs: Preferen
     // The source travels with the result so changing scope never flashes the old shelf.
     val hubRecent = hubSource.flatMapLatest { source -> flow {
         Perf.mark("startup_hub_recent")
-        emitAll(repo.recentLive(source).onEach {
+        emitAll(startup.awaitReady().recentLive(source).onEach {
             Perf.since("startup_hub_recent", "startup_hub_recent_ready")
         }.map { HubRows(source, it) })
-    } }.stateIn(hubScope, SharingStarted.Eagerly, null)
+    } }.wp07WhileVisible(hubVisible).wp07StartupErrors().stateIn(hubScope, SharingStarted.Eagerly, null)
     val hubResume = hubSource.flatMapLatest { source -> flow {
         Perf.mark("startup_hub_resume")
-        emitAll(repo.continueWatching(source).onEach {
+        emitAll(startup.awaitReady().continueWatching(source).onEach {
             Perf.since("startup_hub_resume", "startup_hub_resume_ready")
         }.map { HubRows(source, it) })
-    } }.stateIn(hubScope, SharingStarted.Eagerly, null)
+    } }.wp07WhileVisible(hubVisible).wp07StartupErrors().stateIn(hubScope, SharingStarted.Eagerly, null)
     val hubTotals = hubSource.flatMapLatest { source -> flow {
         Perf.mark("startup_hub_counts")
-        emitAll(repo.hubTotals(source).map { rows ->
+        emitAll(startup.awaitReady().hubTotals(source).map { rows ->
             Perf.since("startup_hub_counts", "startup_hub_counts_ready")
             source to rows.associate { it.kind to it.count }
         })
-    } }.stateIn(hubScope, SharingStarted.Eagerly, null)
+    } }.wp07WhileVisible(hubVisible).wp07StartupErrors().stateIn(hubScope, SharingStarted.Eagerly, null)
     val filter = MutableStateFlow(Filter())
     val results =
         filter
             .flatMapLatest { f ->
                 if (f.query.isNotEmpty()) delay(200)
-                repo.browse(
+                startup.awaitReady().browse(
                     f.source,
                     f.kind,
                     f.category,
@@ -117,10 +123,12 @@ constructor(private val repository: dagger.Lazy<Repository>, val prefs: Preferen
     init {
         viewModelScope.launch(Dispatchers.IO) {
             // Pending upgrades remain browsable through fallback queries while idle work waits.
+            sources.filterNotNull().first()
             backgroundReady.first { it }
             repo.startVersionBackfill()
         }
         viewModelScope.launch(Dispatchers.IO) {
+            sources.filterNotNull().first()
             backgroundReady.first { it }
             Perf.mark("startup_preferences")
             val hours = prefs.text("hours", "12").first().toLong()
