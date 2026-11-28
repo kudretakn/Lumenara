@@ -57,14 +57,22 @@ internal fun SearchScreen(
 ) {
     var lastShelf by rememberSaveable(source) { mutableStateOf<String?>(null) }
     var recentSearches by rememberSaveable(source) { mutableStateOf(listOf<String>()) }
+    var returnTarget by rememberSaveable(source, stateSaver = Wp08SearchReturn.Saver) {
+        mutableStateOf<Wp08SearchReturn?>(null)
+    }
     var restoring by remember { mutableStateOf(true) }
+    var restoreShelf by remember { mutableStateOf<String?>(null) }
     var fieldFocused by remember { mutableStateOf(false) }
     val entryFocus = remember { FocusRequester() }
     // The wide input's spatial centre can point at a later card. Keep DOWN on the
     // first absolute slot, including while the combined row separates into shelves.
     val firstResultFocus = remember { FocusRequester() }
     val resultsState = rememberLazyListState()
-    val firstResultsState = rememberLazyListState()
+    val catalogStates = mapOf(
+        "Kanallar" to rememberLazyListState(),
+        "Filmler" to rememberLazyListState(),
+        "Diziler" to rememberLazyListState(),
+    )
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) {
         if (lastShelf == null) {
@@ -76,6 +84,23 @@ internal fun SearchScreen(
     // Read raw text in the field's composition scope, not in the shelves' scope.
     val query = rememberSaveable { mutableStateOf("") }
     val queryBlank by remember { derivedStateOf { query.value.isBlank() } }
+    val queryTooShort by remember {
+        derivedStateOf { dev.lumenara.catalog.searchable(query.value).length < 2 }
+    }
+    LaunchedEffect(queryTooShort) {
+        if (queryTooShort) {
+            // Clearing a query also resets shelves that are currently offscreen.
+            (listOf(resultsState) + catalogStates.values).forEach { state ->
+                if (state.firstVisibleItemIndex != 0 || state.firstVisibleItemScrollOffset != 0) state.scrollToItem(0)
+            }
+            if (restoring && lastShelf != null) {
+                withFrameNanos { }
+                entryFocus.requestFocus()
+                restoring = false
+                restoreShelf = null
+            }
+        }
+    }
     val settledQuery by remember(source) {
         snapshotFlow { query.value }.debouncedSearchQuery().flowOn(Dispatchers.Default)
     }.collectAsStateWithLifecycle("")
@@ -108,16 +133,31 @@ internal fun SearchScreen(
     val pendingShelves = key(source, hidden) {
         if (settledQuery.isEmpty()) emptyList() else
             listOf("Kanallar" to "LIVE", "Filmler" to "MOVIE", "Diziler" to "SERIES").map { (title, kind) ->
-                title to rememberCatalogPages(model, source, kind, query = settledQuery, pageSize = 20, columns = 1)
+                title to rememberCatalogPages(model, source, kind, query = settledQuery, pageSize = 20, columns = 1,
+                    returnId = returnTarget?.takeIf {
+                        restoring && it.shelf == title && it.matches(source, settledQuery, hidden.orEmpty())
+                    }?.itemId)
             }
     }
     val shelves = key(source, hidden) {
         rememberSearchResults(settledQuery,
             pendingShelves.takeIf { rows -> rows.all { it.second.firstPageLoaded } }, emptyList())
     }
-    LaunchedEffect(source, shelves.map { it.second }) {
-        resultsState.scrollToItem(0)
-        firstResultsState.scrollToItem(0)
+    // Pager instances also change on return/visibility updates. Only a completed
+    // replacement query resets the viewports, including offscreen shelves.
+    var displayedQuery by remember {
+        mutableStateOf(returnTarget?.let { it.source to it.query })
+    }
+    val resultsQuery = shelves.firstOrNull()?.second?.let { it.source to it.query }
+    LaunchedEffect(resultsQuery) {
+        if (resultsQuery != null) {
+            if (displayedQuery != null && displayedQuery != resultsQuery) {
+                (listOf(resultsState) + catalogStates.values).forEach { state ->
+                    if (state.firstVisibleItemIndex != 0 || state.firstVisibleItemScrollOffset != 0) state.scrollToItem(0)
+                }
+            }
+            displayedQuery = resultsQuery
+        }
     }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { wallClockTicks(30_000).collect { now = it } }
@@ -138,15 +178,27 @@ internal fun SearchScreen(
         rememberSearchResults(settledQuery, programResult, emptyList())
     }
     val firstCatalogShelf = shelves.firstOrNull { it.second.count > 0 }?.first
+    val firstResultsState = firstCatalogShelf?.let { catalogStates.getValue(it) }
     LaunchedEffect(shelves, programs, loading) {
-        if (restoring && lastShelf != null && !loading) {
+        if (restoring && lastShelf != null && !loading && settledQuery.isNotEmpty()) {
             val visible = shelves.filter { it.second.count > 0 }.map { it.first } +
                 if (programs.isNotEmpty()) listOf("Programlar") else emptyList()
-            val index = visible.indexOf(lastShelf)
-            if (index >= 0) {
-                resultsState.scrollToItem(index)
+            val saved = returnTarget?.takeIf { it.matches(source, settledQuery, hidden.orEmpty()) }
+            // A removed/hidden shelf falls back to the first available shelf.
+            val target = saved?.shelf?.takeIf { it in visible }
+                ?: lastShelf?.takeIf { returnTarget == null && it in visible }
+                ?: visible.firstOrNull()
+            if (target == null) {
+                entryFocus.requestFocus()
                 restoring = false
-            } else if (visible.isEmpty()) entryFocus.requestFocus()
+            } else {
+                val index = visible.indexOf(target)
+                if (saved != null && target == saved.shelf) {
+                    resultsState.scrollToItem(saved.firstShelf, saved.shelfOffset)
+                } else resultsState.scrollToItem(index)
+                if (target == "Programlar") restoring = false
+                else restoreShelf = target
+            }
         }
     }
     val notice by model.notice.collectAsStateWithLifecycle()
@@ -164,7 +216,7 @@ internal fun SearchScreen(
                 {
                     scope.launch {
                         resultsState.scrollToItem(0)
-                        firstResultsState.scrollToItem(0)
+                        firstResultsState?.scrollToItem(0)
                         withFrameNanos { }
                         firstResultFocus.requestFocus()
                     }
@@ -213,7 +265,18 @@ internal fun SearchScreen(
                         if (!fieldFocused && title == "Kanallar") "channel-shelf-$title" else "search-shelf-$title",
                         { lastShelf = it }, open, play,
                         if (title == firstCatalogShelf) firstResultFocus else null,
-                        if (title == firstCatalogShelf) firstResultsState else rememberLazyListState())
+                        catalogStates.getValue(title),
+                        awaitingReturn = restoring,
+                        restore = if (restoreShelf == title) returnTarget?.takeIf {
+                            it.shelf == title && it.matches(source, settledQuery, hidden.orEmpty())
+                        } else null,
+                        restoreFirst = restoreShelf == title,
+                        onRestored = { restoring = false; restoreShelf = null },
+                        onActivate = { shelf, item, index, first, offset ->
+                            returnTarget = Wp08SearchReturn(source, settledQuery, shelf, item.id, index,
+                                first, offset, resultsState.firstVisibleItemIndex,
+                                resultsState.firstVisibleItemScrollOffset, hidden.orEmpty().toList())
+                        })
                 }
             }
             if (programs.isNotEmpty()) item(key = "programs") {
@@ -223,6 +286,7 @@ internal fun SearchScreen(
                         contentPadding = PaddingValues(8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         items(programs, key = { (hit, _) -> "${hit.itemId}:${hit.slot.feed}:${hit.slot.channel}:${hit.slot.start}" }) { (hit, channel) ->
                             ProgramCard(hit, channel, now, { lastShelf = "Programlar" }) {
+                                returnTarget = null
                                 val slot = hit.slot
                                 val atClick = System.currentTimeMillis()
                                 when {
@@ -304,7 +368,39 @@ internal fun SearchPagingRow(
     play: (Item, List<Item>) -> Unit,
     firstResult: FocusRequester? = null,
     state: LazyListState = rememberLazyListState(),
+    awaitingReturn: Boolean = false,
+    restore: Wp08SearchReturn? = null,
+    restoreFirst: Boolean = false,
+    onRestored: () -> Unit = {},
+    onActivate: (String, Item, Int, Int, Int) -> Unit = { _, _, _, _, _ -> },
 ) {
+    val returnFocus = remember { FocusRequester() }
+    val restorePages = shelves.firstOrNull()?.second
+    var missingReturnId by remember(restorePages, restore) { mutableStateOf(false) }
+    val returnIndex = if (restore != null && !missingReturnId) restorePages?.anchor ?: 0 else 0
+    LaunchedEffect(restoreFirst, restorePages, returnIndex) {
+        if (restoreFirst && restorePages != null) {
+            // A distant first page initially exposes only its end as the provisional
+            // count. Wait for the total so LazyRow cannot clamp the saved offset.
+            snapshotFlow { restorePages.countLoaded && restorePages[returnIndex] != null }.first { it }
+            val sameItem = restorePages[returnIndex]?.id == restore?.itemId
+            if (restore != null && !sameItem && returnIndex != 0) {
+                // Refresh may remove the ID between the index probe and page read.
+                missingReturnId = true
+                restorePages.focused(0)
+                return@LaunchedEffect
+            }
+            val (first, offset) = restore?.viewport(returnIndex, sameItem) ?: (0 to 0)
+            if (state.firstVisibleItemIndex != first || state.firstVisibleItemScrollOffset != offset) {
+                state.scrollToItem(first, offset)
+            }
+            // Layout must attach the target slot before the one return focus request.
+            snapshotFlow { state.layoutInfo.visibleItemsInfo.any { it.index == returnIndex } }.first { it }
+            withFrameNanos { }
+            returnFocus.requestFocus()
+            onRestored()
+        }
+    }
     val counts = shelves.map { it.second.count }
     fun slot(index: Int): Pair<Int, Int> {
         var local = index
@@ -314,7 +410,8 @@ internal fun SearchPagingRow(
         }
         return shelves.lastIndex to local
     }
-    LaunchedEffect(state, shelves, counts) {
+    LaunchedEffect(state, shelves, counts, awaitingReturn) {
+        if (awaitingReturn) return@LaunchedEffect
         snapshotFlow { state.layoutInfo.visibleItemsInfo.map { it.index } }
             .distinctUntilChanged().collect { indices ->
                 indices.groupBy { slot(it).first }.forEach { (shelf, visible) ->
@@ -322,7 +419,7 @@ internal fun SearchPagingRow(
                 }
             }
     }
-    LazyRow(Modifier.testTag(tag).focusRestorer().focusGroup(), state = state,
+    LazyRow(Modifier.testTag(tag).reportScrollPosition(state).focusRestorer().focusGroup(), state = state,
         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         items(counts.sum(), key = { index ->
@@ -339,11 +436,18 @@ internal fun SearchPagingRow(
                 else -> Modifier
             }
             Box(wrapper) {
-                SearchResultCard(model, entry, "$title:$local", if (index == 0) firstResult else null, {
+                SearchResultCard(model, entry, "$title:$local", when {
+                    restoreFirst && index == returnIndex -> returnFocus
+                    index == 0 -> firstResult
+                    else -> null
+                }, {
                     pages.focused(local)
                     focus(title)
                 }) {
-                    entry?.let { if (title == "Kanallar") play(it, pages.loaded()) else open(it) }
+                    entry?.let {
+                        onActivate(title, it, local, state.firstVisibleItemIndex, state.firstVisibleItemScrollOffset)
+                        if (title == "Kanallar") play(it, pages.loaded()) else open(it)
+                    }
                 }
             }
         }
@@ -354,17 +458,13 @@ internal fun SearchPagingRow(
 @Composable
 private fun SearchResultCard(model: LibraryModel, item: Item?, slot: String,
     entryFocus: FocusRequester?, focus: () -> Unit, click: () -> Unit) {
-    var restoreFocus by rememberSaveable(slot) { mutableStateOf(false) }
     val ownRequester = remember { FocusRequester() }
     val requester = entryFocus ?: ownRequester
-    LaunchedEffect(Unit) {
-        if (restoreFocus) { withFrameNanos { }; requester.requestFocus(); restoreFocus = false }
-    }
     Column(Modifier.width(140.dp)) {
         // The resting slot is measured separately from the 1.06 focus transform.
         Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f)
             .then(if (item == null) Modifier else Modifier.testTag("search-artwork-${item.id}"))) {
-            FocusCard({ if (item != null) { restoreFocus = true; click() } }, Modifier.fillMaxSize().focusRequester(requester)
+            FocusCard({ if (item != null) click() }, Modifier.fillMaxSize().focusRequester(requester)
                 .testTag("search-slot-$slot")
                 .semantics { contentDescription = item?.title ?: "Yükleniyor" }
                 .onFocusChanged { if (it.isFocused) focus() }) {
