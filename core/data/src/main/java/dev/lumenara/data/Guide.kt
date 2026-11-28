@@ -46,6 +46,7 @@ data class Slot(
 @Entity(
     tableName = "epgNames",
     primaryKeys = ["feed", "channel", "name"],
+    indices = [Index("feed", "name", "channel")],
     foreignKeys =
         [
             ForeignKey(
@@ -94,11 +95,8 @@ interface GuideDao {
     @Query("SELECT id,title,tvgId,search,source,category FROM items WHERE kind='LIVE' AND category NOT IN (:hidden) AND (:source='' OR source=:source)")
     fun searchChannels(source: String, hidden: List<String> = emptyList()): Flow<List<GuideChannel>>
 
-    @Query("""SELECT p.* FROM programmes p JOIN feeds f ON p.feed=f.id
-        WHERE (:source='' OR f.source=:source) AND instr(p.search,:query)>0 AND p.end>:from
-        ORDER BY CASE WHEN p.start<=:now AND p.end>:now THEN 0 WHEN p.start>:now THEN 1 ELSE 2 END,
-            CASE WHEN p.end>:now THEN p.start END, p.start DESC, p.feed, p.channel LIMIT 400""")
-    fun searchSlots(source: String, query: String, from: Long, now: Long): Flow<List<Slot>>
+    @RawQuery(observedEntities = [Slot::class])
+    fun searchHits(query: androidx.sqlite.db.SupportSQLiteQuery): Flow<List<ProgramHit>>
 
     @Query("""SELECT p.* FROM programmes p JOIN feeds f ON p.feed=f.id
         WHERE (:source='' OR f.source=:source) AND p.start<=:now AND p.end>:now""")

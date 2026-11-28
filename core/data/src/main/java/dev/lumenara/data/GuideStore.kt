@@ -1,6 +1,5 @@
 package dev.lumenara.data
 
-import dev.lumenara.catalog.searchable
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
@@ -38,11 +37,19 @@ class GuideStore(
     }
 
     fun searchPrograms(source: String, query: String, times: Flow<Pair<Long, Long>>): Flow<List<ProgramHit>> =
-        combine(resolver(source), hidden, times.distinctUntilChanged().flatMapLatest { (from, at) ->
-            dao.searchSlots(source, searchable(query), from, at).map { Triple(from, at, it) }
-        }) { resolver, hidden, timed ->
-            measured("startup_default_work_guide_search") {
-                resolver.searchPrograms(timed.third, query, timed.first, timed.second, hidden)
+        combine(resolver(source), hidden, times.distinctUntilChanged()) { resolver, hidden, timed ->
+            resolver.searchTargets(hidden) to timed
+        }.distinctUntilChanged().flatMapLatest { (targets, timed) ->
+            val (from, at) = timed
+            val queries = targets.chunked(WP13_GUIDE_SEARCH_TARGETS).map { page ->
+                dao.searchHits(wp13GuideSearchQuery(page, query, from, at))
+            }
+            if (queries.isEmpty()) flowOf(emptyList()) else combine(queries) { pages ->
+                measured("startup_default_work_guide_search") {
+                    // A global top 60 can only contain a chunk's local top 60.
+                    // Both SQL and this merge use the resolver's complete tie order.
+                    pages.asSequence().flatten().sortedWith(wp13ProgramHitOrder(at)).take(60).toList()
+                }
             }
         }.distinctUntilChanged().flowOn(Dispatchers.Default)
 

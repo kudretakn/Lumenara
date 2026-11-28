@@ -23,7 +23,12 @@ class MigrationTest {
     }
 
     @Test
-    fun currentSchemaReopensWithoutChangingUserState() = verifyUpgrade(13)
+    fun currentSchemaReopensWithoutChangingUserState() {
+        // Keep the recovery harness's existing method inventory while covering both
+        // the last published schema's index-only upgrade and the current reopen.
+        verifyUpgrade(13)
+        verifyUpgrade(14)
+    }
 
     @Test
     fun versionSevenUnrefreshedVersionsAreGroupedWithoutLosingStreamsOrMarks() = verifyUpgrade(7)
@@ -93,16 +98,20 @@ class MigrationTest {
                         versionRank=CASE WHEN id='dub' THEN 0 ELSE 1 END WHERE kind='MOVIE'""")
                 }
                 if (from == 12) db.execSQL("INSERT INTO version_backfill_state VALUES (1,'done','',0,0)")
-                if (from == 13) db.execSQL("INSERT INTO version_backfill_state VALUES (1,'normalize','',0,0)")
+                if (from >= 13) db.execSQL("INSERT INTO version_backfill_state VALUES (1,'normalize','',0,0)")
                 if (from >= 7) {
                     db.execSQL("INSERT INTO feeds VALUES ('guide','local','opaque')")
                     db.execSQL("INSERT INTO programmes VALUES ('guide','1',100,200,'Program','Description','program')")
+                    db.execSQL("INSERT INTO epgNames VALUES ('guide','1','baslik')")
+                    db.execSQL("INSERT INTO mappings VALUES ('item','guide','1')")
+                    db.execSQL("INSERT INTO collections VALUES ('item','Fixture')")
                 }
                 db.version = from
             }
             val db = Room.databaseBuilder(context, LibraryDb::class.java, name)
                 .addMigrations(LibraryDb.MIGRATION_7_8, LibraryDb.MIGRATION_8_9, LibraryDb.MIGRATION_9_10,
-                    LibraryDb.MIGRATION_10_11, LibraryDb.MIGRATION_11_12, LibraryDb.MIGRATION_12_13).build()
+                    LibraryDb.MIGRATION_10_11, LibraryDb.MIGRATION_11_12, LibraryDb.MIGRATION_12_13,
+                    LibraryDb.MIGRATION_13_14).build()
             try {
                 runBlocking {
                     assertEquals(250L, db.library().mark("item")?.position)
@@ -151,7 +160,11 @@ class MigrationTest {
                     val columns = buildList { while (cursor.moveToNext()) add(cursor.getString(2)) }
                     assertEquals(listOf("start"), columns)
                 }
-                assertEquals(13, db.openHelper.readableDatabase.version)
+                db.openHelper.readableDatabase.query("PRAGMA index_info(index_epgNames_feed_name_channel)").use { cursor ->
+                    val columns = buildList { while (cursor.moveToNext()) add(cursor.getString(2)) }
+                    assertEquals(listOf("feed", "name", "channel"), columns)
+                }
+                assertEquals(14, db.openHelper.readableDatabase.version)
                 db.openHelper.readableDatabase.query("PRAGMA foreign_key_check").use { cursor ->
                     assertTrue("Migration from $from left a foreign key violation", !cursor.moveToFirst())
                 }
@@ -167,6 +180,21 @@ class MigrationTest {
                     assertTrue(cursor.moveToFirst())
                     assertEquals("Program", cursor.getString(0))
                     assertEquals(100L, cursor.getLong(1))
+                }
+                if (from >= 7) {
+                    db.openHelper.readableDatabase.query("SELECT feed,channel,name FROM epgNames").use { cursor ->
+                        assertTrue(cursor.moveToFirst())
+                        assertEquals(listOf("guide", "1", "baslik"), (0..2).map { cursor.getString(it) })
+                        assertTrue(!cursor.moveToNext())
+                    }
+                    runBlocking {
+                        assertEquals(dev.lumenara.data.Mapping("item", "guide", "1"), db.guide().mapping("item").first())
+                    }
+                    db.openHelper.readableDatabase.query("SELECT id,name FROM collections").use { cursor ->
+                        assertTrue(cursor.moveToFirst())
+                        assertEquals("item", cursor.getString(0))
+                        assertEquals("Fixture", cursor.getString(1))
+                    }
                 }
             } finally {
                 db.close()
@@ -184,6 +212,9 @@ class MigrationTest {
                 reopened.openHelper.readableDatabase.query("SELECT COUNT(*) FROM items").use { cursor ->
                     assertTrue(cursor.moveToFirst())
                     assertEquals(3, cursor.getInt(0))
+                }
+                reopened.openHelper.readableDatabase.query("PRAGMA foreign_key_check").use { cursor ->
+                    assertTrue("Reopened schema from $from left a foreign key violation", !cursor.moveToFirst())
                 }
             } finally {
                 reopened.close()
