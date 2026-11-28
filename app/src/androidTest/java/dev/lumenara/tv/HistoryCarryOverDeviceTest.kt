@@ -46,7 +46,7 @@ class HistoryCarryOverDeviceTest {
         return null
     }
 
-    private fun provider(failEpisodes: Boolean = false) = object : Dispatcher() {
+    private fun provider(failEpisodes: Boolean = false, extension: String = "mp4") = object : Dispatcher() {
         override fun dispatch(request: RecordedRequest): MockResponse {
             val year = Calendar.getInstance().apply { timeInMillis = System.currentTimeMillis() }.get(Calendar.YEAR)
             val body = when (request.requestUrl?.queryParameter("action").orEmpty()) {
@@ -56,7 +56,7 @@ class HistoryCarryOverDeviceTest {
                 "get_series" -> """[{"series_id":"30","name":"Carry Show"}]"""
                 "get_series_info" -> {
                     if (failEpisodes) return MockResponse().setResponseCode(503)
-                    """{"episodes":{"1":[{"id":"40","episode_num":2,"season":1,"title":"Episode"}]}}"""
+                    """{"episodes":{"1":[{"id":"40","episode_num":2,"season":1,"title":"Episode","container_extension":"$extension"}]}}"""
                 }
                 else -> "[]"
             }
@@ -67,7 +67,7 @@ class HistoryCarryOverDeviceTest {
     @Test fun changedXtreamHostAndCredentialsKeepAllStateIncludingExpandedEpisodes() = runBlocking {
         MockWebServer().use { before -> MockWebServer().use { after ->
             before.dispatcher = provider()
-            after.dispatcher = provider()
+            after.dispatcher = provider(extension = "mkv")
             before.start()
             after.start()
             val name = "Test · Carry ${System.currentTimeMillis()}"
@@ -100,12 +100,14 @@ class HistoryCarryOverDeviceTest {
                 val oldProgram = checkNotNull(published(film.id))
 
                 // This uses the same edit/import path exposed by Settings. The provider JSON is
-                // unchanged: the source locator fingerprint must still force a catalog rebuild.
+                // unchanged except the episode extension: the source locator fingerprint must
+                // still force a catalog rebuild when host and credentials change together.
                 repo.editSource(source.id, source.name, SourceSpec(after.url("/").toString(), true, "new", "secret"))
                 val movedFilm = item("MOVIE")
                 val movedShow = item("SERIES")
                 val movedChannel = item("LIVE")
                 val movedEpisode = repo.episodeSnapshot(movedShow.id).single()
+                assertTrue(repo.address(movedEpisode).endsWith("/series/new/secret/40.mkv"))
                 assertNotEquals(film.id, movedFilm.id)
                 assertNotEquals(episode.id, movedEpisode.id)
                 assertEquals(12345L, repo.library.mark(movedFilm.id)?.position)
