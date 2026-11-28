@@ -93,14 +93,14 @@ class Wp02OptimizedSmokeTest {
             val wrapped = context.getSharedPreferences("vault", 0).getString("data-key", null)
             assertFalse("Vault must retain a wrapped data key", wrapped.isNullOrEmpty())
 
-            // Finish the old Activity before starting a fresh Activity/ViewModel. CLEAR_TASK
-            // can start the replacement before the old onStop, which resets RefreshGate's
-            // global foreground flag and leaves startup idle work waiting indefinitely.
+            // Finish the old Activity before starting a fresh Activity/ViewModel so this
+            // launch exercises startup scheduling with the aged fixture.
             finishActivity()
             // Age only our fixture. The real startup path queues a stale-source check.
-            // Foreground refresh defers, so a successful
-            // startup-refresh plus an enqueued deferred-refresh proves default WorkerFactory
-            // + doWork; the five-minute follow-up itself should not run during this wait.
+            // Foreground refresh hands off to one durable deferred-refresh request with
+            // wp07Pending=true and zero initial delay. That request runs immediately, then
+            // retries with 30-second linear backoff while busy, without expiring the intent.
+            // Require both startup success and a persisted retry to prove WorkerFactory + doWork.
             SQLiteDatabase.openDatabase(context.getDatabasePath("lumenara.db").path, null,
                 SQLiteDatabase.OPEN_READWRITE).use { database ->
                 database.compileStatement("UPDATE sources SET refreshed = 0 WHERE id = ?").use { statement ->
@@ -111,6 +111,9 @@ class Wp02OptimizedSmokeTest {
             assertEquals("Fixture must be stale by the app's elapsed-time rule", "0",
                 scalar("SELECT refreshed FROM sources WHERE id = ?", sourceId))
             val scheduledAfter = System.currentTimeMillis().toString()
+            // WorkManager 2.11.1 Data v1: the single Boolean entry {"wp07Pending": true}.
+            // Match the value as well as the key, without linking optimized WorkManager APIs.
+            val pendingInputHex = "ABEF0001000000010101000B7770303750656E64696E67"
             var lastWorkQueryError: Throwable? = null
             val diagnostics = { workerDiagnostics(sourceId, scheduledAfter, lastWorkQueryError) }
             launch()
@@ -124,10 +127,15 @@ class Wp02OptimizedSmokeTest {
                         AND w.state = 2 AND w.last_enqueue_time >= CAST(? AS INTEGER)
                         AND EXISTS (SELECT 1 FROM WorkSpec d JOIN WorkName dn ON dn.work_spec_id = d.id
                             WHERE dn.name = 'deferred-refresh' AND d.worker_class_name = ?
-                            AND d.state IN (0, 4) AND d.initial_delay > 0
-                            AND d.last_enqueue_time >= CAST(? AS INTEGER)) LIMIT 1""",
+                            AND d.state = 0 AND d.interval_duration = 0 AND d.initial_delay = 0
+                            AND hex(d.input) = ? AND d.run_attempt_count > 0
+                            AND d.backoff_policy = 1 AND d.backoff_delay_duration = 30000
+                            AND d.last_enqueue_time >= CAST(? AS INTEGER))
+                        AND (SELECT COUNT(*) FROM WorkSpec d JOIN WorkName dn ON dn.work_spec_id = d.id
+                            WHERE dn.name = 'deferred-refresh' AND d.state IN (0, 1, 4)) = 1
+                        LIMIT 1""",
                     "dev.lumenara.data.RefreshWorker", scheduledAfter,
-                    "dev.lumenara.data.RefreshWorker", scheduledAfter) }
+                    "dev.lumenara.data.RefreshWorker", pendingInputHex, scheduledAfter) }
                     .onFailure { lastWorkQueryError = it }.getOrNull() != null
             }
 
