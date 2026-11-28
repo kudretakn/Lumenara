@@ -71,7 +71,7 @@ internal fun artworkRequest(context: Context, address: String, allowHttp: Boolea
 internal fun Artwork(model: LibraryModel, item: Item?, address: String?,
     modifier: Modifier = Modifier, contentScale: ContentScale = ContentScale.Fit,
     alignment: Alignment = Alignment.Center, role: String = "poster",
-    allowHttp: Boolean? = null, width: Int = 0, height: Int = 0) {
+    allowHttp: Boolean? = null, width: Int = 0, height: Int = 0, showFallback: Boolean = true) {
     val context = LocalContext.current
     // Legacy detail/logo callers resolve their size after layout, without subcomposition.
     // Grids supply both dimensions and permission once at their parent.
@@ -86,18 +86,24 @@ internal fun Artwork(model: LibraryModel, item: Item?, address: String?,
         address?.takeIf { w > 0 && h > 0 }?.let { artworkRequest(context, it, permitted, w, h, role) }
     }
     var loaded by remember(request) { mutableStateOf(false) }
+    val settled = if (LocalWp05HubDraw.current != null) {
+        remember(request) { mutableStateOf(address.isNullOrBlank()) }
+    } else null
+    val hubDrawModifier = if (settled != null) Modifier.wp05HubImageDraw(item?.id to request, settled.value)
+        else Modifier
     val channel = item?.kind == "LIVE"
     Box((if (width > 0 && height > 0) modifier else modifier.onSizeChanged { measured = it })
-        .then(if (channel) Modifier.background(LumenColors.surface3) else Modifier)) {
+        .then(if (channel) Modifier.background(LumenColors.surface3) else Modifier)
+        .then(hubDrawModifier)) {
         // Never invent a backdrop or substitute a show's poster for a person's portrait.
-        if (!loaded && item != null && role !in listOf("backdrop", "person")) {
+        if (showFallback && !loaded && item != null && role !in listOf("backdrop", "person")) {
             ArtworkFallback(item.title, item.kind, Modifier.matchParentSize())
         }
         Box(Modifier.matchParentSize(), contentAlignment = Alignment.Center) {
             AsyncImage(request, null, Modifier.fillMaxSize(if (channel) .7f else 1f),
                 contentScale = if (channel) ContentScale.Fit else contentScale,
                 alignment = alignment,
-                onSuccess = { loaded = true }, onError = { loaded = false })
+                onSuccess = { loaded = true; settled?.value = true }, onError = { loaded = false; settled?.value = true })
         }
     }
 }

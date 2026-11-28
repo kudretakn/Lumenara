@@ -57,18 +57,22 @@ class LumenaraApp : Application(), ImageLoaderFactory, androidx.work.Configurati
 
     @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     override fun onCreate() {
+        // This diagnostic begins at Application.onCreate, not process birth. External counters/
+        // sched tracing own CPU15 acceptance; a delayed coroutine must never be called CPU15.
+        val cpuAtStart = android.os.Process.getElapsedCpuTime()
+        val wallAtStart = android.os.SystemClock.elapsedRealtime()
         Perf.mark("startup")
         Perf.mark("startup_first_frame")
         Perf.mark("startup_application")
         super.onCreate()
         androidx.media3.common.util.Log.setLogLevel(androidx.media3.common.util.Log.LOG_LEVEL_OFF)
         Perf.since("startup_application", "startup_application_ready")
-        val cpuAtStart = android.os.Process.getElapsedCpuTime()
-        val wallAtStart = android.os.SystemClock.elapsedRealtime()
         startupScope.launch {
             delay(15_000)
-            Perf.duration("startup_cpu_first_15s", android.os.Process.getElapsedCpuTime() - cpuAtStart)
-            Perf.duration("startup_cpu_sample_window", android.os.SystemClock.elapsedRealtime() - wallAtStart)
+            android.util.Log.i("LumenaraPerf", "startup_cpu_diagnostic " +
+                "cpu_ms=${android.os.Process.getElapsedCpuTime() - cpuAtStart} " +
+                "window_ms=${android.os.SystemClock.elapsedRealtime() - wallAtStart} " +
+                "start_elapsed_ms=$wallAtStart origin=application_on_create")
         }
     }
 
