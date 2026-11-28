@@ -5,6 +5,9 @@ import android.content.Intent
 import android.speech.RecognizerIntent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.BringIntoViewSpec
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -46,8 +49,9 @@ import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
-@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, ExperimentalFoundationApi::class)
 @Composable
 internal fun SearchScreen(
     model: LibraryModel,
@@ -61,6 +65,17 @@ internal fun SearchScreen(
         mutableStateOf<Wp08SearchReturn?>(null)
     }
     var restoring by remember { mutableStateOf(true) }
+    // Returning focus must keep the saved viewport, including queued TV pivot work
+    // after requestFocus(). Release on the next interaction, not after a guessed delay.
+    val keepReturnViewport = remember { mutableStateOf(lastShelf != null) }
+    val platformScroll = LocalBringIntoViewSpec.current
+    val returnScroll = remember(platformScroll) {
+        object : BringIntoViewSpec by platformScroll {
+            override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float =
+                if (keepReturnViewport.value) 0f
+                else platformScroll.calculateScrollDistance(offset, size, containerSize)
+        }
+    }
     var restoreShelf by remember { mutableStateOf<String?>(null) }
     var fieldFocused by remember { mutableStateOf(false) }
     val entryFocus = remember { FocusRequester() }
@@ -102,9 +117,10 @@ internal fun SearchScreen(
         }
     }
     val settledQuery by remember(source) {
-        snapshotFlow { query.value }.debouncedSearchQuery().flowOn(Dispatchers.Default)
-    }.collectAsStateWithLifecycle("")
-    val searchPrefill by model.searchPrefill.collectAsStateWithLifecycle()
+        snapshotFlow { query.value }.flowOn(Dispatchers.Main.immediate)
+            .debouncedSearchQuery().flowOn(Dispatchers.Default)
+    }.collectAsStateWithLifecycle("", context = Dispatchers.Main.immediate)
+    val searchPrefill by model.searchPrefill.collectAsStateWithLifecycle(context = Dispatchers.Main.immediate)
     LaunchedEffect(searchPrefill) {
         searchPrefill?.let { query.value = it.second; model.searchPrefill.value = null }
     }
@@ -122,14 +138,14 @@ internal fun SearchScreen(
                 .putExtra(RecognizerIntent.EXTRA_LANGUAGE, "tr-TR"))
         }.onFailure { model.notice.value = "Ses tanıma hizmeti bulunamadı. Metinle arayabilirsiniz." }
     }
-    val request by model.remoteSearch.collectAsStateWithLifecycle()
+    val request by model.remoteSearch.collectAsStateWithLifecycle(context = Dispatchers.Main.immediate)
     LaunchedEffect(request) {
         if (request > 0) {
             model.remoteSearch.value = 0
             listen()
         }
     }
-    val hidden by remember(model.repo) { model.repo.hidden }.collectAsState(initial = null)
+    val hidden by remember(model.repo) { model.repo.hidden }.collectAsState(initial = null, context = Dispatchers.Main.immediate)
     val pendingShelves = key(source, hidden) {
         if (settledQuery.isEmpty()) emptyList() else
             listOf("Kanallar" to "LIVE", "Filmler" to "MOVIE", "Diziler" to "SERIES").map { (title, kind) ->
@@ -161,9 +177,10 @@ internal fun SearchScreen(
     }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { wallClockTicks(30_000).collect { now = it } }
-    val programResult by remember(source, settledQuery, hidden) {
+    val programFlow = remember(source, settledQuery, hidden) {
         if (settledQuery.isEmpty()) flowOf(emptyList())
-        else model.repo.searchPrograms(source, settledQuery, snapshotFlow { (now - 7 * 86_400_000L) to now })
+        else model.repo.searchPrograms(source, settledQuery,
+            snapshotFlow { (now - 7 * 86_400_000L) to now }.flowOn(Dispatchers.Main.immediate))
             .flatMapLatest { hits ->
                 val ids = hits.map { it.itemId }.distinct()
                 if (ids.isEmpty()) flowOf(emptyList())
@@ -172,7 +189,10 @@ internal fun SearchScreen(
                     hits.mapNotNull { hit -> byId[hit.itemId]?.let { hit to it } }
                 }
             }.flowOn(Dispatchers.Default)
-    }.collectAsLoadingState()
+    }
+    val programResult by key(programFlow) {
+        programFlow.collectAsStateWithLifecycle(initialValue = null, context = Dispatchers.Main.immediate)
+    }
     val loading = pendingShelves.any { !it.second.firstPageLoaded } || programResult == null
     val programs = key(source, hidden) {
         rememberSearchResults(settledQuery, programResult, emptyList())
@@ -180,124 +200,136 @@ internal fun SearchScreen(
     val firstCatalogShelf = shelves.firstOrNull { it.second.count > 0 }?.first
     val firstResultsState = firstCatalogShelf?.let { catalogStates.getValue(it) }
     LaunchedEffect(shelves, programs, loading) {
-        if (restoring && lastShelf != null && !loading && settledQuery.isNotEmpty()) {
-            val visible = shelves.filter { it.second.count > 0 }.map { it.first } +
-                if (programs.isNotEmpty()) listOf("Programlar") else emptyList()
-            val saved = returnTarget?.takeIf { it.matches(source, settledQuery, hidden.orEmpty()) }
-            // A removed/hidden shelf falls back to the first available shelf.
-            val target = saved?.shelf?.takeIf { it in visible }
-                ?: lastShelf?.takeIf { returnTarget == null && it in visible }
-                ?: visible.firstOrNull()
-            if (target == null) {
-                entryFocus.requestFocus()
-                restoring = false
-            } else {
-                val index = visible.indexOf(target)
-                if (saved != null && target == saved.shelf) {
-                    resultsState.scrollToItem(saved.firstShelf, saved.shelfOffset)
-                } else resultsState.scrollToItem(index)
-                if (target == "Programlar") restoring = false
-                else restoreShelf = target
+        withContext(Dispatchers.Main.immediate) {
+            if (restoring && lastShelf != null && !loading && settledQuery.isNotEmpty()) {
+                val visible = shelves.filter { it.second.count > 0 }.map { it.first } +
+                    if (programs.isNotEmpty()) listOf("Programlar") else emptyList()
+                val saved = returnTarget?.takeIf { it.matches(source, settledQuery, hidden.orEmpty()) }
+                // A removed/hidden shelf falls back to the first available shelf.
+                val target = saved?.shelf?.takeIf { it in visible }
+                    ?: lastShelf?.takeIf { returnTarget == null && it in visible }
+                    ?: visible.firstOrNull()
+                if (target == null) {
+                    entryFocus.requestFocus()
+                    restoring = false
+                } else {
+                    val index = visible.indexOf(target)
+                    if (saved != null && target == saved.shelf) {
+                        resultsState.scrollToItem(saved.firstShelf, saved.shelfOffset)
+                    } else resultsState.scrollToItem(index)
+                    if (target == "Programlar") restoring = false
+                    else restoreShelf = target
+                }
             }
         }
     }
-    val notice by model.notice.collectAsStateWithLifecycle()
-    Column(Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(Spacing.titleGap)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {
-            SearchField(query, entryFocus, { focused ->
-                val text = query.value.trim()
-                if (fieldFocused && !focused && text.isNotEmpty()) {
-                    recentSearches = (listOf(text) + recentSearches.filterNot { it.equals(text, true) }).take(6)
-                }
-                fieldFocused = focused
-            }, Modifier.weight(1f), if (firstCatalogShelf != null) {
-                {
-                    scope.launch {
-                        resultsState.scrollToItem(0)
-                        firstResultsState?.scrollToItem(0)
-                        withFrameNanos { }
-                        firstResultFocus.requestFocus()
+
+    val notice by model.notice.collectAsStateWithLifecycle(context = Dispatchers.Main.immediate)
+    CompositionLocalProvider(LocalBringIntoViewSpec provides returnScroll) {
+        Column(Modifier.fillMaxSize().onPreviewKeyEvent {
+            if (it.type == KeyEventType.KeyDown) keepReturnViewport.value = false
+            false
+        },
+            verticalArrangement = Arrangement.spacedBy(Spacing.titleGap)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+                SearchField(query, entryFocus, { focused ->
+                    val text = query.value.trim()
+                    if (fieldFocused && !focused && text.isNotEmpty()) {
+                        recentSearches = (listOf(text) + recentSearches.filterNot { it.equals(text, true) }).take(6)
                     }
+                    fieldFocused = focused
+                    if (focused) keepReturnViewport.value = false
+                }, Modifier.weight(1f), if (firstCatalogShelf != null) {
+                    {
+                        scope.launch(Dispatchers.Main.immediate) {
+                            resultsState.scrollToItem(0)
+                            firstResultsState?.scrollToItem(0)
+                            withFrameNanos { }
+                            firstResultFocus.requestFocus()
+                        }
+                    }
+                } else null)
+                LumenButton(onClick = { listen() }, style = LumenButtonStyle.Secondary,
+                    modifier = Modifier.size(56.dp).testTag("search-voice")) {
+                    LumenIcon(LumenIcon.Search, contentDescription = "Sesle ara")
                 }
-            } else null)
-            LumenButton(onClick = { listen() }, style = LumenButtonStyle.Secondary,
-                modifier = Modifier.size(56.dp).testTag("search-voice")) {
-                LumenIcon(LumenIcon.Search, contentDescription = "Sesle ara")
             }
-        }
-        if (notice.isNotEmpty()) Text(notice, color = LumenColors.textSecondary, style = LumenType.meta)
-        if (queryBlank && !fieldFocused && recentSearches.isNotEmpty()) {
-            Column(verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
-                Text("SON ARAMALAR", style = LumenType.caption, color = LumenColors.textSecondary)
-                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {
-                    recentSearches.forEach { term ->
-                        LumenButton(onClick = { query.value = term }, style = LumenButtonStyle.Secondary) {
-                            Text(term, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (notice.isNotEmpty()) Text(notice, color = LumenColors.textSecondary, style = LumenType.meta)
+            if (queryBlank && !fieldFocused && recentSearches.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+                    Text("SON ARAMALAR", style = LumenType.caption, color = LumenColors.textSecondary)
+                    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+                        recentSearches.forEach { term ->
+                            LumenButton(onClick = { query.value = term }, style = LumenButtonStyle.Secondary) {
+                                Text(term, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
                         }
                     }
                 }
             }
-        }
-        LazyColumn(Modifier.weight(1f).testTag("search-results").reportScrollPosition(resultsState).focusRestorer().focusGroup(), state = resultsState,
-            contentPadding = PaddingValues(bottom = Spacing.unit), verticalArrangement = Arrangement.spacedBy(Spacing.shelfGap)) {
-            if (queryBlank && recentSearches.isEmpty()) item(key = "hint") {
-                Text("Kanal, film veya dizi ara", style = LumenType.meta)
-            }
-            if (loading && shelves.none { it.second.count > 0 } && programs.isEmpty()) item(key = "loading") {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    items(8) { LoadingCard(Modifier.width(140.dp).aspectRatio(2f / 3f)) }
+            LazyColumn(Modifier.weight(1f).testTag("search-results").reportScrollPosition(resultsState).focusRestorer().focusGroup(), state = resultsState,
+                contentPadding = PaddingValues(bottom = Spacing.unit), verticalArrangement = Arrangement.spacedBy(Spacing.shelfGap)) {
+                if (queryBlank && recentSearches.isEmpty()) item(key = "hint") {
+                    Text("Kanal, film veya dizi ara", style = LumenType.meta)
                 }
-            }
-            if (!loading && programs.isEmpty() && shelves.all { it.second.count == 0 }) item(key = "empty") { Text("Eşleşen içerik yok.", color = LumenColors.textSecondary, style = LumenType.body) }
-            val populated = shelves.filter { it.second.count > 0 }
-            val displayed = if (fieldFocused && populated.isNotEmpty()) listOf(populated)
-                else populated.map { listOf(it) }
-            items(displayed, key = { it.first().first }, contentType = { "catalog" }) { rowShelves ->
-                val title = rowShelves.first().first
-                Column(verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
-                    Text(if (fieldFocused) "SONUÇLAR" else title,
-                        style = if (fieldFocused) LumenType.caption else LumenType.cardTitle,
-                        color = if (fieldFocused) LumenColors.textSecondary else LumenColors.textPrimary)
-                    // The first shelf keeps its LazyRow and focused slot when DPAD leaves the field.
-                    SearchPagingRow(model, rowShelves,
-                        if (!fieldFocused && title == "Kanallar") "channel-shelf-$title" else "search-shelf-$title",
-                        { lastShelf = it }, open, play,
-                        if (title == firstCatalogShelf) firstResultFocus else null,
-                        catalogStates.getValue(title),
-                        awaitingReturn = restoring,
-                        restore = if (restoreShelf == title) returnTarget?.takeIf {
-                            it.shelf == title && it.matches(source, settledQuery, hidden.orEmpty())
-                        } else null,
-                        restoreFirst = restoreShelf == title,
-                        onRestored = { restoring = false; restoreShelf = null },
-                        onActivate = { shelf, item, index, first, offset ->
-                            returnTarget = Wp08SearchReturn(source, settledQuery, shelf, item.id, index,
-                                first, offset, resultsState.firstVisibleItemIndex,
-                                resultsState.firstVisibleItemScrollOffset, hidden.orEmpty().toList())
-                        })
+                if (loading && shelves.none { it.second.count > 0 } && programs.isEmpty()) item(key = "loading") {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        items(8) { LoadingCard(Modifier.width(140.dp).aspectRatio(2f / 3f)) }
+                    }
                 }
-            }
-            if (programs.isNotEmpty()) item(key = "programs") {
-                Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                    Text("Programlar", style = LumenType.cardTitle)
-                    LazyRow(Modifier.testTag("search-shelf-Programlar").focusRestorer().focusGroup(),
-                        contentPadding = PaddingValues(8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        items(programs, key = { (hit, _) -> "${hit.itemId}:${hit.slot.feed}:${hit.slot.channel}:${hit.slot.start}" }) { (hit, channel) ->
-                            ProgramCard(hit, channel, now, { lastShelf = "Programlar" }) {
-                                returnTarget = null
-                                val slot = hit.slot
-                                val atClick = System.currentTimeMillis()
-                                when {
-                                    atClick in slot.start until slot.end -> play(channel, programs.map { it.second }.distinctBy { it.id })
-                                    channel.archive.isNotEmpty() && slot.end <= atClick &&
-                                        slot.start >= atClick - channel.archiveDays.coerceIn(0, 365) * 86_400_000L ->
-                                        model.job("Arşiv programı açıldı.") {
-                                            val replay = model.repo.replay(channel, slot)
-                                            play(replay, listOf(replay))
-                                        }
-                                    else -> open(channel)
+                if (!loading && programs.isEmpty() && shelves.all { it.second.count == 0 }) item(key = "empty") { Text("Eşleşen içerik yok.", color = LumenColors.textSecondary, style = LumenType.body) }
+                val populated = shelves.filter { it.second.count > 0 }
+                val displayed = if (fieldFocused && populated.isNotEmpty()) listOf(populated)
+                    else populated.map { listOf(it) }
+                items(displayed, key = { it.first().first }, contentType = { "catalog" }) { rowShelves ->
+                    val title = rowShelves.first().first
+                    Column(verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+                        Text(if (fieldFocused) "SONUÇLAR" else title,
+                            style = if (fieldFocused) LumenType.caption else LumenType.cardTitle,
+                            color = if (fieldFocused) LumenColors.textSecondary else LumenColors.textPrimary)
+                        // The first shelf keeps its LazyRow and focused slot when DPAD leaves the field.
+                        SearchPagingRow(model, rowShelves,
+                            if (!fieldFocused && title == "Kanallar") "channel-shelf-$title" else "search-shelf-$title",
+                            {
+                                lastShelf = it
+                                if (!restoring) keepReturnViewport.value = false
+                            }, open, play,
+                            if (title == firstCatalogShelf) firstResultFocus else null,
+                            catalogStates.getValue(title),
+                            awaitingReturn = restoring,
+                            restore = if (restoreShelf == title) returnTarget?.takeIf {
+                                it.shelf == title && it.matches(source, settledQuery, hidden.orEmpty())
+                            } else null,
+                            restoreFirst = restoreShelf == title,
+                            onRestored = { restoring = false; restoreShelf = null },
+                            onActivate = { shelf, item, index, first, offset ->
+                                returnTarget = Wp08SearchReturn(source, settledQuery, shelf, item.id, index,
+                                    first, offset, resultsState.firstVisibleItemIndex,
+                                    resultsState.firstVisibleItemScrollOffset, hidden.orEmpty().toList())
+                            })
+                    }
+                }
+                if (programs.isNotEmpty()) item(key = "programs") {
+                    Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                        Text("Programlar", style = LumenType.cardTitle)
+                        LazyRow(Modifier.testTag("search-shelf-Programlar").focusRestorer().focusGroup(),
+                            contentPadding = PaddingValues(8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            items(programs, key = { (hit, _) -> "${hit.itemId}:${hit.slot.feed}:${hit.slot.channel}:${hit.slot.start}" }) { (hit, channel) ->
+                                ProgramCard(hit, channel, now, { lastShelf = "Programlar" }) {
+                                    returnTarget = null
+                                    val slot = hit.slot
+                                    val atClick = System.currentTimeMillis()
+                                    when {
+                                        atClick in slot.start until slot.end -> play(channel, programs.map { it.second }.distinctBy { it.id })
+                                        channel.archive.isNotEmpty() && slot.end <= atClick &&
+                                            slot.start >= atClick - channel.archiveDays.coerceIn(0, 365) * 86_400_000L ->
+                                            model.job("Arşiv programı açıldı.") {
+                                                val replay = model.repo.replay(channel, slot)
+                                                play(replay, listOf(replay))
+                                            }
+                                        else -> open(channel)
+                                    }
                                 }
                             }
                         }
@@ -379,28 +411,31 @@ internal fun SearchPagingRow(
     var missingReturnId by remember(restorePages, restore) { mutableStateOf(false) }
     val returnIndex = if (restore != null && !missingReturnId) restorePages?.anchor ?: 0 else 0
     LaunchedEffect(restoreFirst, restorePages, returnIndex) {
-        if (restoreFirst && restorePages != null) {
-            // A distant first page initially exposes only its end as the provisional
-            // count. Wait for the total so LazyRow cannot clamp the saved offset.
-            snapshotFlow { restorePages.countLoaded && restorePages[returnIndex] != null }.first { it }
-            val sameItem = restorePages[returnIndex]?.id == restore?.itemId
-            if (restore != null && !sameItem && returnIndex != 0) {
-                // Refresh may remove the ID between the index probe and page read.
-                missingReturnId = true
-                restorePages.focused(0)
-                return@LaunchedEffect
+        withContext(Dispatchers.Main.immediate) {
+            if (restoreFirst && restorePages != null) {
+                // A distant first page initially exposes only its end as the provisional
+                // count. Wait for the total so LazyRow cannot clamp the saved offset.
+                snapshotFlow { restorePages.countLoaded && restorePages[returnIndex] != null }.first { it }
+                val sameItem = restorePages[returnIndex]?.id == restore?.itemId
+                if (restore != null && !sameItem && returnIndex != 0) {
+                    // Refresh may remove the ID between the index probe and page read.
+                    missingReturnId = true
+                    restorePages.focused(0)
+                    return@withContext
+                }
+                val (first, offset) = restore?.viewport(returnIndex, sameItem) ?: (0 to 0)
+                if (state.firstVisibleItemIndex != first || state.firstVisibleItemScrollOffset != offset) {
+                    state.scrollToItem(first, offset)
+                }
+                // Layout must attach the target slot before the one return focus request.
+                snapshotFlow { state.layoutInfo.visibleItemsInfo.any { it.index == returnIndex } }.first { it }
+                withFrameNanos { }
+                returnFocus.requestFocus()
+                onRestored()
             }
-            val (first, offset) = restore?.viewport(returnIndex, sameItem) ?: (0 to 0)
-            if (state.firstVisibleItemIndex != first || state.firstVisibleItemScrollOffset != offset) {
-                state.scrollToItem(first, offset)
-            }
-            // Layout must attach the target slot before the one return focus request.
-            snapshotFlow { state.layoutInfo.visibleItemsInfo.any { it.index == returnIndex } }.first { it }
-            withFrameNanos { }
-            returnFocus.requestFocus()
-            onRestored()
         }
     }
+
     val counts = shelves.map { it.second.count }
     fun slot(index: Int): Pair<Int, Int> {
         var local = index
@@ -411,15 +446,21 @@ internal fun SearchPagingRow(
         return shelves.lastIndex to local
     }
     LaunchedEffect(state, shelves, counts, awaitingReturn) {
-        if (awaitingReturn) return@LaunchedEffect
-        snapshotFlow { state.layoutInfo.visibleItemsInfo.map { it.index } }
-            .distinctUntilChanged().collect { indices ->
-                indices.groupBy { slot(it).first }.forEach { (shelf, visible) ->
-                    shelves[shelf].second.visible(slot(visible.last()).second)
+        withContext(Dispatchers.Main.immediate) {
+            if (awaitingReturn) return@withContext
+            snapshotFlow { state.layoutInfo.visibleItemsInfo.map { it.index } }
+                .distinctUntilChanged().collect { indices ->
+                    indices.groupBy { slot(it).first }.forEach { (shelf, visible) ->
+                        shelves[shelf].second.visible(slot(visible.last()).second)
+                    }
                 }
-            }
+        }
     }
-    LazyRow(Modifier.testTag(tag).reportScrollPosition(state).focusRestorer().focusGroup(), state = state,
+
+    LazyRow(Modifier.testTag(tag).reportScrollPosition(state).semantics {
+        this[Wp08SearchResultCountKey] = if (shelves.all { it.second.countLoaded }) counts.sum() else -1
+        if (shelves.size == 1) pagingWindow = pagingDescription(shelves.single().second)
+    }.focusRestorer().focusGroup(), state = state,
         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         items(counts.sum(), key = { index ->

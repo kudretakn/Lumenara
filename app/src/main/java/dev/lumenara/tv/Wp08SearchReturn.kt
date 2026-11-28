@@ -1,6 +1,10 @@
 package dev.lumenara.tv
 
 import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.ui.semantics.SemanticsPropertyKey
+
+/** Completed row total; tests wait for real Room state before a distant jump. */
+internal val Wp08SearchResultCountKey = SemanticsPropertyKey<Int>("Wp08SearchResultCount")
 
 /** Only navigation metadata is saved; the bounded pager reloads Items from Room. */
 internal data class Wp08SearchReturn(

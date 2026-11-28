@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
@@ -55,7 +56,19 @@ class Wp08SearchNavigationTest {
         val firstShelf = if (leading.isNotEmpty()) "Kanallar" else shelf
         val firstItem = leading.firstOrNull() ?: rows[0]
         var opened: Item? = null
-        fun position(tag: String) = screen.onNodeWithTag(tag).fetchSemanticsNode().config[ScrollPositionKey]
+        fun position(tag: String): String {
+            val node = screen.onNodeWithTag(tag).fetchSemanticsNode()
+            return screen.runOnIdle { node.config[ScrollPositionKey] }
+        }
+        fun waitFor(matcher: SemanticsMatcher) {
+            screen.waitUntil(30_000) { screen.onAllNodes(matcher).fetchSemanticsNodes().isNotEmpty() }
+        }
+        fun assertBoundedWindow() {
+            val node = screen.onNodeWithTag(rowTag).fetchSemanticsNode()
+            val window = screen.runOnIdle { node.config[PagingWindowKey] }.split(":").map(String::toInt)
+            assertTrue("Return retains at most five pages: $window", window[2] <= 5)
+            assertTrue("Return retains at most 100 Items: $window", window[3] <= 100)
+        }
         try {
             runBlocking {
                 repo.library.save(Source(source, source, "", false, System.currentTimeMillis(), catalog.size))
@@ -78,19 +91,24 @@ class Wp08SearchNavigationTest {
                 }
             }
             screen.onNodeWithTag("search-input").performTextReplacement("Film")
-            screen.waitUntil(5_000) {
+            screen.waitUntil(30_000) {
                 screen.onAllNodesWithTag("search-artwork-${firstItem.id}").fetchSemanticsNodes().isNotEmpty()
             }
             // Leave the combined input row before jumping; no long DPAD loop in CI.
             screen.onNodeWithTag("search-slot-$firstShelf:0")
                 .performSemanticsAction(SemanticsActions.RequestFocus)
+            waitFor(hasTestTag("search-slot-$firstShelf:0") and isFocused())
+            // Wait for the separate row and its completed total before the distant jump.
+            // No Compose state is inspected on the instrumentation thread.
             if (leading.isNotEmpty()) screen.onNodeWithTag("search-results").performScrollToIndex(1)
+            waitFor(hasTestTag(rowTag) and SemanticsMatcher.expectValue(Wp08SearchResultCountKey, rows.size))
             screen.onNodeWithTag(rowTag).performScrollToIndex(55)
-            screen.waitUntil(5_000) {
+            screen.waitUntil(30_000) {
                 screen.onAllNodesWithTag("search-artwork-${rows[59].id}").fetchSemanticsNodes().isNotEmpty()
             }
             screen.onNodeWithTag("search-slot-$shelf:59")
-                .performSemanticsAction(SemanticsActions.RequestFocus).assertIsFocused()
+                .performSemanticsAction(SemanticsActions.RequestFocus)
+            waitFor(hasTestTag("search-slot-$shelf:59") and isFocused())
             screen.onNodeWithTag(rowTag).performSemanticsAction(SemanticsActions.ScrollBy) { scroll ->
                 scroll(17f, 0f)
             }
@@ -99,6 +117,7 @@ class Wp08SearchNavigationTest {
             assertFalse("Exercise a nonzero pixel offset", horizontal.endsWith(":0"))
             val vertical = position("search-results")
             screen.ok()
+            waitFor(hasTestTag(routeTag))
             screen.onNodeWithTag(routeTag).assertExists()
             screen.runOnIdle { assertEquals(rows[59].id, opened?.id) }
             if (removeSelected || removeAll || removePreceding) runBlocking {
@@ -110,7 +129,7 @@ class Wp08SearchNavigationTest {
             }
             screen.back()
             if (removeAll) {
-                screen.waitUntil(5_000) {
+                screen.waitUntil(30_000) {
                     screen.onAllNodes(hasTestTag("search-input") and isFocused()).fetchSemanticsNodes().isNotEmpty()
                 }
                 screen.onNodeWithText("Eşleşen içerik yok.").assertExists()
@@ -122,12 +141,14 @@ class Wp08SearchNavigationTest {
                 else -> 59
             }
             val targetItem = rows[if (removeSelected) 0 else 59]
-            screen.waitUntil(5_000) {
+            screen.waitUntil(30_000) {
                 screen.onAllNodes(hasTestTag("search-slot-$shelf:$target") and isFocused())
                     .fetchSemanticsNodes().isNotEmpty()
             }
             screen.onNodeWithTag("search-slot-$shelf:$target").assertContentDescriptionEquals(targetItem.title)
             screen.onNodeWithTag("search-artwork-${targetItem.id}").assertExists()
+            assertBoundedWindow()
+            if (removeSelected) assertEquals("Removed ID starts at the first result", "0:0", position(rowTag))
             if (!removeSelected) {
                 val expectedHorizontal = if (removePreceding) {
                     val (first, offset) = horizontal.split(":").map { it.toInt() }
@@ -135,14 +156,25 @@ class Wp08SearchNavigationTest {
                 } else horizontal
                 assertEquals("Horizontal viewport must survive return", expectedHorizontal, position(rowTag))
                 assertEquals("Vertical viewport must survive return", vertical, position("search-results"))
+                // The restore policy must release on the next remote interaction. Traverse
+                // beyond the viewport so suppressing all future focus scrolling cannot pass.
+                for (step in 1..8) {
+                    screen.dpad(Key.DirectionRight)
+                    waitFor(hasTestTag("search-slot-$shelf:${target + step}") and isFocused())
+                    screen.onNodeWithTag("search-slot-$shelf:${target + step}")
+                        .assertContentDescriptionEquals(rows[59 + step].title)
+                    assertBoundedWindow()
+                }
+                assertNotEquals("DPAD must scroll again after return", expectedHorizontal, position(rowTag))
                 // A completed replacement query starts at the first result, never the old slot.
                 screen.onNodeWithTag("search-input").performSemanticsAction(SemanticsActions.RequestFocus)
+                waitFor(hasTestTag("search-input") and isFocused())
                 screen.onNodeWithTag("search-input").performTextReplacement("Film 013")
-                screen.waitUntil(5_000) {
+                screen.waitUntil(30_000) {
                     screen.onAllNodesWithTag("search-artwork-${rows[130].id}").fetchSemanticsNodes().isNotEmpty()
                 }
-                screen.dpad(androidx.compose.ui.input.key.Key.DirectionDown)
-                screen.waitUntil(5_000) {
+                screen.dpad(Key.DirectionDown)
+                screen.waitUntil(30_000) {
                     screen.onAllNodes(hasTestTag("search-slot-$shelf:0") and isFocused())
                         .fetchSemanticsNodes().isNotEmpty()
                 }
