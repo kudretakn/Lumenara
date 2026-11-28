@@ -73,7 +73,7 @@ class Wp13GuideMigrationTest {
                 old.version = 13
             }
             val db = Room.databaseBuilder(context, LibraryDb::class.java, name)
-                .addMigrations(LibraryDb.MIGRATION_13_14).build()
+                .addMigrations(LibraryDb.MIGRATION_13_14, LibraryDb.MIGRATION_14_15).build()
             try {
                 val start = SystemClock.elapsedRealtimeNanos()
                 val upgraded = db.openHelper.writableDatabase
