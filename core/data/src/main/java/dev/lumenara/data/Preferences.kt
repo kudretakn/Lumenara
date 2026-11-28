@@ -162,6 +162,17 @@ class Preferences internal constructor(
         }
     }
 
+    internal suspend fun wp12PendingRestores(): List<Wp12PendingRestore> =
+        decodeWp12PendingRestores(secret("wp12_pending_restore"))
+
+    internal suspend fun saveWp12PendingRestores(pending: List<Wp12PendingRestore>) =
+        setSecret("wp12_pending_restore", if (pending.isEmpty()) "" else encodeWp12PendingRestores(pending.distinct()))
+
+    internal suspend fun saveWp12PendingRestore(data: BackupData, sources: Map<String, String>, ids: Set<String>) {
+        if (ids.isNotEmpty()) saveWp12PendingRestores(wp12PendingRestores() + Wp12PendingRestore(
+            data.copy(settings = data.settings.filterNot { it.name == wp12PendingRestoreSetting }), sources.toMap(), ids))
+    }
+
     internal suspend fun backupSettings(): List<BackupSetting> = withContext(Dispatchers.IO) {
         rawSettings().filter { isBackupSetting(it.name) }.map {
             if (it.name.startsWith("secret_") && it.value.isNotEmpty()) it.copy(value = decrypt(it.value)) else it
@@ -171,6 +182,19 @@ class Preferences internal constructor(
     internal suspend fun restoreSettings(
         settings: List<BackupSetting>, sources: Map<String, String>, items: Map<String, String>,
     ) = withContext(Dispatchers.IO) {
+        val local = rawSettings().filter { it.name == orphanHistorySetting }
+        val incomingPending = settings.firstOrNull { it.name == wp12PendingRestoreSetting }?.let {
+            decodeWp12PendingRestores(it.value).map { pending -> pending.copy(
+                sources = pending.sources.mapValues { (_, target) -> sources[target] ?: target }) }
+        }.orEmpty()
+        val pending = (wp12PendingRestores() + incomingPending).distinct()
+        val preserved = local + if (pending.isEmpty()) emptyList() else listOf(BackupSetting(
+            wp12PendingRestoreSetting, "string", encrypt(encodeWp12PendingRestores(pending))))
+        replaceSettings(prepareRestoreSettings(settings.filterNot { it.name == wp12PendingRestoreSetting }, sources, items) + preserved)
+    }
+
+    private fun prepareRestoreSettings(settings: List<BackupSetting>, sources: Map<String, String>,
+        items: Map<String, String>): List<BackupSetting> {
         // Prepare all secrets before the atomic DataStore edit; Keystore values are device specific.
         val sourcePattern = sources.keys.takeIf { it.isNotEmpty() }
             ?.joinToString("|") { Regex.escape(it) }?.let { Regex(it) }
@@ -181,7 +205,12 @@ class Preferences internal constructor(
                 val source = sources[identity[0]] ?: return@map null
                 val item = items[identity[1]] ?: return@map null
                 "subtitle_delay_$source|$item"
-            } else sourcePattern?.replace(saved.name) { sources.getValue(it.value) } ?: saved.name
+            } else {
+                val prefix = listOf("audio_", "text_", "delay_", "sub_", "subtitle_", "engine_", "series_expanded_")
+                    .firstOrNull { saved.name.startsWith(it) && saved.name.removePrefix(it) in items }
+                if (prefix != null) prefix + items.getValue(saved.name.removePrefix(prefix))
+                else sourcePattern?.replace(saved.name) { sources.getValue(it.value) } ?: saved.name
+            }
             val value = when {
                 saved.name == "recent_live" -> saved.value.lines().mapNotNull { items[it] }.distinct().take(20).joinToString("\n")
                 saved.name.startsWith("version_") && saved.value.startsWith("id:") ->
@@ -192,8 +221,28 @@ class Preferences internal constructor(
             saved.copy(name = name, value = value)
         }.filterNotNull()
         require(prepared.map { it.name }.distinct().size == prepared.size) { "Yinelenen ayar adı." }
-        // Exported backups cannot replace or erase device-local recovery state.
-        replaceSettings(prepared + rawSettings().filter { it.name == orphanHistorySetting })
+        return prepared
+    }
+
+    /** Retry only item references; never replay global settings or overwrite newer local choices. */
+    internal suspend fun restoreWp12ItemSettings(settings: List<BackupSetting>, sources: Map<String, String>,
+        items: Map<String, String>) {
+        val selected = settings.filter { saved -> saved.type == "string" && when {
+            saved.name == "recent_live" -> true
+            saved.name.startsWith("subtitle_delay_") -> saved.name.substringAfterLast('|') in items
+            saved.name.startsWith("version_") -> saved.value.removePrefix("id:") in items
+            else -> listOf("audio_", "text_", "delay_", "sub_", "subtitle_", "engine_")
+                .any { saved.name.startsWith(it) && saved.name.removePrefix(it) in items }
+        } }
+        val prepared = prepareRestoreSettings(selected, sources, items)
+        store.edit { target ->
+            for (saved in prepared) {
+                val key = stringPreferencesKey(saved.name)
+                if (saved.name == "recent_live") target[key] = (target[key].orEmpty().lines() + saved.value.lines())
+                    .filter(String::isNotBlank).distinct().take(20).joinToString("\n")
+                else if (target[key].isNullOrEmpty()) target[key] = saved.value
+            }
+        }
     }
 
     // Rollback retains encrypted secrets and catalog validators, but never rewinds updater state.

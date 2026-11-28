@@ -24,6 +24,13 @@ internal class RestoreTransaction(private val storage: RestoreStorage) {
         storage.clearPending()
     }
 
+    /** Preparation can fail/cancel without publishing catalog state or a new undo journal. */
+    suspend fun <P, T> prepareAndRun(prepare: suspend () -> P, commit: suspend (P) -> T): T {
+        recover()
+        val prepared = prepare()
+        return run { commit(prepared) }
+    }
+
     suspend fun <T> run(block: suspend () -> T): T {
         recover()
         // The journal is durable BEFORE any restore writes. Its payload is encrypted by Vault.
