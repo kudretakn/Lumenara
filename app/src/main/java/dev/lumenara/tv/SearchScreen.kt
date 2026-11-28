@@ -416,6 +416,13 @@ internal fun SearchPagingRow(
                 // A distant first page initially exposes only its end as the provisional
                 // count. Wait for the total so LazyRow cannot clamp the saved offset.
                 snapshotFlow { restorePages.countLoaded && restorePages[returnIndex] != null }.first { it }
+                // Room's total can arrive before LazyRow recomposes its item provider.
+                // scrollToItem forces a measure: with the provisional page-end count
+                // it would clamp a distant viewport to that temporary end of the row.
+                snapshotFlow {
+                    shelves.all { it.second.countLoaded } &&
+                        state.layoutInfo.totalItemsCount == shelves.sumOf { it.second.count }
+                }.first { it }
                 val sameItem = restorePages[returnIndex]?.id == restore?.itemId
                 if (restore != null && !sameItem && returnIndex != 0) {
                     // Refresh may remove the ID between the index probe and page read.

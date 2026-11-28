@@ -116,6 +116,10 @@ class Wp08SearchNavigationTest {
             val horizontal = position(rowTag)
             assertFalse("Exercise a nonzero pixel offset", horizontal.endsWith(":0"))
             val vertical = position("search-results")
+            val targetX = if (removePreceding) {
+                screen.onNodeWithTag("search-artwork-${rows[59].id}").assertIsDisplayed()
+                    .fetchSemanticsNode().boundsInRoot.left
+            } else null
             screen.ok()
             waitFor(hasTestTag(routeTag))
             screen.onNodeWithTag(routeTag).assertExists()
@@ -154,6 +158,12 @@ class Wp08SearchNavigationTest {
                     val (first, offset) = horizontal.split(":").map { it.toInt() }
                     "${first - 1}:$offset"
                 } else horizontal
+                if (targetX != null) {
+                    // Check the same ID's resting artwork bounds, without focus drawing.
+                    val returnedX = screen.onNodeWithTag("search-artwork-${targetItem.id}").assertIsDisplayed()
+                        .fetchSemanticsNode().boundsInRoot.left
+                    assertEquals("Changed-rank target must keep its on-screen x (pixels)", targetX, returnedX, 2f)
+                }
                 assertEquals("Horizontal viewport must survive return", expectedHorizontal, position(rowTag))
                 assertEquals("Vertical viewport must survive return", vertical, position("search-results"))
                 // The restore policy must release on the next remote interaction. Traverse
