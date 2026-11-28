@@ -169,11 +169,17 @@ class RecoveryProbe : Service() {
         val builder = room.getMethod("databaseBuilder", Context::class.java, Class::class.java, String::class.java)
             .invoke(null, fixture, dbType, "lumenara.db")
         val migrationType = Class.forName("androidx.room.migration.Migration")
-        val migrations = java.lang.reflect.Array.newInstance(migrationType, 6)
         val companion = dbType.getField("Companion").get(null)
-        (7..12).forEachIndexed { index, from ->
-            java.lang.reflect.Array.set(migrations, index,
-                companion.javaClass.getMethod("getMIGRATION_${from}_${from + 1}").invoke(companion))
+        // Use every explicit production migration, including later schema packages. The
+        // original 7..12 range silently left install-over fixtures without a path past v13.
+        val migrationGetters = companion.javaClass.methods.filter {
+            it.name.matches(Regex("getMIGRATION_[0-9]+_[0-9]+")) &&
+                it.parameterCount == 0 && migrationType.isAssignableFrom(it.returnType)
+        }.sortedBy { it.name }
+        check(migrationGetters.isNotEmpty()) { "WP11 migrations missing" }
+        val migrations = java.lang.reflect.Array.newInstance(migrationType, migrationGetters.size)
+        migrationGetters.forEachIndexed { index, getter ->
+            java.lang.reflect.Array.set(migrations, index, getter.invoke(companion))
         }
         builder.javaClass.getMethod("addMigrations", migrations.javaClass).invoke(builder, migrations)
         val journalType = Class.forName("androidx.room.RoomDatabase\$JournalMode")
