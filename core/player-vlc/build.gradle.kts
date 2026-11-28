@@ -8,6 +8,7 @@ android {
 dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
     api("org.videolan.android:libvlc-all:3.7.7")
-    implementation(project(":core:data"))
+    api(project(":core:player-api"))
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     testImplementation("junit:junit:4.13.2")
 }

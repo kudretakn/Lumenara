@@ -28,12 +28,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.takeWhile
 import dev.lumenara.catalog.*
-import dev.lumenara.vlc.VlcInput
 import kotlinx.coroutines.*
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import dev.lumenara.vlc.VlcRuntime
-import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer
 import org.videolan.libvlc.util.VLCVideoLayout
 
@@ -76,11 +71,9 @@ internal fun VlcScreen(
     val life by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
     var panel by remember { mutableStateOf(false) }
     LaunchedEffect(sleepCountdown) { if (sleepCountdown) panel = false }
-    val session = ownership ?: remember(item.id) { PlaybackOwnership(item.id, initial) }
+    val routeSession = remember { dev.lumenara.player.api.PlaybackSession() }
+    val session = ownership ?: remember(item.id) { PlaybackOwnership(item.id, initial, routeSession) }
     val fullscreen = rememberFullscreenState(item)
-    val playbackMutex = remember { Mutex() }
-    // Access under playbackMutex: one native player and surface for this screen lifetime.
-    val engineHolder = remember { arrayOfNulls<MediaPlayer>(1) }
     val scope = rememberCoroutineScope()
     val episodeCatalog = seriesCatalog ?: rememberWp14SeriesCatalog(if (item.kind == "EPISODE") group else emptyList())
     val currentEpisodeCatalog by rememberUpdatedState(episodeCatalog)
@@ -95,15 +88,16 @@ internal fun VlcScreen(
     BackHandler { if (panel) panel = false else if (!fullscreen.dismiss()) back() }
     if (!life.isAtLeast(Lifecycle.State.STARTED)) return
     val numbers = if (item.kind == "LIVE") rememberLiveNumberControl(model, item.source, item.id, select) else null
-    val retry = rememberLiveRetry(item.id)
+    val retry = rememberLiveRetry(item.id, ownership = session)
     val context = LocalContext.current
     val composeView = LocalView.current
     val focus = remember { FocusRequester() }
     // Publishing the view from AndroidView.factory changes the playback effect's
     // key from null to view, cancelling playback that may already have started.
     val layout = remember(context) { VLCVideoLayout(context) }
-    var player by remember { mutableStateOf<MediaPlayer?>(null) }
-    var activeMediaId by remember { mutableStateOf<String?>(null) }
+    val controller = remember(context, model) { Wp18VlcPlayback(context, model) }
+    val player by controller::player
+    val activeMediaId by controller::activeMediaId
     val currentItemId by rememberUpdatedState(item.id)
     var playerUi by remember(item.id, player) { mutableStateOf(VlcUiState()) }
     fun refreshPlayerUi(p: MediaPlayer) {
@@ -121,10 +115,10 @@ internal fun VlcScreen(
         }
     }
     val currentUiVisible by rememberUpdatedState(uiVisible)
-    var trackRevision by remember(item.id) { mutableLongStateOf(0) }
+    val trackRevision by controller::trackRevision
     var receivedSubtitleDelayUs by remember(item.id, player) { mutableLongStateOf(0L) }
     var frameRate by remember(item.id, retry.generation) { mutableStateOf<Float?>(null) }
-    var message by remember { mutableStateOf("") }
+    val message by controller::message
     var subtitleNotice by remember(item.id) { mutableStateOf("") }
     val subtitleSearch = rememberSubtitleSearchState(model, item, status = { subtitleNotice = it }) {
         attachSubtitle(it)
@@ -137,18 +131,15 @@ internal fun VlcScreen(
     LaunchedEffect(item.id) {
         preferenceKey = model.repo.preferenceKey(item)
     }
-    var nativePlaying by remember(item.id) { mutableStateOf(false) }
-    var inputHasPlayed by remember(item.id, retry.generation) { mutableStateOf(false) }
-    var playbackFocus by remember { mutableStateOf<PlaybackAudioFocus?>(null) }
-    SideEffect { layout.keepScreenOn = nativePlaying && playbackFocus?.canPlay == true }
+    val nativePlaying by controller::nativePlaying
+    val inputHasPlayed by controller::inputHasPlayed
+    val playbackFocus by controller::playbackFocus
     DisposableEffect(layout) {
         onDispose {
-            layout.keepScreenOn = false
-            playbackFocus?.close()
-            playbackFocus = null
+            controller.suspendOutput(layout)
         }
     }
-    var mediaGeneration by remember { mutableIntStateOf(0) }
+    val mediaGeneration by controller::mediaGeneration
     val currentSubtitle by rememberUpdatedState(subtitle)
     var activeSubtitle by remember(player, mediaGeneration, subtitle?.uri) { mutableStateOf(false) }
     var attached by remember(player, mediaGeneration, subtitle?.uri) { mutableStateOf<android.net.Uri?>(null) }
@@ -303,6 +294,8 @@ internal fun VlcScreen(
         withContext(Dispatchers.Main.immediate) {
             requireMainThread()
             if (p !== player || inputGeneration != mediaGeneration) return@withContext
+            frameRate = p.currentVideoTrack?.takeIf { it.frameRateNum > 0 && it.frameRateDen > 0 }
+                ?.let { it.frameRateNum.toFloat() / it.frameRateDen }
             val audio = p.audioTracks?.toList().orEmpty()
             val text = p.spuTracks?.toList().orEmpty()
             val currentAudio = audio.joinToString { "${it.id}:${it.name}" }
@@ -316,10 +309,6 @@ internal fun VlcScreen(
                     languages = (0 until (media?.trackCount ?: 0)).mapNotNull { index ->
                         media?.getTrack(index)?.let { track -> track.id to track.language.orEmpty() }
                     }.toMap()
-                    if (frameRate == null) frameRate = (0 until (media?.trackCount ?: 0)).asSequence()
-                        .mapNotNull { media?.getTrack(it) as? org.videolan.libvlc.interfaces.IMedia.VideoTrack }
-                        .filter { it.frameRateNum > 0 && it.frameRateDen > 0 }
-                        .map { it.frameRateNum.toFloat() / it.frameRateDen }.firstOrNull()
                 } finally { media?.release() }
                 val savedAudio = model.prefs.playbackChoice("audio", key)
                 val savedText = model.prefs.playbackChoice("text", key)
@@ -364,303 +353,21 @@ internal fun VlcScreen(
             android.util.Log.d("LumenaraFocus", "VLC trigger=reattach/retry granted=$granted viewHasFocus=${composeView.hasFocus()}")
         }
     }
-    LaunchedEffect(layout) {
-        try { awaitCancellation() } finally {
-            withContext(NonCancellable) {
-                // Wait for the cancelled media effect to stop native reads and close its input.
-                playbackMutex.withLock {
-                    val p = engineHolder[0]
-                    engineHolder[0] = null
-                    withContext(Dispatchers.Main.immediate) {
-                        player = null
-                        activeMediaId = null
-                        p?.setEventListener(null)
-                        p?.detachViews()
-                    }
-                    withContext(Dispatchers.IO) { p?.release() }
-                }
-            }
-        }
+    SideEffect {
+        controller.currentItemId = { currentItemId }
+        controller.currentUiVisible = { currentUiVisible }
+        controller.currentLivePlaying = { currentLivePlaying() }
+        controller.showPanel = { panel = true }
+        controller.markFinished = { fullscreen.finished = currentEpisodeCatalog?.neighbor(item.id, 1) != null }
+        controller.episodeEnded = episodeEnded
+        controller.refreshCurrentSlave = { refreshCurrentSlave(it) }
+        controller.refreshCurrentUi = { refreshCurrentUi(it) }
     }
-    LaunchedEffect(layout, item.id, item.encryptedUrl, retry.generation) {
-        val perfRequest = if (item.kind == "LIVE") Perf.transitions.zapRequest(item.id) else null
-        val surface = layout
-        nativePlaying = false
-        activeMediaId = null
-        message = ""
-        val playbackScope = this
-        android.util.Log.d("LumenaraVlc", "playback waiting for mutex retry=${retry.generation}")
-        playbackMutex.withLock {
-            android.util.Log.d("LumenaraVlc", "playback acquired mutex")
-            session.awaitInputRelease()
-            val inputRelease = session.holdInput()
-            var input: VlcInput? = null
-            var engine: MediaPlayer? = null
-            val binding = session.newBinding()
-            val bindingId = "vlc-${binding.generation}"
-            var bound = false
-            var attemptFocus: PlaybackAudioFocus? = null
-            var completed = false
-            var recorded = false
-            var ownStop = false
-            var paused = false
-            var reconnectRequested = false
-            var buffering = false
-            var terminalError = false
-            fun reconnect() {
-                if (reconnectRequested || ownStop) return
-                reconnectRequested = true
-                if (!retry.failed()) {
-                    message = "VLC bu yayını oynatamadı."
-                    panel = true
-                }
-            }
-            try {
-                wp09WatchPlayback(
-                    monitorStalls = item.kind == "LIVE",
-                    snapshot = {
-                        Wp09PlaybackSample(engine?.takeIf { bound }?.time,
-                            paused = paused || !session.wantsPlay || reconnectRequested || terminalError,
-                            buffering = buffering)
-                    },
-                    onPrepared = { if (!reconnectRequested) { retry.playing(); message = "" } },
-                ) { watchdog ->
-                    val source = model.repo.library.source(item.source) ?: error("Kaynak kaldırıldı")
-                    val address = if (item.kind == "LIVE") liveUrls.address(item) else model.repo.address(item)
-                    val mark = model.repo.library.mark(item.id)
-                    val start = session.startPosition(mark?.let {
-                            if (item.kind == "EPISODE") dev.lumenara.catalog.resumePosition(it.position, it.duration)
-                            else it.position.takeIf { position -> it.duration <= 0 || position < it.duration * .95 } ?: 0
-                        } ?: 0)
-                    withContext(Dispatchers.IO) {
-                        // Warm/await native code before opening a short-lived live HTTP stream.
-                        val runtimeStart = android.os.SystemClock.elapsedRealtime()
-                        android.util.Log.d("LumenaraVlc", "playback runtime acquire start")
-                        val lib = VlcRuntime.get(context)
-                        android.util.Log.d("LumenaraVlc", "playback runtime acquired ms=${android.os.SystemClock.elapsedRealtime() - runtimeStart}")
-                        ensureActive()
-                        val p = engineHolder[0] ?: MediaPlayer(lib).also { engineHolder[0] = it }
-                        engine = p
-                        val inputStart = android.os.SystemClock.elapsedRealtime()
-                        android.util.Log.d("LumenaraVlc", "playback input open start")
-                        input = VlcInput.openCancellable(context, address, source.allowHttp)
-                        android.util.Log.d("LumenaraVlc", "playback input ready demux=${input!!.demux} ms=${android.os.SystemClock.elapsedRealtime() - inputStart}")
-                        ensureActive()
-                        val media = Media(lib, input!!.descriptor.fileDescriptor)
-                        try {
-                            media.addOption(":demux=" + input!!.demux)
-                            if (start > 0 && item.kind != "LIVE") media.addOption(":start-time=${start/1000.0}")
-                            p.media = media
-                        } finally {
-                            media.release()
-                        }
-                    }
-                    val p = checkNotNull(engine)
-                    withContext(Dispatchers.Main.immediate) {
-                        session.bind(binding, bindingId, if (item.kind == "LIVE") 0 else start)
-                        bound = true
-                        val focusOwner = PlaybackAudioFocus.create(context, playback = { play ->
-                            paused = !play
-                            if (!play) {
-                                nativePlaying = false
-                                surface.keepScreenOn = false
-                            }
-                            if (!p.isReleased) {
-                                // libVLC 3.7.7 pause() calls set_pause(1), including while buffering.
-                                if (play && !ownStop) p.play() else p.pause()
-                            }
-                        }, intentChanged = { session.wantsPlay = it })
-                        attemptFocus = focusOwner
-                        playbackFocus = focusOwner
-                        // Listener registration creates a Handler; UI writes stay on Main.
-                        // Install it before attaching views, which can start playback.
-                        p.setEventListener { event ->
-                            playbackScope.launch(Dispatchers.Main.immediate) {
-                                if (ownStop || p !== player || currentItemId != item.id ||
-                                    !session.owns(binding, bindingId)) return@launch
-                                when (event.type) {
-                                    MediaPlayer.Event.Opening -> {
-                                        nativePlaying = false
-                                        mediaGeneration++
-                                        trackRevision++
-                                        android.util.Log.d("LumenaraVlc", "playback Opening generation=$mediaGeneration")
-                                    }
-                                    MediaPlayer.Event.Buffering -> {
-                                        buffering = event.buffering < 100f
-                                    }
-                                    MediaPlayer.Event.Playing -> {
-                                        // A late surface callback must obey focus and the user's pause intent.
-                                        if (!focusOwner.canPlay) {
-                                            p.pause()
-                                            nativePlaying = false
-                                            surface.keepScreenOn = false
-                                            return@launch
-                                        }
-                                        paused = false
-                                        buffering = false
-                                        nativePlaying = true
-                                        inputHasPlayed = true
-                                        trackRevision++
-                                        surface.keepScreenOn = true
-                                        android.util.Log.d("LumenaraVlc", "playback Playing generation=$mediaGeneration")
-                                        if (item.kind == "LIVE") currentLivePlaying()
-                                        if (watchdog.prepared && !reconnectRequested) { retry.playing(); message = "" }
-                                        if (!recorded) {
-                                            recorded = true
-                                            model.started(item)
-                                        }
-                                    }
-                                    MediaPlayer.Event.Paused -> {
-                                        paused = true
-                                        nativePlaying = false
-                                    }
-                                    MediaPlayer.Event.Vout -> {
-                                        if (event.voutCount > 0) {
-                                            Perf.since("channel", "channel_video_output_ready_vlc")
-                                        }
-                                        refreshCurrentSlave(p)
-                                        trackRevision++
-                                    }
-                                    MediaPlayer.Event.ESAdded, MediaPlayer.Event.ESDeleted, MediaPlayer.Event.ESSelected -> {
-                                        refreshCurrentSlave(p)
-                                        trackRevision++
-                                    }
-                                    MediaPlayer.Event.EncounteredError -> {
-                                        nativePlaying = false
-                                        focusOwner.stopped(item.kind == "LIVE")
-                                        if (item.kind == "LIVE") reconnect()
-                                        else {
-                                            terminalError = true
-                                            message = "VLC bu yayını oynatamadı."
-                                            panel = true
-                                        }
-                                    }
-                                    MediaPlayer.Event.EndReached -> {
-                                        nativePlaying = false
-                                        focusOwner.stopped(item.kind == "LIVE")
-                                        if (liveShouldReconnect(item.kind, LivePlaybackSignal.END_REACHED,
-                                                ownStop = ownStop, paused = paused)) reconnect()
-                                        if (item.kind != "LIVE") {
-                                            completed = true
-                                            model.progress(item, p.length, p.length)
-                                        }
-                                        if (item.kind == "EPISODE") {
-                                            fullscreen.finished = currentEpisodeCatalog?.neighbor(item.id, 1) != null
-                                            episodeEnded()
-                                        }
-                                    }
-                                    MediaPlayer.Event.Stopped -> {
-                                        nativePlaying = false
-                                        focusOwner.stopped(item.kind == "LIVE")
-                                        android.util.Log.d("LumenaraVlc", "playback Stopped generation=$mediaGeneration")
-                                        if (liveShouldReconnect(item.kind, LivePlaybackSignal.STOPPED,
-                                                ownStop = ownStop, paused = paused)) reconnect()
-                                    }
-                                }
-                                if (currentUiVisible) refreshCurrentUi(p)
-                            }
-                        }
-                        val needsSurface = player !== p
-                        activeMediaId = item.id
-                        mediaGeneration++
-                        player = p
-                        if (needsSurface) p.attachViews(surface, null, true, false)
-                        // libVLC may also call play() from its surface-created callback.
-                        // Serialize that callback and the initial request on Main.
-                        if (session.wantsPlay) focusOwner.play() else focusOwner.pause()
-                        android.util.Log.d("LumenaraVlc", "playback play requested generation=$mediaGeneration")
-                    }
-                    // Vout only means output creation. Stats are explicitly enabled by VlcRuntime.
-                    // Read native stats off Main, with a fixed bound and attempt-owned cancellation.
-                    val measureFrame = Perf.transitions.zapPending(perfRequest)
-                    launch(Dispatchers.IO) {
-                        val media = p.media
-                        try {
-                            repeat(600) {
-                                ensureActive()
-                                if (!measureFrame && watchdog.prepared) return@launch
-                                if ((media?.stats?.displayedPictures ?: 0) > 0) {
-                                    withContext(Dispatchers.Main.immediate) {
-                                        watchdog.firstFrame()
-                                        Perf.transitions.zapFirstFrame(perfRequest, "vlc")
-                                    }
-                                    return@launch
-                                }
-                                delay(50)
-                            }
-                        } finally { media?.release() }
-                    }
-                    var lastSavedAtMs = 0L
-                    wallClockTicks(if (item.kind == "LIVE") 500 else 5000).collect {
-                        val now = android.os.SystemClock.elapsedRealtime()
-                        val playing = p.isPlaying
-                        if (playing && now - lastSavedAtMs >= 5000) {
-                            lastSavedAtMs = now
-                            session.capture(binding, bindingId, p.time, p.length)?.let {
-                                model.progress(item, it.position, it.duration)
-                            }
-                        }
-                    }
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                android.util.Log.w("LumenaraVlc", "VLC playback failed: ${e.javaClass.simpleName}")
-                if (item.kind == "LIVE" && e is dev.lumenara.vlc.UnsupportedVlcInputException && unsupportedLive != null) {
-                    // A sticky audio fallback must still allow HLS/DASH channels to use Media3.
-                    retry.stop()
-                    unsupportedLive()
-                } else if (item.kind != "LIVE" || e !is java.io.IOException || !retry.failed()) {
-                    message = if (e is Wp09PlaybackTimeoutException) "Yayın yanıt vermedi. Yeniden deneyin."
-                        else "VLC bu kaynakta TS, MKV veya konumlandırılabilir MP4 dosyası gerektirir."
-                    panel = true
-                }
-            } finally {
-                // Ignore late native events before closing the input or stopping/releasing it.
-                ownStop = true
-                withContext(NonCancellable) {
-                    val p = engine
-                    withContext(Dispatchers.Main.immediate) {
-                        android.util.Log.d("LumenaraVlc", "playback cleanup current=${player === p} generation=$mediaGeneration")
-                        if (player === p) nativePlaying = false
-                        surface.keepScreenOn = false
-                        attemptFocus?.close()
-                        if (playbackFocus === attemptFocus) playbackFocus = null
-                        p?.setEventListener(null)
-                    }
-                    withContext(Dispatchers.IO) {
-                        try {
-                            p?.let {
-                                val lastPosition = it.time
-                                val length = it.length
-                                withContext(Dispatchers.Main.immediate) {
-                                    // A focus-delayed/paused input may still report native time 0.
-                                    // Preserve the session start until it has actually played.
-                                    if (bound && recorded) session.capture(binding, bindingId,
-                                        if (completed && length > 0) length else lastPosition, length)?.let {
-                                        model.progress(item, it.position, it.duration)
-                                    }
-                                    session.unbind(binding)
-                                }
-                            }
-                        } finally {
-                            // stop() joins the old native input before its descriptor closes.
-                            // Keep the player and attached output for the next channel/retry.
-                            try { input?.cancel() } finally {
-                                try {
-                                    p?.stop()
-                                    p?.media = null
-                                } finally {
-                                    try { input?.close() } finally {
-                                        withContext(Dispatchers.Main.immediate) { session.releaseInput(inputRelease) }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    LaunchedEffect(controller) {
+        try { awaitCancellation() } finally { controller.release() }
+    }
+    LaunchedEffect(controller, layout, item.id, item.encryptedUrl, retry.generation) {
+        controller.run(item, session, retry, layout, liveUrls, unsupportedLive)
     }
     Box(
         Modifier.fillMaxSize()
@@ -752,7 +459,7 @@ internal fun VlcScreen(
                     }
                 }
                 if (message.isNotEmpty()) item {
-                    PlayerOption(onClick = { message = ""; panel = false; retry.manual() }) { Text("Yeniden dene") }
+                    PlayerOption(onClick = { controller.message = ""; panel = false; retry.manual() }) { Text("Yeniden dene") }
                 }
                 item {
                     PlayerOption(onClick = {
@@ -764,10 +471,12 @@ internal fun VlcScreen(
                     scope.launch {
                         val snapshot = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main.immediate) {
                             player?.takeIf { activeMediaId == item.id && inputHasPlayed }
-                                ?.let { it.time.coerceAtLeast(0) to it.length.coerceAtLeast(0) }
+                                ?.let { p ->
+                                    session.captureCurrent(p.time, p.length)
+                                }
                         }
                         if (snapshot != null)
-                            model.repo.updateMark(item.id) { it.copy(position = snapshot.first, duration = snapshot.second) }
+                            model.repo.updateMark(item.id) { it.copy(position = snapshot.position, duration = snapshot.duration) }
                         val rows = if (version.kind == "EPISODE") wp14SeriesCatalog(model.repo.episodeSnapshot(version.parent)).items else group
                         select(version, rows)
                     }

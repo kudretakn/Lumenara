@@ -1,68 +1,63 @@
 package dev.lumenara.tv
 
+import dev.lumenara.player.api.EngineKind
+import dev.lumenara.player.api.PlaybackSession
 import kotlinx.coroutines.CompletableDeferred
 
-/** Main-thread session state. It outlives the STARTED-only engine effects. */
-internal class PlaybackOwnership(val itemId: String, initial: Long = -1) {
-    internal class Binding internal constructor(val itemId: String, val generation: Long)
+/** Item view of the route's one session. Kept outside STARTED-only engine effects. */
+internal class PlaybackOwnership(
+    val itemId: String,
+    initial: Long = -1,
+    private val session: PlaybackSession = PlaybackSession(),
+    progress: ((Snapshot) -> Unit)? = null,
+) {
+    internal class Binding internal constructor(internal val token: PlaybackSession.Binding) {
+        val itemId: String get() = token.itemId
+        val generation: Long get() = token.generation
+    }
     data class Snapshot(val position: Long, val duration: Long)
-
-    private var generation = 0L
+    private var progressWriter = progress
+    internal val item = session.item(itemId, initial) { progressWriter?.invoke(Snapshot(it.position, it.duration)) }
+    fun configureProgress(write: (Snapshot) -> Unit) {
+        if (progressWriter == null) progressWriter = write
+    }
     private var active: Binding? = null
-    private var mediaId: String? = null
-    private var pendingInitial = initial
-    private var snapshot: Snapshot? = null
-    private var inputRelease: CompletableDeferred<Unit>? = null
-    var wantsPlay = true
-    val hasBoundMedia: Boolean get() = active != null
+    private var inputId: String? = null
+    var wantsPlay: Boolean
+        get() = item.wantsPlay
+        set(value) { item.wantsPlay = value }
+    val hasBoundMedia: Boolean get() = session.hasBoundMedia(item)
 
-    fun newBinding() = Binding(itemId, ++generation)
-
-    fun startPosition(saved: Long): Long = snapshot?.position ?: pendingInitial.takeIf { it >= 0 } ?: saved
-
-    /** Consume the transfer only once media has actually been installed in the engine. */
-    fun bind(binding: Binding, mediaId: String, start: Long) {
+    fun select(live: Boolean, preferred: EngineKind) = session.select(item, live, preferred)
+    fun newBinding() = Binding(session.newBinding(item))
+    fun startPosition(saved: Long): Long = session.startPosition(item, saved)
+    fun bind(binding: Binding, mediaId: String, start: Long, engine: EngineKind = EngineKind.MEDIA3) {
         check(binding.itemId == itemId)
+        session.bind(binding.token, mediaId, start, engine)
         active = binding
-        this.mediaId = mediaId
-        pendingInitial = -1
-        snapshot = Snapshot(start.coerceAtLeast(0), 0)
+        inputId = mediaId
     }
+    fun owns(binding: Binding, actualMediaId: String?): Boolean = session.owns(binding.token, actualMediaId)
+    fun capture(binding: Binding, actualMediaId: String?, position: Long, duration: Long): Snapshot? =
+        session.capture(binding.token, actualMediaId, position, duration)?.let { Snapshot(it.position, it.duration) }
 
-    fun owns(binding: Binding, actualMediaId: String?): Boolean =
-        active === binding && binding.itemId == itemId && mediaId == actualMediaId
-
-    fun capture(binding: Binding, actualMediaId: String?, position: Long, duration: Long): Snapshot? {
-        if (!owns(binding, actualMediaId) || position < 0) return null
-        return Snapshot(position, duration.coerceAtLeast(0)).also { snapshot = it }
+    /** All periodic, completion and cleanup progress goes to the item sink configured once. */
+    fun save(binding: Binding, mediaId: String?, position: Long, duration: Long) =
+        session.save(binding.token, mediaId, position, duration)
+    fun saveCurrent(position: Long, duration: Long) {
+        active?.let { save(it, inputId, position, duration) }
     }
-
+    fun captureCurrent(position: Long, duration: Long): Snapshot? =
+        active?.let { capture(it, inputId, position, duration) }
     fun unbind(binding: Binding) {
-        if (active === binding) { active = null; mediaId = null }
+        session.unbind(binding.token)
+        if (active === binding) { active = null; inputId = null }
     }
-
-    fun transfer(position: Long) {
-        // An outgoing engine's asynchronous cleanup cannot overwrite a handoff.
-        active = null
-        mediaId = null
-        if (position >= 0) {
-            snapshot = null
-            pendingInitial = position
-        }
-    }
-
-    fun ownsMedia(actualMediaId: String?): Boolean = active != null && mediaId == actualMediaId
-
-    // VLC stop/fd close is asynchronous. A handoff must wait before Media3 opens its input.
-    fun holdInput(): CompletableDeferred<Unit> {
-        check(inputRelease == null)
-        return CompletableDeferred<Unit>().also { inputRelease = it }
-    }
-
-    suspend fun awaitInputRelease() { inputRelease?.await() }
-
-    fun releaseInput(release: CompletableDeferred<Unit>) {
-        if (inputRelease === release) inputRelease = null
-        release.complete(Unit)
-    }
+    fun transfer(position: Long) { session.transfer(item, position) }
+    fun fallbackToVlc(position: Long): Boolean = session.fallbackToVlc(item, position)
+    fun switchTo(engine: EngineKind, position: Long) = session.switchTo(item, engine, position)
+    fun ownsMedia(actualMediaId: String?): Boolean = session.ownsMedia(item, actualMediaId)
+    fun holdInput(): CompletableDeferred<Unit> = session.holdInput()
+    suspend fun awaitInputRelease() = session.awaitInputRelease()
+    fun releaseInput(release: CompletableDeferred<Unit>) = session.releaseInput(release)
 }
