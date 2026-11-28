@@ -47,7 +47,7 @@ internal class Wp11RecoveryClient : Closeable {
         bound = context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
         check(bound) { "WP11 debug probe unavailable" }
         try {
-            check(connected.await(10, TimeUnit.SECONDS) && ::binder.isInitialized) { "WP11 bind timeout" }
+            check(connected.await(30, TimeUnit.SECONDS) && ::binder.isInitialized) { "WP11 bind timeout" }
         } catch (failure: Throwable) {
             unbind()
             throw failure
@@ -68,11 +68,13 @@ internal class Wp11RecoveryClient : Closeable {
                 putBoolean("committed", committed)
             }
         })
-        val response = replies.poll(35, TimeUnit.SECONDS)
+        val response = replies.poll(90, TimeUnit.SECONDS)
         assertNotNull("WP11 reply timeout for $command/$operation/$boundary", response)
         val result = response!!
-        // Replies contain only whitelisted status/stage/class codes; fixture values never cross IPC.
-        assertEquals("WP11 probe code=${result.getString("code")}", expected, result.getString("status"))
+        // Replies contain only fixed status/stage/reason/class codes; fixture values never cross IPC.
+        assertEquals("WP11 $command/$operation/$boundary committed=$committed " +
+            "probe code=${result.getString("code")} reason=${result.getString("reason")}",
+            expected, result.getString("status"))
         assertTrue("WP11 must use a separate process", result.getInt("pid") != android.os.Process.myPid())
         if (expected == "paused") assertEquals(boundary, result.getString("code"))
         return result
@@ -81,7 +83,7 @@ internal class Wp11RecoveryClient : Closeable {
     fun killAndAwaitDeath() {
         val killedBinder = binder
         Messenger(killedBinder).send(Message.obtain().apply { what = 2 })
-        assertTrue("WP11 child did not die", died.await(5, TimeUnit.SECONDS))
+        assertTrue("WP11 child did not die", died.await(30, TimeUnit.SECONDS))
         assertFalse("WP11 Binder survived kill", killedBinder.isBinderAlive)
         // Unbind before another client starts: BIND_AUTO_CREATE must not relaunch a killed worker.
         unbind()

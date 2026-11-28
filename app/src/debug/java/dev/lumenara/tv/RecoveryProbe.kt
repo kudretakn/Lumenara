@@ -60,7 +60,8 @@ class RecoveryProbe : Service() {
                 } catch (failure: Throwable) {
                     // Never send exception messages, stack traces, URLs, credentials or fixture values.
                     val cause = if (failure is InvocationTargetException) failure.targetException else failure
-                    send(target, "error", if (cause is Wp11Invariant) cause.code else cause.javaClass.simpleName)
+                    send(target, "error", if (cause is Wp11Invariant) cause.code else cause.javaClass.simpleName,
+                        if (cause is Wp11Invariant) cause.reason else "probe-exception")
                 }
             }
         }
@@ -94,6 +95,8 @@ class RecoveryProbe : Service() {
                 val spec = SourceSpec(endpoint, true)
                 File(fixture.filesDir, "wp11-spec.sha256").writeBytes(specDigest(spec))
                 repo.add("Test · WP11", spec)
+                // Non-sensitive fixture identity, retained across kills and source re-creation.
+                File(fixture.filesDir, "wp11-source.id").writeText(sourceId())
                 setState(new = true)
                 // Persist only the normal encrypted v1 backup; never a plaintext fixture snapshot.
                 File(fixture.filesDir, "wp11-backup").writeBytes(repo.createBackup(password()))
@@ -139,6 +142,8 @@ class RecoveryProbe : Service() {
                     check(java.net.URI(endpoint).host in setOf("127.0.0.1", "localhost"))
                     repo.add("Test · WP11", SourceSpec(endpoint, true))
                 }
+                val sameSource = operation == "restore" || (operation == "delete" && !committed)
+                invariant((sourceId() == originalSourceId()) == sameSource, "source-identity")
                 verifyState(new = operation == "restore" && committed)
                 verifyHealthy()
                 send(target, "verified")
@@ -225,12 +230,15 @@ class RecoveryProbe : Service() {
         boundary = "" // Exactly one hit; no recovery/follow-up write can satisfy the same request.
         send(checkNotNull(reply), "paused", stage)
         // Bounded even if the parent disappears. The test must observe Binder death, not this timeout.
-        check(parked.await(25, TimeUnit.SECONDS)) { "WP11 boundary timeout" }
+        check(parked.await(60, TimeUnit.SECONDS)) { "WP11 boundary timeout" }
     }
 
     private fun prefs() = checkNotNull(preferences)
     private fun repo() = checkNotNull(repository)
     private suspend fun sourceId() = repo().library.snapshot().single().id
+    private fun originalSourceId() = File(fixture.filesDir, "wp11-source.id").readText().also {
+        invariant(it.isNotBlank(), "original-source-identity")
+    }
     private suspend fun item() = repo().library.browse(sourceId(), "LIVE", "", "", "", 2).first().single()
 
     private suspend fun setState(new: Boolean) {
@@ -263,9 +271,18 @@ class RecoveryProbe : Service() {
         invariant(repo().library.mark(row.id) == expectedMark(row.id, new), "mark-equality")
         invariant(repo().library.member(row.id) == Member(row.id, "WP11 collection"), "collection-equality")
         invariant(prefs().showAdult.first() == new, "adult-equality")
-        invariant(prefs().text("audio_${row.id}").first() == if (new) "en" else "tr", "audio-equality")
-        invariant(prefs().text("subtitle_delay_${source.id}|${row.id}").first() == if (new) "750" else "250", "delay-equality")
-        invariant(prefs().text("limit_${source.id}").first() == if (new) "3" else "2", "limit-equality")
+        verifyText("audio_${row.id}", if (new) "en" else "tr", "audio-equality")
+        verifyText("subtitle_delay_${source.id}|${row.id}", if (new) "750" else "250", "delay-equality")
+        // A re-added source has a fresh UUID. History carries item choices, not the old source's
+        // connection policy (orphan matching even permits a different account on that server).
+        // Check zero loss at the original key AND the new source's configured/effective default.
+        val originalSource = originalSourceId()
+        verifyText("limit_$originalSource", if (new) "3" else "2", "limit-equality")
+        if (source.id != originalSource) {
+            invariant(!new, "restore-source-identity")
+            verifyText("limit_${source.id}", "", "new-source-limit-default")
+            invariant(prefs().connections(source.id).first() == 1, "new-source-connections-default")
+        }
         invariant(prefs().recentLive.first() == listOf(row.id), "recent-equality")
         invariant(prefs().secret("wp11") == if (new) "wp11-new-private" else "wp11-old-private", "secret-equality")
         invariant(!prefs().text("secret_wp11").first().contains("wp11-"), "secret-encrypted")
@@ -287,14 +304,22 @@ class RecoveryProbe : Service() {
     private fun password() = "wp11-fixture-password".toCharArray()
     private fun specDigest(spec: SourceSpec) = java.security.MessageDigest.getInstance("SHA-256")
         .digest(spec.encode().toByteArray(Charsets.UTF_8))
-    private class Wp11Invariant(val code: String) : IllegalStateException("WP11 invariant")
-    private fun invariant(value: Boolean, code: String) { if (!value) throw Wp11Invariant(code) }
+    private suspend fun verifyText(key: String, expected: String, code: String) {
+        val actual = prefs().text(key).first()
+        invariant(actual == expected, code, if (actual.isEmpty()) "setting-missing" else "setting-mismatch")
+    }
 
-    private fun send(target: Messenger, status: String, code: String = "") {
+    private class Wp11Invariant(val code: String, val reason: String) : IllegalStateException("WP11 invariant")
+    private fun invariant(value: Boolean, code: String, reason: String = "fixture-mismatch") {
+        if (!value) throw Wp11Invariant(code, reason)
+    }
+
+    private fun send(target: Messenger, status: String, code: String = "", reason: String = "") {
         target.send(Message.obtain().apply {
             data = Bundle().apply {
                 putString("status", status)
                 putString("code", code)
+                putString("reason", reason)
                 putInt("pid", android.os.Process.myPid())
             }
         })

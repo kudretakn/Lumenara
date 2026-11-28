@@ -58,6 +58,7 @@ internal object Wp11UpgradeFixture {
             .digest(spec.encode().toByteArray(Charsets.UTF_8)))
         repo.add("Test · WP11", spec)
         val source = repo.library.snapshot().single()
+        File(context.filesDir, "wp11-source.id").writeText(source.id)
         val row = repo.library.browse(source.id, "LIVE", "", "", "", 2).first().single()
         repo.updateMark(row.id) { Mark(row.id, true, true, 400, 1000, 10) }
         repo.library.collection(Member(row.id, "WP11 collection"))

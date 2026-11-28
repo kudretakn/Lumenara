@@ -8,6 +8,8 @@ The service uses the real `Repository`, Room WAL, production `RestoreTransaction
 
 Boundaries: `before_undo` (before journal save), `after_undo` (DAO save completed, FULL checkpoint not yet executed), `after_checkpoint`, `after_settings` (DataStore edit completed), `before_commit` (journal delete executed inside the still-open Room transaction), `after_commit` (Room transaction returned successfully). Every pre-commit boundary must restore the old state; the post-commit boundary must retain the new state. A deleted source is re-added and checked to prove orphan state is usable. Failure to reach a hook fails the test. Reflection is debug-only and checks the actual current storage calls rather than duplicating the undo algorithm; hook drift must be fixed rather than skipped.
 
+The original source UUID is saved as non-sensitive fixture metadata by both seed paths. Connection-limit equality is checked at that original source's setting key on every reopen. A re-added source has a new UUID: its configured limit must be unset and its effective limit must be the default of one. History recovery carries item choices (audio/subtitle/recent-live), not source connection policies; provider matching can recover history for a different account on the same server. Restore and rollback that retain the original source still require its exact configured limit. Replies identify the invariant and a fixed reason such as `setting-missing` or `setting-mismatch`; runner failures also identify the command, operation, boundary, and commit expectation. Values, keys, addresses, and exception messages are never included.
+
 On a prebuilt debug APK and matching instrumentation APK:
 
 ```bash
@@ -22,7 +24,7 @@ For a real package replacement, add `--previous-apk /path/previous-debug.apk` (o
 
 The standalone seed phase must not be added to a multi-class instrumentation run: DataStore's process-wide delegate must first be initialized with the isolated fixture context. The ordinary no-argument suite test uses the child process instead.
 
-The host runs the process-death matrix, all migration tests (schemas 1–13), and encrypted disk reopen; `--upgrade-only` limits it to the two install-over phases. It has one 600-second default budget (maximum 900), refuses missing/extra/failed/skipped results and abnormal instrumentation completion using WP01's parser, and writes only APK identities/hashes, test IDs, and safe phase/error codes to `/tmp/wp11-recovery-result.json`. It does not capture logcat or print fixture/secret values. Hooks park for at most 25 seconds and IPC waits are bounded. The full device matrix must be timed by the lead within the suite's 30-minute limit.
+The host runs the process-death matrix, all migration tests (schemas 1–13), and encrypted disk reopen; `--upgrade-only` limits it to the two install-over phases. It has one 600-second default budget (maximum 900), refuses missing/extra/failed/skipped results and abnormal instrumentation completion using WP01's parser, and writes only APK identities/hashes, test IDs, and safe phase/error codes to `/tmp/wp11-recovery-result.json`. It does not capture logcat or print fixture/secret values. Hooks park for at most 60 seconds; binding and observed Binder death each allow 30 seconds, and command replies allow 90 seconds. All waits end on observable events, without fixed synchronization sleeps. The full device matrix must be timed by the lead within the suite's 30-minute limit.
 
 Host-only harness checks (no Android/Gradle required):
 
