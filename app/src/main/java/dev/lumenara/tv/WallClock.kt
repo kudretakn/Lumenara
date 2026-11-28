@@ -10,7 +10,8 @@ import kotlinx.coroutines.isActive
 
 /**
  * UI timers follow elapsed real time, independently of the Compose frame/test clock.
- * Only the producer runs in the background; collectors update Compose state on the UI thread.
+ * Main's real delay keeps ticks independent of the Compose test scheduler. Emit on Main too:
+ * unconfined Compose test collectors can resume inline on the producer's thread.
  * Cancelling the collector (leaving the screen or restarting the hero delay) cancels the timer.
  */
 internal fun wallClockTicks(periodMillis: Long): Flow<Long> = flow {
@@ -19,4 +20,4 @@ internal fun wallClockTicks(periodMillis: Long): Flow<Long> = flow {
         delay(periodMillis)
         emit(System.currentTimeMillis())
     }
-}.flowOn(Dispatchers.Default)
+}.flowOn(Dispatchers.Main.immediate)
