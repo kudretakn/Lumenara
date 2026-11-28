@@ -94,6 +94,7 @@ class MigrationTest {
                     db.execSQL("""INSERT INTO items (id,source,title,category,kind,tvgId,encryptedUrl,search,generation,logo,parent)
                         VALUES ('episode','local','Show S2E3 - Arrival','Season 2','EPISODE','','opaque','episode',1,'','series')""")
                     db.execSQL("INSERT INTO marks VALUES ('episode',1,1,400,1000,3)")
+                    db.execSQL("INSERT INTO collections VALUES ('episode','Episodes')")
                 }
                 db.execSQL("INSERT INTO marks VALUES ('item',1,0,250,1000,1)")
                 db.execSQL("INSERT INTO marks VALUES ('sub',1,1,100,1000,1)")
@@ -108,6 +109,10 @@ class MigrationTest {
                 }
                 if (from == 12) db.execSQL("INSERT INTO version_backfill_state VALUES (1,'done','',0,0)")
                 if (from >= 13) db.execSQL("INSERT INTO version_backfill_state VALUES (1,'normalize','',0,0)")
+                if (from >= 12) {
+                    db.execSQL("INSERT INTO item_redirects VALUES ('retired-live','item')")
+                    db.execSQL("INSERT INTO item_redirects VALUES ('retired-movie','sub')")
+                }
                 if (from >= 7) {
                     db.execSQL("INSERT INTO feeds VALUES ('guide','local','opaque')")
                     db.execSQL("INSERT INTO programmes VALUES ('guide','1',100,200,'Program','Description','program')")
@@ -123,6 +128,7 @@ class MigrationTest {
                     LibraryDb.MIGRATION_13_14, LibraryDb.MIGRATION_14_15, LibraryDb.MIGRATION_15_16).build()
             try {
                 runBlocking {
+                    verifyUserState(db, from)
                     db.openHelper.readableDatabase.query("SELECT COUNT(*) FROM wp19_search_documents").use {
                         assertTrue(it.moveToFirst())
                         assertEquals("Opening schema $from must not fill the index", 0, it.getInt(0))
@@ -139,7 +145,6 @@ class MigrationTest {
                     assertEquals("", old.providerId)
                     assertEquals("", old.tvgName)
                     assertEquals("", old.tvgGroup)
-                    assertTrue(db.library().redirects().isEmpty())
                     // Opening Room only changes schema. Every legacy stream is immediately
                     // visible, even when its stale representative flag previously hid it.
                     assertEquals("", old.cleanTitle)
@@ -165,6 +170,7 @@ class MigrationTest {
                     assertEquals("sub", db.library().browse("local", "MOVIE", "Film", "", "favorite", 120).first().single().id)
                     assertEquals(1, db.library().browse("local", "LIVE", "", "", "favorite", 120).first().size)
                     assertEquals(1, db.library().categoryCounts("MOVIE", "local").first().single().count)
+                    verifyUserState(db, from)
                 }
                 db.openHelper.readableDatabase.query("PRAGMA index_list(items)").use { cursor ->
                     val names = buildSet { while (cursor.moveToNext()) add(cursor.getString(cursor.getColumnIndexOrThrow("name"))) }
@@ -226,7 +232,7 @@ class MigrationTest {
                     runBlocking {
                         assertEquals(dev.lumenara.data.Mapping("item", "guide", "1"), db.guide().mapping("item").first())
                     }
-                    db.openHelper.readableDatabase.query("SELECT id,name FROM collections").use { cursor ->
+                    db.openHelper.readableDatabase.query("SELECT id,name FROM collections WHERE id='item'").use { cursor ->
                         assertTrue(cursor.moveToFirst())
                         assertEquals("item", cursor.getString(0))
                         assertEquals("Fixture", cursor.getString(1))
@@ -239,6 +245,7 @@ class MigrationTest {
             val reopened = Room.databaseBuilder(context, LibraryDb::class.java, name).build()
             try {
                 runBlocking {
+                    verifyUserState(reopened, from)
                     assertEquals(dev.lumenara.data.Mark("item", true, false, 250, 1000, 1), reopened.library().mark("item"))
                     assertEquals(dev.lumenara.data.Mark("sub", true, true, 100, 1000, 1), reopened.library().mark("sub"))
                     assertEquals("Test", reopened.library().source("local")?.name)
@@ -270,6 +277,28 @@ class MigrationTest {
             }
         } finally {
             context.deleteDatabase(name)
+        }
+    }
+
+    /** Check complete user records before backfill, after backfill and after a disk reopen.
+     * Redirects and episode collections must survive the eventual identity-table migration
+     * just like favorite/progress tuples and live guide mappings.
+     */
+    private suspend fun verifyUserState(db: LibraryDb, from: Int) {
+        assertEquals(dev.lumenara.data.Mark("item", true, false, 250, 1000, 1), db.library().mark("item"))
+        assertEquals(dev.lumenara.data.Mark("sub", true, true, 100, 1000, 1), db.library().mark("sub"))
+        val redirects = if (from >= 12) setOf(
+            dev.lumenara.data.ItemRedirect("retired-live", "item"),
+            dev.lumenara.data.ItemRedirect("retired-movie", "sub"),
+        ) else emptySet()
+        assertEquals(redirects, db.library().redirects().toSet())
+        if (from >= 7) {
+            assertEquals(dev.lumenara.data.Member("item", "Fixture"), db.library().member("item"))
+            assertEquals(dev.lumenara.data.Mapping("item", "guide", "1"), db.guide().mapping("item").first())
+        }
+        if (from >= 15) {
+            assertEquals(dev.lumenara.data.Mark("episode", true, true, 400, 1000, 3), db.library().mark("episode"))
+            assertEquals(dev.lumenara.data.Member("episode", "Episodes"), db.library().member("episode"))
         }
     }
 }
