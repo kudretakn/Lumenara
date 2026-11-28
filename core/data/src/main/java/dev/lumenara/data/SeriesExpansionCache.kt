@@ -1,5 +1,7 @@
 package dev.lumenara.data
 
+import androidx.annotation.VisibleForTesting
+
 /** Call under Repository's import/expansion lock; Room remains the episode cache. */
 internal class SeriesExpansionCache(
     private val readStamp: suspend (String) -> Long,
@@ -8,6 +10,13 @@ internal class SeriesExpansionCache(
 ) {
     private val stamps = object : LinkedHashMap<String, Long>(128, .75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Long>?) = size > 128
+    }
+
+    /** Call under the same import/expansion lock as get; force the next read through persistence. */
+    @VisibleForTesting
+    internal suspend fun setStampForTesting(id: String, stamp: Long) {
+        writeStamp(id, stamp)
+        stamps.remove(id)
     }
 
     suspend fun <T> get(id: String, cached: suspend () -> T, fetch: suspend () -> T): T {

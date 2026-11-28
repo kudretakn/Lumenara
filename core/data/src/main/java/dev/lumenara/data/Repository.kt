@@ -1,6 +1,7 @@
 package dev.lumenara.data
 
 import android.content.Context
+import androidx.annotation.VisibleForTesting
 import androidx.room.withTransaction
 import androidx.work.*
 import dev.lumenara.catalog.*
@@ -50,8 +51,7 @@ data class SourceSpec(
 data class LiveWindow(val rows: List<Item>, val revision: Long, val hidden: List<String>)
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-class Repository private constructor(private val context: Context) {
-    private val db = LibraryDb.build(context)
+class Repository private constructor(private val context: Context, private val db: LibraryDb) {
     val library = db.library()
     val guide = db.guide()
     private val vault = Vault(context)
@@ -334,9 +334,21 @@ class Repository private constructor(private val context: Context) {
 
         @Volatile private var coordinator: StartupCoordinator? = null
 
-        fun startup(context: Context): StartupCoordinator = coordinator ?: synchronized(this) {
+        fun startup(context: Context): StartupCoordinator = startup(context) { LibraryDb.build(context) }
+
+        // Supply a database before any service captures it. Replacing/closing db after
+        // construction leaves Room queries and the restore journal on a cancelled scope.
+        @VisibleForTesting
+        @JvmName("startupForTesting")
+        internal fun startupForTesting(context: Context, database: LibraryDb): StartupCoordinator =
+            synchronized(this) {
+                check(coordinator == null && instance == null) { "Repository already started" }
+                startup(context) { database }
+            }
+
+        private fun startup(context: Context, database: () -> LibraryDb): StartupCoordinator = coordinator ?: synchronized(this) {
             coordinator ?: StartupCoordinator {
-                Repository(context.applicationContext).also {
+                Repository(context.applicationContext, database()).also {
                     it.recoverBeforePublication()
                     instance = it
                 }
@@ -390,6 +402,11 @@ class Repository private constructor(private val context: Context) {
         }
 
     suspend fun expand(series: Item): List<Item> = catalogImporter.expand(series)
+
+    @VisibleForTesting
+    @JvmName("setSeriesExpansionStampForTesting")
+    internal suspend fun setSeriesExpansionStampForTesting(id: String, stamp: Long) =
+        catalogImporter.setSeriesExpansionStampForTesting(id, stamp)
 
     suspend fun address(item: Item) =
         withContext(Dispatchers.IO) { vault.decrypt(item.encryptedUrl) }

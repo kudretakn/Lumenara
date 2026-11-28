@@ -2,6 +2,7 @@ package dev.lumenara.data
 
 import android.content.Context
 import android.net.Uri
+import androidx.annotation.VisibleForTesting
 import androidx.room.withTransaction
 import dev.lumenara.catalog.*
 import java.net.URI
@@ -33,6 +34,12 @@ internal class CatalogImporter(
         readStamp = { preferences.text("series_expanded_$it").first().toLongOrNull() ?: 0L },
         writeStamp = { id, stamp -> preferences.set("series_expanded_$id", stamp.toString()) },
     )
+
+    @VisibleForTesting
+    internal suspend fun setSeriesExpansionStampForTesting(id: String, stamp: Long) =
+        withContext(Dispatchers.IO) {
+            lock.withLock { seriesExpansionCache.setStampForTesting(id, stamp) }
+        }
 
     suspend fun importChanged(source: Source, spec: SourceSpec, token: Long,
         xtream: Xtream?, snapshot: Xtream.Snapshot?, downloaded: Download?, carryPreferences: Boolean,
