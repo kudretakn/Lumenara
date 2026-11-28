@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      wp20_cache_evidence:
+        description: 'Time two clean builds with caches off, then two with caches on (full existing task scopes)'
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: android-${{ github.ref }}
@@ -33,8 +39,17 @@ jobs:
         run: |
           python3 -B -m unittest discover -s scripts/test-results -p 'Wp01*Test.py' -v
           python3 -B -m unittest discover -s app/src/test/python -p 'Wp*Test.py' -v
+      - name: Require reviewed dependency locks and checksums
+        run: python3 -B gradle/Wp20DependencyEvidence.py
       - name: Build and run unit tests and lint
-        run: ./gradlew test lintDebug :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
+        run: python3 -B gradle/Wp20BuildEvidence.py --scope debug --output '${{ runner.temp }}/wp20-debug' ${{ inputs.wp20_cache_evidence && '--compare' || '' }}
+      - name: Upload build cache evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wp20-debug-build-evidence
+          path: ${{ runner.temp }}/wp20-debug/
+          if-no-files-found: warn
       - name: Upload lint and test reports on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -55,7 +70,7 @@ jobs:
 
   optimized-build:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: ${{ inputs.wp20_cache_evidence && 120 || 40 }}
     steps:
       - name: Free disk space
         run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost /usr/local/lib/node_modules /opt/hostedtoolcache/CodeQL /usr/share/swift
@@ -68,8 +83,17 @@ jobs:
       - uses: android-actions/setup-android@v3
         with:
           packages: platform-tools ndk;${{ env.WP10_NDK_VERSION }}
+      - name: Require reviewed dependency locks and checksums
+        run: python3 -B gradle/Wp20DependencyEvidence.py
       - name: Build optimized QA and unsigned release APKs
-        run: ./gradlew -Pwp02.testBuildType=qa :app:assembleQa :app:assembleQaAndroidTest :app:assembleRelease --stacktrace
+        run: python3 -B gradle/Wp20BuildEvidence.py --scope optimized --output '${{ runner.temp }}/wp20-optimized' ${{ inputs.wp20_cache_evidence && '--compare' || '' }}
+      - name: Upload optimized build cache evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wp20-optimized-build-evidence
+          path: ${{ runner.temp }}/wp20-optimized/
+          if-no-files-found: warn
       - name: Verify native stripping and measure APKs
         run: |
           set -euo pipefail
@@ -216,6 +240,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: android-tv-debug-api${{ matrix.api }}${{ matrix.artifact_suffix }}
+          overwrite: true
           path: screens/
           if-no-files-found: error
 
@@ -295,6 +320,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: android-tv-qa-api${{ matrix.api }}
+          overwrite: true
           path: screens/
           if-no-files-found: error
 
