@@ -56,10 +56,12 @@ internal fun Video(
     subtitleDelayUs: java.util.concurrent.atomic.AtomicLong? = null,
     liveUrls: LiveUrlCache? = null,
     livePlaying: () -> Unit = {},
+    ownership: PlaybackOwnership? = null,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val owner = LocalLifecycleOwner.current
     val lifecycle by owner.lifecycle.currentStateFlow.collectAsState()
+    val session = ownership ?: remember(item.id) { PlaybackOwnership(item.id, initial) }
     if (!lifecycle.isAtLeast(Lifecycle.State.STARTED)) return
     val currentReady by rememberUpdatedState(ready)
     val currentEnded by rememberUpdatedState(ended)
@@ -72,15 +74,11 @@ internal fun Video(
     val currentFailure by rememberUpdatedState(failure)
     LaunchedEffect(error) { currentFailure(error.isNotEmpty()) }
     var player by remember { mutableStateOf<ExoPlayer?>(null) }
-    var listener by remember { mutableStateOf<Player.Listener?>(null) }
-    var frameAnalytics by remember { mutableStateOf<AnalyticsListener?>(null) }
-    var frameMetadata by remember { mutableStateOf<VideoFrameMetadataListener?>(null) }
     var configuration by remember { mutableStateOf<Triple<Boolean, Boolean, String>?>(null) }
     val allowedHttp = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
     val allowedSubtitle = remember { java.util.concurrent.atomic.AtomicReference<android.net.Uri?>(null) }
     val stableSubtitleDelay = subtitleDelayUs ?: remember { java.util.concurrent.atomic.AtomicLong() }
     val shiftedSubtitles = remember(stableSubtitleDelay) { SubtitleShiftOutput(stableSubtitleDelay) }
-    var resume by remember(item.id) { mutableLongStateOf(initial) }
     var frameRate by remember(item.id, attempt) { mutableStateOf<Float?>(null) }
     var videoOutput by remember { mutableStateOf<PlayerView?>(null) }
     val size by remember { model.prefs.text("size", "Orta") }.collectAsStateWithLifecycle("Orta")
@@ -88,7 +86,10 @@ internal fun Video(
         model.prefs.text("color", "Beyaz")
     }
         .collectAsStateWithLifecycle("Beyaz")
-    LaunchedEffect(item.id, item.encryptedUrl, attempt, subtitle, preview, multi) {
+    val binding = remember(session, item.id, item.encryptedUrl, attempt, subtitle, preview, multi) { session.newBinding() }
+    val disposePlayback = remember(binding) { arrayOfNulls<() -> Unit>(1) }
+    val currentDisposePlayback by rememberUpdatedState(disposePlayback)
+    LaunchedEffect(binding) {
         val perfRequest = if (item.kind == "LIVE" && !preview && !multi)
             Perf.transitions.zapRequest(item.id) else null
         val playbackScope = this
@@ -97,16 +98,15 @@ internal fun Video(
             playbackActive = false
             subtitleText = ""
             try {
+                session.awaitInputRelease()
                 val source = model.repo.library.source(item.source) ?: error("Kaynak kaldırıldı")
                 val url = if (item.kind == "LIVE" && liveUrls != null) liveUrls.address(item) else model.repo.address(item)
                 val saved = model.repo.library.mark(item.id)
-                val start =
-                    if (resume >= 0) resume
-                    else
+                val start = session.startPosition(
                         saved?.let {
                             if (item.kind == "EPISODE") dev.lumenara.catalog.resumePosition(it.position, it.duration)
                             else it.position.takeIf { position -> it.duration <= 0 || position < it.duration * .95 } ?: 0
-                        } ?: 0
+                        } ?: 0)
                 val profile = model.prefs.text("buffer", "Dengeli").first()
                 val config = Triple(item.kind == "LIVE", multi, profile)
                 allowedHttp.set(source.allowHttp)
@@ -141,7 +141,8 @@ internal fun Video(
                     .setPreferredTextLanguages("tr", "tur")
                     .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, textPreference == "off" || textPreference.isBlank() && dubbed)
                     .build()
-                currentReady(engine)
+                val inputId = java.util.UUID.randomUUID().toString()
+                fun ownsInput() = session.owns(binding, engine.currentMediaItem?.mediaId)
                 var recorded = false
                 var formats = ""
                 var reconnectRequested = false
@@ -153,15 +154,18 @@ internal fun Video(
                 }
                 val mediaListener = object : Player.Listener {
                         override fun onRenderedFirstFrame() {
+                            if (!ownsInput()) return
                             if (!preview && !multi) {
                                 Perf.since("channel", "channel_first_frame_media3")
                             }
                         }
                         override fun onCues(cueGroup: androidx.media3.common.text.CueGroup) {
+                            if (!ownsInput()) return
                             subtitleText = cueGroup.cues.mapNotNull { it.text }.joinToString(" ")
                         }
 
                         override fun onTracksChanged(tracks: Tracks) {
+                            if (!ownsInput()) return
                             if (frameRate == null) frameRate = tracks.groups
                                 .filter { it.type == C.TRACK_TYPE_VIDEO }
                                 .flatMap { g -> (0 until g.length).map { g.getTrackFormat(it).frameRate } }
@@ -205,6 +209,7 @@ internal fun Video(
                         }
 
                         override fun onIsPlayingChanged(isPlaying: Boolean) {
+                            if (!ownsInput()) return
                             playbackActive = isPlaying
                             if (isPlaying && item.kind == "LIVE") currentLivePlaying()
                             if (isPlaying && !reconnectRequested) { retry.playing(); error = "" }
@@ -215,10 +220,13 @@ internal fun Video(
                         }
 
                         override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                            if (!ownsInput()) return
+                            session.wantsPlay = playWhenReady
                             if (!playWhenReady) progress = LiveProgress()
                         }
 
                         override fun onPlayerError(cause: PlaybackException) {
+                            if (!ownsInput()) return
                             if (reconnectRequested) return
                             model.diagnostic("Media3 ${cause.errorCode}")
                             when {
@@ -237,6 +245,7 @@ internal fun Video(
                         }
 
                         override fun onPlaybackStateChanged(state: Int) {
+                            if (!ownsInput()) return
                             if (state == Player.STATE_ENDED) {
                                 if (liveShouldReconnect(item.kind, LivePlaybackSignal.END_REACHED,
                                         paused = !engine.playWhenReady, preview = preview, multi = multi)) reconnect()
@@ -247,15 +256,31 @@ internal fun Video(
                             }
                         }
                     }
-                listener = mediaListener
+                var analytics: AnalyticsListener? = null
+                var metadata: VideoFrameMetadataListener? = null
+                disposePlayback[0] = {
+                    if (ownsInput()) {
+                        val position = if (engine.playbackState == Player.STATE_ENDED && engine.duration > 0)
+                            engine.duration else engine.currentPosition
+                        session.capture(binding, engine.currentMediaItem?.mediaId, position, engine.duration)?.let {
+                            model.progress(item, it.position, it.duration)
+                        }
+                        session.wantsPlay = engine.playWhenReady
+                        session.unbind(binding)
+                    }
+                    engine.removeListener(mediaListener)
+                    analytics?.let(engine::removeAnalyticsListener)
+                    metadata?.let(engine::clearVideoFrameMetadataListener)
+                    // Preserve live renderer reuse. An unbound attempt never stops the old input.
+                    if (engine.currentMediaItem?.mediaId == inputId && item.kind != "LIVE") engine.stop()
+                }
                 engine.addListener(mediaListener)
-                val inputId = java.util.UUID.randomUUID().toString()
                 if (perfRequest != null) {
                     // Renderer/surface reuse need not produce another Player first-frame event.
                     // Arm only when this input reaches the renderer, rejecting buffered old frames.
                     val inputFormat = java.util.concurrent.atomic.AtomicReference<Format?>(null)
                     val submitted = java.util.concurrent.atomic.AtomicBoolean(false)
-                    val analytics = object : AnalyticsListener {
+                    val frameAnalytics = object : AnalyticsListener {
                         override fun onVideoInputFormatChanged(
                             eventTime: AnalyticsListener.EventTime,
                             format: Format,
@@ -266,7 +291,7 @@ internal fun Video(
                                     Timeline.Window()).mediaItem.mediaId == inputId) inputFormat.set(format)
                         }
                     }
-                    val metadata = VideoFrameMetadataListener { _, releaseTimeNs, format, _ ->
+                    val frameMetadata = VideoFrameMetadataListener { _, releaseTimeNs, format, _ ->
                         if (format === inputFormat.get() && submitted.compareAndSet(false, true)) {
                             playbackScope.launch(Dispatchers.Main.immediate) {
                                 // The callback precedes release to the surface; never log early.
@@ -276,16 +301,18 @@ internal fun Video(
                             }
                         }
                     }
-                    frameAnalytics = analytics
-                    frameMetadata = metadata
-                    engine.addAnalyticsListener(analytics)
-                    engine.setVideoFrameMetadataListener(metadata)
+                    analytics = frameAnalytics
+                    metadata = frameMetadata
+                    engine.addAnalyticsListener(frameAnalytics)
+                    engine.setVideoFrameMetadataListener(frameMetadata)
                 }
                 val media = MediaItem.Builder().setUri(url).setMediaId(inputId)
                 if (subtitle != null) media.setSubtitleConfigurations(listOf(subtitle))
                 engine.setMediaItem(media.build(), if (item.kind == "LIVE") 0 else start)
+                session.bind(binding, inputId, if (item.kind == "LIVE") 0 else start)
+                currentReady(engine)
                 engine.prepare()
-                engine.playWhenReady = true
+                engine.playWhenReady = session.wantsPlay
                 if (item.kind == "LIVE" && !preview && !multi) {
                     wallClockTicks(500).collect {
                         val now = android.os.SystemClock.elapsedRealtime()
@@ -301,7 +328,8 @@ internal fun Video(
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                player?.stop()
+                disposePlayback[0]?.invoke()
+                disposePlayback[0] = null
                 if (BuildConfig.DEBUG) {
                     val frames =
                         e.stackTrace.take(8).joinToString(" / ") {
@@ -314,35 +342,29 @@ internal fun Video(
             }
         }
     }
-    DisposableEffect(item.id, item.encryptedUrl, attempt, subtitle, preview, multi) {
+    DisposableEffect(binding) {
         onDispose {
-            player?.let { engine ->
-                resume = if (engine.playbackState == Player.STATE_ENDED && engine.duration > 0)
-                    engine.duration else engine.currentPosition
-                model.progress(item, resume, engine.duration)
-                listener?.let(engine::removeListener)
-                listener = null
-                frameAnalytics?.let(engine::removeAnalyticsListener)
-                frameAnalytics = null
-                frameMetadata?.let(engine::clearVideoFrameMetadataListener)
-                frameMetadata = null
-                // setMediaItem replaces live input without disabling the reusable renderers.
-                if (item.kind != "LIVE") engine.stop()
-            }
+            disposePlayback[0]?.invoke()
+            disposePlayback[0] = null
         }
     }
     DisposableEffect(Unit) {
         onDispose {
+            // Dispose ordering must not make the final snapshot read a released engine.
+            currentDisposePlayback[0]?.invoke()
+            currentDisposePlayback[0] = null
+            videoOutput?.keepScreenOn = false
             player?.release()
             player = null
             currentReady(null)
         }
     }
-    LaunchedEffect(player, item.id) {
+    LaunchedEffect(player, binding) {
         val engine = player ?: return@LaunchedEffect
         withContext(Dispatchers.Main.immediate) {
             wallClockTicks(5000).collect {
-                if (engine.isPlaying) model.progress(item, engine.currentPosition, engine.duration)
+                if (engine.isPlaying) session.capture(binding, engine.currentMediaItem?.mediaId,
+                    engine.currentPosition, engine.duration)?.let { model.progress(item, it.position, it.duration) }
             }
         }
     }
@@ -555,15 +577,15 @@ internal fun Playback(
     if (preferred == null) return
     // Keep an automatic VLC fallback for the live session, including subsequent zaps.
     var vlc by remember(if (live) "live-player" else item.id) { mutableStateOf(preferred == "VLC") }
-    var transferred by remember(item.id) { mutableLongStateOf(initial) }
+    val ownership = remember(item.id) { PlaybackOwnership(item.id, initial) }
     var switched by remember(item.id) { mutableStateOf(false) }
     if (vlc) {
         VlcScreen(
             model,
             item,
-            transferred,
+            initial,
             { pos ->
-                transferred = pos
+                ownership.transfer(pos)
                 switched = true
                 vlc = false
             },
@@ -576,7 +598,7 @@ internal fun Playback(
             liveUrls = liveUrls,
             livePlaying = { playingLive = true },
             unsupportedLive = if (preferred != "VLC" && fallback == "Açık") ({
-                transferred = 0
+                ownership.transfer(0)
                 switched = true
                 vlc = false
             }) else null,
@@ -588,6 +610,7 @@ internal fun Playback(
             delayMs = delayMs,
             delayReady = preferenceKey.isNotEmpty(),
             changeSubtitleDelay = ::changeSubtitleDelay,
+            ownership = ownership,
         )
         return
     }
@@ -654,7 +677,7 @@ internal fun Playback(
             ready = { engine = it },
             failure = { failed = it },
             liveRetry = retry,
-            initial = transferred,
+            ownership = ownership,
             subtitle = subtitle,
             subtitleDelayUs = subtitleDelay,
             liveUrls = liveUrls,
@@ -662,7 +685,7 @@ internal fun Playback(
             decoderFailure = { pos ->
                 if (!switched && fallback == "Açık") {
                     switched = true
-                    transferred = pos
+                    ownership.transfer(pos)
                     vlc = true
                 }
             },
@@ -739,7 +762,8 @@ internal fun Playback(
                         // Read ExoPlayer on the main thread; updateMark runs its transform inside a DB transaction.
                         // ExoPlayer must be read on the main thread; this callback may resume elsewhere.
                         val snapshot = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main.immediate) {
-                            engine?.let { it.currentPosition.coerceAtLeast(0) to it.duration.coerceAtLeast(0) }
+                            engine?.takeIf { ownership.ownsMedia(it.currentMediaItem?.mediaId) }
+                                ?.let { it.currentPosition.coerceAtLeast(0) to it.duration.coerceAtLeast(0) }
                         }
                         if (snapshot != null)
                             model.repo.updateMark(item.id) { it.copy(position = snapshot.first, duration = snapshot.second) }
@@ -806,8 +830,10 @@ internal fun Playback(
                 item {
                     PlayerOption(
                         onClick = {
-                            transferred = engine?.currentPosition ?: -1
-                            android.util.Log.d("LumenaraVlc", "switch Media3 to VLC position=$transferred subtitle=${subtitle != null} scheme=${subtitle?.uri?.scheme}")
+                            val position = engine?.takeIf { ownership.ownsMedia(it.currentMediaItem?.mediaId) }
+                                ?.currentPosition ?: -1
+                            ownership.transfer(position)
+                            android.util.Log.d("LumenaraVlc", "switch Media3 to VLC position=$position subtitle=${subtitle != null} scheme=${subtitle?.uri?.scheme}")
                             switched = true
                             panel = false
                             vlc = true

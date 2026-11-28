@@ -68,12 +68,13 @@ internal fun VlcScreen(
     delayMs: Long,
     delayReady: Boolean,
     changeSubtitleDelay: (Long) -> Unit,
+    ownership: PlaybackOwnership? = null,
 ) {
     val sleepCountdown = sleepTimerVersion.let { sleepTimer.showCountdown() }
     val life by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
     var panel by remember { mutableStateOf(false) }
     LaunchedEffect(sleepCountdown) { if (sleepCountdown) panel = false }
-    var position by remember(item.id) { mutableLongStateOf(initial) }
+    val session = ownership ?: remember(item.id) { PlaybackOwnership(item.id, initial) }
     val fullscreen = rememberFullscreenState(item)
     val playbackMutex = remember { Mutex() }
     // Access under playbackMutex: one native player and surface for this screen lifetime.
@@ -149,6 +150,16 @@ internal fun VlcScreen(
         preferenceKey = model.repo.preferenceKey(item)
     }
     var nativePlaying by remember(item.id) { mutableStateOf(false) }
+    var inputHasPlayed by remember(item.id, retry.generation) { mutableStateOf(false) }
+    var playbackFocus by remember { mutableStateOf<PlaybackAudioFocus?>(null) }
+    SideEffect { layout.keepScreenOn = nativePlaying && playbackFocus?.canPlay == true }
+    DisposableEffect(layout) {
+        onDispose {
+            layout.keepScreenOn = false
+            playbackFocus?.close()
+            playbackFocus = null
+        }
+    }
     var mediaGeneration by remember { mutableIntStateOf(0) }
     val currentSubtitle by rememberUpdatedState(subtitle)
     var activeSubtitle by remember(player, mediaGeneration, subtitle?.uri) { mutableStateOf(false) }
@@ -389,9 +400,16 @@ internal fun VlcScreen(
         android.util.Log.d("LumenaraVlc", "playback waiting for mutex retry=${retry.generation}")
         playbackMutex.withLock {
             android.util.Log.d("LumenaraVlc", "playback acquired mutex")
+            session.awaitInputRelease()
+            val inputRelease = session.holdInput()
             var input: VlcInput? = null
             var engine: MediaPlayer? = null
+            val binding = session.newBinding()
+            val bindingId = "vlc-${binding.generation}"
+            var bound = false
+            var attemptFocus: PlaybackAudioFocus? = null
             var completed = false
+            var recorded = false
             var ownStop = false
             var paused = false
             var reconnectRequested = false
@@ -408,12 +426,10 @@ internal fun VlcScreen(
                 val source = model.repo.library.source(item.source) ?: error("Kaynak kaldırıldı")
                 val address = if (item.kind == "LIVE") liveUrls.address(item) else model.repo.address(item)
                 val mark = model.repo.library.mark(item.id)
-                val start =
-                    if (position >= 0) position
-                    else mark?.let {
+                val start = session.startPosition(mark?.let {
                         if (item.kind == "EPISODE") dev.lumenara.catalog.resumePosition(it.position, it.duration)
                         else it.position.takeIf { position -> it.duration <= 0 || position < it.duration * .95 } ?: 0
-                    } ?: 0
+                    } ?: 0)
                 withContext(Dispatchers.IO) {
                     // Warm/await native code before opening a short-lived live HTTP stream.
                     val runtimeStart = android.os.SystemClock.elapsedRealtime()
@@ -438,13 +454,29 @@ internal fun VlcScreen(
                     }
                 }
                 val p = checkNotNull(engine)
-                var recorded = false
                 withContext(Dispatchers.Main.immediate) {
+                    session.bind(binding, bindingId, if (item.kind == "LIVE") 0 else start)
+                    bound = true
+                    val focusOwner = PlaybackAudioFocus.create(context, playback = { play ->
+                        if (!play) {
+                            paused = true
+                            nativePlaying = false
+                            liveProgress = LiveProgress()
+                            surface.keepScreenOn = false
+                        }
+                        if (!p.isReleased) {
+                            // libVLC 3.7.7 pause() calls set_pause(1), including while buffering.
+                            if (play && !ownStop) p.play() else p.pause()
+                        }
+                    }, intentChanged = { session.wantsPlay = it })
+                    attemptFocus = focusOwner
+                    playbackFocus = focusOwner
                     // Listener registration creates a Handler; UI writes stay on Main.
                     // Install it before attaching views, which can start playback.
                     p.setEventListener { event ->
                         playbackScope.launch(Dispatchers.Main.immediate) {
-                            if (ownStop || p !== player || currentItemId != item.id) return@launch
+                            if (ownStop || p !== player || currentItemId != item.id ||
+                                !session.owns(binding, bindingId)) return@launch
                             when (event.type) {
                                 MediaPlayer.Event.Opening -> {
                                     nativePlaying = false
@@ -452,8 +484,17 @@ internal fun VlcScreen(
                                     android.util.Log.d("LumenaraVlc", "playback Opening generation=$mediaGeneration")
                                 }
                                 MediaPlayer.Event.Playing -> {
+                                    // A late surface callback must obey focus and the user's pause intent.
+                                    if (!focusOwner.canPlay) {
+                                        p.pause()
+                                        nativePlaying = false
+                                        surface.keepScreenOn = false
+                                        return@launch
+                                    }
                                     paused = false
                                     nativePlaying = true
+                                    inputHasPlayed = true
+                                    surface.keepScreenOn = true
                                     android.util.Log.d("LumenaraVlc", "playback Playing generation=$mediaGeneration")
                                     if (item.kind == "LIVE") currentLivePlaying()
                                     if (!reconnectRequested) { retry.playing(); message = "" }
@@ -478,6 +519,7 @@ internal fun VlcScreen(
                                 }
                                 MediaPlayer.Event.EncounteredError -> {
                                     nativePlaying = false
+                                    focusOwner.stopped(item.kind == "LIVE")
                                     if (item.kind == "LIVE") reconnect()
                                     else {
                                         message = "VLC bu yayını oynatamadı."
@@ -486,6 +528,7 @@ internal fun VlcScreen(
                                 }
                                 MediaPlayer.Event.EndReached -> {
                                     nativePlaying = false
+                                    focusOwner.stopped(item.kind == "LIVE")
                                     if (liveShouldReconnect(item.kind, LivePlaybackSignal.END_REACHED,
                                             ownStop = ownStop, paused = paused)) reconnect()
                                     if (item.kind != "LIVE") {
@@ -499,6 +542,7 @@ internal fun VlcScreen(
                                 }
                                 MediaPlayer.Event.Stopped -> {
                                     nativePlaying = false
+                                    focusOwner.stopped(item.kind == "LIVE")
                                     android.util.Log.d("LumenaraVlc", "playback Stopped generation=$mediaGeneration")
                                     if (liveShouldReconnect(item.kind, LivePlaybackSignal.STOPPED,
                                             ownStop = ownStop, paused = paused)) reconnect()
@@ -514,7 +558,7 @@ internal fun VlcScreen(
                     if (needsSurface) p.attachViews(surface, null, true, false)
                     // libVLC may also call play() from its surface-created callback.
                     // Serialize that callback and the initial request on Main.
-                    p.play()
+                    if (session.wantsPlay) focusOwner.play() else focusOwner.pause()
                     android.util.Log.d("LumenaraVlc", "playback play requested generation=$mediaGeneration")
                 }
                 // Vout only means output creation. Stats are explicitly enabled by VlcRuntime.
@@ -546,7 +590,9 @@ internal fun VlcScreen(
                             unchangedForMs = liveProgress.unchangedForMs(now))) reconnect()
                     if (playing && now - lastSavedAtMs >= 5000) {
                         lastSavedAtMs = now
-                        model.progress(item, time, p.length)
+                        session.capture(binding, bindingId, time, p.length)?.let {
+                            model.progress(item, it.position, it.duration)
+                        }
                     }
                 }
             } catch (e: CancellationException) {
@@ -569,6 +615,9 @@ internal fun VlcScreen(
                     withContext(Dispatchers.Main.immediate) {
                         android.util.Log.d("LumenaraVlc", "playback cleanup current=${player === p} generation=$mediaGeneration")
                         if (player === p) nativePlaying = false
+                        surface.keepScreenOn = false
+                        attemptFocus?.close()
+                        if (playbackFocus === attemptFocus) playbackFocus = null
                         p?.setEventListener(null)
                     }
                     withContext(Dispatchers.IO) {
@@ -577,8 +626,13 @@ internal fun VlcScreen(
                                 val lastPosition = it.time
                                 val length = it.length
                                 withContext(Dispatchers.Main.immediate) {
-                                    position = lastPosition
-                                    model.progress(item, if (completed && length > 0) length else lastPosition, length)
+                                    // A focus-delayed/paused input may still report native time 0.
+                                    // Preserve the session start until it has actually played.
+                                    if (bound && recorded) session.capture(binding, bindingId,
+                                        if (completed && length > 0) length else lastPosition, length)?.let {
+                                        model.progress(item, it.position, it.duration)
+                                    }
+                                    session.unbind(binding)
                                 }
                             }
                         } finally {
@@ -588,7 +642,11 @@ internal fun VlcScreen(
                                 try {
                                     p?.stop()
                                     p?.media = null
-                                } finally { input?.close() }
+                                } finally {
+                                    try { input?.close() } finally {
+                                        withContext(Dispatchers.Main.immediate) { session.releaseInput(inputRelease) }
+                                    }
+                                }
                             }
                         }
                     }
@@ -613,8 +671,10 @@ internal fun VlcScreen(
                 if (!panel && fullscreen.key(key, item.kind == "LIVE", ::move, { panel = true },
                         { delta -> player?.let { p -> p.setTime((p.time + delta).coerceAtLeast(0)) } }, { event -> numbers?.key(event) == true })) true
                 else if (code in listOf(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PAUSE)) {
-                    if (key.action == KeyEvent.ACTION_UP) player?.let { p ->
-                        if (code == KeyEvent.KEYCODE_MEDIA_PLAY || code == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE && !p.isPlaying) p.play() else p.pause()
+                    if (key.action == KeyEvent.ACTION_UP && player != null) {
+                        if (code == KeyEvent.KEYCODE_MEDIA_PLAY ||
+                            code == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE && playbackFocus?.wantsPlay != true)
+                            playbackFocus?.play() else playbackFocus?.pause()
                     }
                     true
                 } else false
@@ -686,12 +746,16 @@ internal fun VlcScreen(
                     PlayerOption(onClick = { message = ""; panel = false; retry.manual() }) { Text("Yeniden dene") }
                 }
                 item {
-                    PlayerOption(onClick = { exo(player?.time ?: position) }) { Text("Motor: VLC/Media3") }
+                    PlayerOption(onClick = {
+                        val time = player?.takeIf { activeMediaId == item.id && inputHasPlayed }?.time?.takeIf { it >= 0 }
+                        exo(time ?: session.startPosition(-1))
+                    }) { Text("Motor: VLC/Media3") }
                 }
                 item { VersionChoice(model, item) { version ->
                     scope.launch {
                         val snapshot = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main.immediate) {
-                            player?.let { it.time.coerceAtLeast(0) to it.length.coerceAtLeast(0) }
+                            player?.takeIf { activeMediaId == item.id && inputHasPlayed }
+                                ?.let { it.time.coerceAtLeast(0) to it.length.coerceAtLeast(0) }
                         }
                         if (snapshot != null)
                             model.repo.updateMark(item.id) { it.copy(position = snapshot.first, duration = snapshot.second) }
@@ -715,7 +779,7 @@ internal fun VlcScreen(
                         }
                     item { PlaybackSection("GÖRÜNTÜ") }
                     item {
-                        PlayerOption(onClick = { if (p.isPlaying) p.pause() else p.play() }) {
+                        PlayerOption(onClick = { if (playbackFocus?.wantsPlay == true) playbackFocus?.pause() else playbackFocus?.play() }) {
                             Text("Duraklat / devam")
                         }
                     }
