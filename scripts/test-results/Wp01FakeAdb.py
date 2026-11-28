@@ -16,10 +16,17 @@ if args == ["devices"]:
 elif "instrument" in args:
     if "log" in args:
         attempt = fixture["inventory"]
+    elif "per_test" in fixture:
+        test = args[args.index("class") + 1]
+        calls = [json.loads(line) for line in state.read_text().splitlines()]
+        index = sum("instrument" in call and "log" not in call and test in call for call in calls) - 1
+        attempts = fixture["per_test"][test]
+        attempt = attempts[min(index, len(attempts) - 1)]
     else:
         calls = [json.loads(line) for line in state.read_text().splitlines()]
         index = sum("instrument" in call and "log" not in call for call in calls) - 1
         attempt = fixture["attempts"][min(index, len(fixture["attempts"]) - 1)]
+    print(attempt.get("prefix", ""), end="", flush=True)
     time.sleep(attempt.get("sleep", 0))
     print(attempt["text"], end="", flush=True)
     sys.exit(attempt["exit_code"])

@@ -10,6 +10,8 @@ import subprocess
 import sys
 import time
 
+from Wp01Shards import ALGORITHM, partition_tests
+
 
 class GateError(Exception):
     pass
@@ -101,9 +103,11 @@ def final_verdict(inventory, attempts, allowed_skips):
                 errors.append("Unexpected test: " + test)
                 continue
             old = final.get(test)
-            if old is not None and old != "FAIL":
+            if old is not None and old not in ("FAIL", "TIMEOUT"):
                 errors.append("Unexpected repeat: " + test)
-            if old == "FAIL":
+            if old == "TIMEOUT" or status == "TIMEOUT":
+                final[test] = "TIMEOUT"
+            elif old == "FAIL":
                 final[test] = "RETRIED" if status == "PASS" else "FAIL"
             else:
                 final[test] = status
@@ -112,6 +116,8 @@ def final_verdict(inventory, attempts, allowed_skips):
     for test, status in final.items():
         if status == "FAIL":
             errors.append("Failed test: " + test)
+        elif status == "TIMEOUT":
+            errors.append("Timed out test: " + test)
         elif status == "SKIP" and test not in allowed_skips:
             errors.append("Unexpected skip: " + test)
     if not any(status in ("PASS", "RETRIED") for status in final.values()):
@@ -153,8 +159,15 @@ def run_device(args):
     # A summary exists even for setup failures: android.yml must not retry infrastructure
     # failures as though the emulator had never started. Old logs cannot enter the verdict.
     (out / "summary.txt").write_text("INFRA  Runner starting\n", encoding="utf-8")
+    if args.num_shards < 1 or not 0 <= args.shard_index < args.num_shards:
+        raise GateError("Require num-shards > 0 and 0 <= shard-index < num-shards")
+    if args.test_timeout is not None and (not math.isfinite(args.test_timeout) or args.test_timeout <= 0):
+        raise GateError("Per-test timeout must be finite and positive")
+    if args.single_run and (args.test_timeout is not None or args.num_shards != 1):
+        raise GateError("Single-run stateful smoke cannot use test isolation or sharding")
     deadline = Deadline(args.total_timeout, args.artifact_reserve)
     inventory = {"results": {}, "errors": ["No test inventory"]}
+    full_inventory = inventory
     attempts, setup_errors, commands = [], [], []
     allowed = json.loads(Path(args.allowed_skips).read_text(encoding="utf-8"))
     if not isinstance(allowed, dict) or any(not isinstance(v, str) or not v.strip() for v in allowed.values()):
@@ -192,11 +205,20 @@ def run_device(args):
                          "seconds": round(time.monotonic() - start, 3)})
         return log, code
 
-    def instrument(name, extra):
+    def instrument(name, extra, test=None):
         log, code = command(name, ["shell", "am", "instrument", "-w", "-r"] + extra + [runner],
-                            180 if name == "test-list" else 1680)
+                            180 if name == "test-list" else (args.test_timeout or 1680))
         parsed = parse_instrumentation(log.read_text(encoding="utf-8", errors="replace"), code)
         parsed["log"] = log.name
+        if test is not None and code == 124:
+            parsed["results"][test] = "TIMEOUT"
+            parsed["errors"].append("Per-test invocation timed out: " + test)
+        if test is not None and (code != 0 or parsed["errors"]):
+            # Killing adb alone need not stop native code on the emulator. Do this
+            # before continuing/retrying; each stop still shares the total deadline.
+            for index, target in enumerate(dict.fromkeys([package, runner.split("/")[0]])):
+                if command(name + "-stop-" + str(index), ["shell", "am", "force-stop", target], 15)[1] != 0:
+                    parsed["errors"].append("Cannot stop instrumentation after fault: " + target)
         return parsed
 
     try:
@@ -211,17 +233,34 @@ def run_device(args):
             if command(name, argv, 120)[1] != 0:
                 raise GateError("Setup failed: " + name)
         selected = ["-e", "class", args.test_class] if args.test_class else []
-        inventory = instrument("test-list", ["-e", "log", "true"] + selected)
-        (out / "all-tests.txt").write_text("\n".join(sorted(inventory["results"])) + "\n", encoding="utf-8")
-        if inventory["errors"] or "FAIL" in inventory["results"].values():
+        full_inventory = instrument("test-list", ["-e", "log", "true"] + selected)
+        inventory = full_inventory
+        (out / "all-tests.txt").write_text("\n".join(sorted(full_inventory["results"])) + "\n", encoding="utf-8")
+        if full_inventory["errors"] or "FAIL" in full_inventory["results"].values():
             raise GateError("Inventory discovery did not complete successfully")
-        first = instrument("instrument", selected)
-        first["expected"] = sorted(inventory["results"])
-        attempts.append(first)
+        shard_tests = partition_tests(full_inventory["results"], args.num_shards)[args.shard_index]
+        inventory = {**full_inventory, "results": {test: full_inventory["results"][test] for test in shard_tests}}
+        (out / "shard-tests.txt").write_text("\n".join(shard_tests) + "\n", encoding="utf-8")
+        if not shard_tests:
+            raise GateError("Empty shard inventory")
+        if args.test_timeout is not None:
+            for index, test in enumerate(shard_tests, 1):
+                if deadline.remaining() <= 0:
+                    setup_errors.append("Total time budget exhausted before all tests ran")
+                    break
+                attempt = instrument("instrument-test-" + str(index), ["-e", "class", test], test)
+                attempt["expected"] = [test]
+                attempts.append(attempt)
+        else:
+            if args.num_shards > 1:
+                selected = ["-e", "class", ",".join(shard_tests)]
+            first = instrument("instrument", selected)
+            first["expected"] = shard_tests
+            attempts.append(first)
         # Stateful QA uses a single execution, like connectedQaAndroidTest. Starting
         # instrumentation again force-stops the app but retains its WorkManager DB.
         # Default debug policy still continues missing tests and retries failures.
-        for part in ([] if args.single_run else range(1, 4)):
+        for part in ([] if args.single_run or args.test_timeout is not None else range(1, 4)):
             done = set().union(*(set(a["results"]) for a in attempts))
             missing = sorted(set(inventory["results"]) - done)
             if not missing or deadline.remaining() <= 0:
@@ -229,12 +268,14 @@ def run_device(args):
             continued = instrument("instrument-continue-" + str(part), ["-e", "class", ",".join(missing)])
             continued["expected"] = missing
             attempts.append(continued)
-        failed = sorted({test for a in attempts for test, status in a["results"].items() if status == "FAIL"})
+        failed = sorted({test for a in attempts for test, status in a["results"].items()
+                         if status in ("FAIL", "TIMEOUT")})
         for index, test in enumerate([] if args.single_run else failed, 1):
             if deadline.remaining() <= 0:
                 setup_errors.append("Total time budget exhausted before retries")
                 break
-            retry = instrument("instrument-retry-" + str(index), ["-e", "class", test])
+            retry = instrument("instrument-retry-" + str(index), ["-e", "class", test],
+                               test if args.test_timeout is not None else None)
             retry["expected"] = [test]
             attempts.append(retry)
     except GateError as error:
@@ -258,10 +299,13 @@ def run_device(args):
     errors = sorted(set(errors + setup_errors))
     lines = [status + "  " + test + (" (allowed: " + allowed[test] + ")" if status == "SKIP" and test in allowed else "")
              for test, status in sorted(final.items())]
-    lines += [("GATE  " if error.startswith(("Failed test:", "Unexpected skip:", "No passing tests")) else "INFRA  ")
+    lines += [("GATE  " if error.startswith(("Failed test:", "Timed out test:", "Unexpected skip:", "No passing tests")) else "INFRA  ")
               + error for error in errors]
     (out / "summary.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
     report = {"schema_version": 1, "success": not errors, "inventory": inventory,
+              "full_inventory": full_inventory,
+              "shard": {"count": args.num_shards, "index": args.shard_index, "algorithm": ALGORITHM},
+              "test_timeout_seconds": args.test_timeout,
               "attempts": attempts, "results": final, "errors": errors, "allowed_skips": allowed,
               "commands": commands, "elapsed_seconds": round(time.monotonic() - deadline.started, 3),
               "single_run": args.single_run,
@@ -280,6 +324,10 @@ def main():
     parser.add_argument("--package", default="dev.lumenara.tv.debug")
     parser.add_argument("--runner", default="dev.lumenara.tv.debug.test/androidx.test.runner.AndroidJUnitRunner")
     parser.add_argument("--class", dest="test_class", default="")
+    parser.add_argument("--num-shards", type=int, default=1)
+    parser.add_argument("--shard-index", type=int, default=0)
+    parser.add_argument("--test-timeout", type=float,
+                        help="Isolate each test invocation with this hard timeout in seconds (debug only)")
     parser.add_argument("--single-run", action="store_true",
                         help="Execute inventory once; no continuations or retries against persisted state")
     parser.add_argument("--serial", default=os.environ.get("ANDROID_SERIAL", ""))

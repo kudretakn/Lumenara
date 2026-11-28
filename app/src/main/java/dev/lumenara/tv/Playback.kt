@@ -21,8 +21,6 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.*
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.analytics.AnalyticsListener
-import androidx.media3.exoplayer.video.VideoFrameMetadataListener
 import androidx.media3.ui.PlayerView
 import androidx.tv.material3.*
 import dev.lumenara.data.*
@@ -58,29 +56,37 @@ internal fun Video(
     livePlaying: () -> Unit = {},
     ownership: PlaybackOwnership? = null,
     subtitleDelayMs: Long = 0,
+    videoFormat: (Wp18VideoLoad) -> Unit = {},
+    awaitPreviousInput: suspend () -> Unit = {},
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val owner = LocalLifecycleOwner.current
     val lifecycle by owner.lifecycle.currentStateFlow.collectAsState()
-    val session = ownership ?: remember(item.id) { PlaybackOwnership(item.id, initial) }
+    val routeSession = remember { dev.lumenara.player.api.PlaybackSession() }
+    val session = ownership ?: remember(item.id) { PlaybackOwnership(item.id, initial, routeSession) }
     if (!lifecycle.isAtLeast(Lifecycle.State.STARTED)) return
     val currentReady by rememberUpdatedState(ready)
     val currentEnded by rememberUpdatedState(ended)
     val currentLivePlaying by rememberUpdatedState(livePlaying)
-    var playbackActive by remember(item.id) { mutableStateOf(false) }
-    var error by remember(item.id) { mutableStateOf("") }
-    var subtitleText by remember(item.id) { mutableStateOf("") }
-    val retry = liveRetry ?: rememberLiveRetry(item.id, preview)
+    val retry = liveRetry ?: rememberLiveRetry(item.id, preview, session)
     val attempt = retry.generation
     val currentFailure by rememberUpdatedState(failure)
-    LaunchedEffect(error) { currentFailure(error.isNotEmpty()) }
-    var player by remember { mutableStateOf<ExoPlayer?>(null) }
-    var configuration by remember { mutableStateOf<Triple<Boolean, Boolean, String>?>(null) }
-    val allowedHttp = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
-    val allowedSubtitle = remember { java.util.concurrent.atomic.AtomicReference<android.net.Uri?>(null) }
     val stableSubtitleDelay = subtitleDelayUs ?: remember { java.util.concurrent.atomic.AtomicLong() }
-    val shiftedSubtitles = remember(stableSubtitleDelay) { SubtitleShiftOutput(stableSubtitleDelay) }
-    var frameRate by remember(item.id, attempt) { mutableStateOf<Float?>(null) }
+    val controller = remember(model, stableSubtitleDelay) {
+        Wp18Media3Playback(context, model, SubtitleShiftOutput(stableSubtitleDelay))
+    }
+    val player = controller.player
+    val playbackActive = controller.playbackActive
+    val subtitleText = controller.subtitleText
+    val frameRate = controller.frameRate
+    val appliedSubtitleDelayUs = controller.appliedSubtitleDelayUs
+    val error = controller.error
+    SideEffect {
+        controller.currentReady = { currentReady(it) }
+        controller.currentEnded = { currentEnded() }
+        controller.currentLivePlaying = { currentLivePlaying() }
+        controller.videoFormat = videoFormat
+    }
     var videoOutput by remember { mutableStateOf<PlayerView?>(null) }
     val size by remember { model.prefs.text("size", "Orta") }.collectAsStateWithLifecycle("Orta")
     val color by remember {
@@ -88,333 +94,18 @@ internal fun Video(
     }
         .collectAsStateWithLifecycle("Beyaz")
     val binding = remember(session, item.id, item.encryptedUrl, attempt, subtitle, preview, multi) { session.newBinding() }
-    val disposePlayback = remember(binding) { arrayOfNulls<() -> Unit>(1) }
-    val currentDisposePlayback by rememberUpdatedState(disposePlayback)
-    LaunchedEffect(binding) {
-        val perfRequest = if (item.kind == "LIVE" && !preview && !multi)
-            Perf.transitions.zapRequest(item.id) else null
-        val playbackScope = this
-        withContext(Dispatchers.Main.immediate) {
-            error = ""
-            playbackActive = false
-            subtitleText = ""
-            var monitoredEngine: ExoPlayer? = null
-            var reconnectRequested = false
-            var terminalError = false
-            try {
-                wp09WatchPlayback(
-                    monitorStalls = item.kind == "LIVE" && !preview && !multi,
-                    snapshot = {
-                        val engine = monitoredEngine
-                        Wp09PlaybackSample(engine?.currentPosition,
-                            paused = !session.wantsPlay || reconnectRequested || terminalError ||
-                                engine?.let { !it.playWhenReady || it.playbackSuppressionReason !=
-                                    Player.PLAYBACK_SUPPRESSION_REASON_NONE } == true,
-                            buffering = engine?.playbackState == Player.STATE_BUFFERING)
-                    },
-                    onPrepared = { if (!reconnectRequested) { retry.playing(); error = "" } },
-                ) { watchdog ->
-                    session.awaitInputRelease()
-                    val source = model.repo.library.source(item.source) ?: error("Kaynak kaldırıldı")
-                    val url = if (item.kind == "LIVE" && liveUrls != null) liveUrls.address(item) else model.repo.address(item)
-                    val saved = model.repo.library.mark(item.id)
-                    val start = session.startPosition(
-                            saved?.let {
-                                if (item.kind == "EPISODE") dev.lumenara.catalog.resumePosition(it.position, it.duration)
-                                else it.position.takeIf { position -> it.duration <= 0 || position < it.duration * .95 } ?: 0
-                            } ?: 0)
-                    val profile = model.prefs.text("buffer", "Dengeli").first()
-                    val config = Triple(item.kind == "LIVE", multi, profile)
-                    allowedHttp.set(source.allowHttp)
-                    allowedSubtitle.set(subtitle?.uri)
-                    if (configuration != config) {
-                        player?.release()
-                        player = null
-                    }
-                    val engine = player ?: createPlayer(
-                            context,
-                            source.allowHttp,
-                            !multi,
-                            profile,
-                            subtitle?.uri,
-                            automaticRetries = item.kind != "LIVE",
-                            subtitleShiftOutput = shiftedSubtitles.takeUnless { preview || multi },
-                            live = item.kind == "LIVE",
-                            multi = multi,
-                            httpAllowed = { allowedHttp.get() },
-                            permittedSubtitle = { allowedSubtitle.get() },
-                        )
-                    configuration = config
-                    player = engine
-                    engine.setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
-                    val preferenceKey = model.repo.preferenceKey(item)
-                    val audioPreference = model.prefs.playbackChoice("audio", preferenceKey)
-                    val textPreference = model.prefs.playbackChoice("text", preferenceKey)
-                    val dubbed = dev.lumenara.catalog.productionName(item.title, item.year).version == dev.lumenara.catalog.AudioVersion.DUBBED
-                    engine.trackSelectionParameters = engine.trackSelectionParameters.buildUpon()
-                        .clearOverrides()
-                        .setPreferredAudioLanguages(audioPreference.ifBlank { "tr" }, "tur")
-                        .setPreferredTextLanguages("tr", "tur")
-                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, textPreference == "off" || textPreference.isBlank() && dubbed)
-                        .build()
-                    val inputId = java.util.UUID.randomUUID().toString()
-                    fun ownsInput() = session.owns(binding, engine.currentMediaItem?.mediaId)
-                    var recorded = false
-                    var formats = ""
-                    fun reconnect() {
-                        if (reconnectRequested) return
-                        reconnectRequested = true
-                        if (!retry.failed()) error = "Canlı yayın kesildi. Yeniden deneyin."
-                    }
-                    val mediaListener = object : Player.Listener {
-                            override fun onRenderedFirstFrame() {
-                                if (!ownsInput()) return
-                                watchdog.firstFrame()
-                                if (!preview && !multi) {
-                                    Perf.since("channel", "channel_first_frame_media3")
-                                }
-                            }
-                            override fun onCues(cueGroup: androidx.media3.common.text.CueGroup) {
-                                if (!ownsInput()) return
-                                subtitleText = cueGroup.cues.mapNotNull { it.text }.joinToString(" ")
-                            }
-
-                            override fun onTracksChanged(tracks: Tracks) {
-                                if (!ownsInput()) return
-                                if (frameRate == null) frameRate = tracks.groups
-                                    .filter { it.type == C.TRACK_TYPE_VIDEO }
-                                    .flatMap { g -> (0 until g.length).map { g.getTrackFormat(it).frameRate } }
-                                    .firstOrNull { it.isFinite() && it > 0f }
-                                val signature = tracks.groups.joinToString { g -> (0 until g.length).joinToString { g.getTrackFormat(it).toString() } }
-                                if (signature == formats) return
-                                formats = signature
-                                val audioGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
-                                val audio = audioGroups
-                                    .flatMap { g -> (0 until g.length).filter { g.isTrackSupported(it) }.map { g to it } }
-                                if (audioGroups.isNotEmpty() && audio.isEmpty()) {
-                                    // Media3 plays video silently when no audio track can be decoded
-                                    // (e.g. MPEG-L2 or AC-3 on devices without a decoder); VLC can.
-                                    val mimes = audioGroups.flatMap { g -> (0 until g.length).map { g.getTrackFormat(it).sampleMimeType } }
-                                        .distinct().joinToString()
-                                    model.diagnostic("Media3 unsupported audio: $mimes")
-                                    error = "Bu yayının ses biçimi ($mimes) Media3 ile çözülemiyor. Ayarlar'dan VLC'yi seçebilirsiniz."
-                                    decoderFailure(engine.currentPosition)
-                                }
-                                val requested = audio.filter { (g, i) -> trackPreferenceRank(audioPreference, g.getTrackFormat(i).language, g.getTrackFormat(i).id) < 2 }
-                                    .minByOrNull { (g, i) -> trackPreferenceRank(audioPreference, g.getTrackFormat(i).language, g.getTrackFormat(i).id) }
-                                val turkish = audio.firstOrNull { (g, i) -> dev.lumenara.catalog.isTurkish(g.getTrackFormat(i).language) }
-                                val original = audio.firstOrNull { (g, i) -> g.getTrackFormat(i).selectionFlags and C.SELECTION_FLAG_DEFAULT != 0 } ?: audio.firstOrNull()
-                                val selectedAudio = requested ?: turkish ?: original
-                                val disableText = dev.lumenara.catalog.subtitlesDisabled(textPreference,
-                                    selectedAudio?.let { (g, i) -> dev.lumenara.catalog.isTurkish(g.getTrackFormat(i).language) } == true, dubbed)
-                                val params = engine.trackSelectionParameters.buildUpon().setTrackTypeDisabled(C.TRACK_TYPE_TEXT, disableText)
-                                selectedAudio?.let { (g, i) -> params.setOverrideForType(TrackSelectionOverride(g.mediaTrackGroup, i)) }
-                                tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }.flatMap { g ->
-                                    (0 until g.length).filter { g.isTrackSupported(it) }.map { g to it }
-                                }.let { texts ->
-                                    val selectedText = texts.firstOrNull { (g, i) -> textPreference == "downloaded" &&
-                                        g.getTrackFormat(i).label == "Türkçe · İndirilen altyazı" }
-                                        ?: texts.filter { (g, i) -> trackPreferenceRank(textPreference, g.getTrackFormat(i).language, g.getTrackFormat(i).id) < 2 }
-                                            .minByOrNull { (g, i) -> trackPreferenceRank(textPreference, g.getTrackFormat(i).language, g.getTrackFormat(i).id) }
-                                        ?: texts.firstOrNull { (g, i) -> dev.lumenara.catalog.isTurkish(g.getTrackFormat(i).language) }
-                                    if (selectedText == null) params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
-                                    else selectedText.let { (g, i) -> params.setOverrideForType(TrackSelectionOverride(g.mediaTrackGroup, i)) }
-                                }
-                                engine.trackSelectionParameters = params.build()
-                            }
-
-                            override fun onIsPlayingChanged(isPlaying: Boolean) {
-                                if (!ownsInput()) return
-                                playbackActive = isPlaying
-                                if (isPlaying && item.kind == "LIVE") currentLivePlaying()
-                                if (isPlaying && watchdog.prepared && !reconnectRequested) { retry.playing(); error = "" }
-                                if (isPlaying && !preview && !recorded) {
-                                    recorded = true
-                                    model.started(item)
-                                }
-                            }
-
-                            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
-                                if (!ownsInput()) return
-                                session.wantsPlay = playWhenReady
-                            }
-
-                            override fun onPlayerError(cause: PlaybackException) {
-                                if (!ownsInput()) return
-                                if (reconnectRequested) return
-                                model.diagnostic("Media3 ${cause.errorCode}")
-                                terminalError = cause.errorCode != PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW &&
-                                    !(item.kind == "LIVE" && cause.errorCode in 2000..3999)
-                                when {
-                                    cause.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW -> {
-                                        engine.seekToDefaultPosition()
-                                        engine.prepare()
-                                    }
-                                    cause.errorCode in 4000..4999 -> {
-                                        retry.playing()
-                                        error = playbackMessage(cause)
-                                        decoderFailure(engine.currentPosition)
-                                    }
-                                    item.kind == "LIVE" && cause.errorCode in 2000..3999 -> reconnect()
-                                    else -> { retry.stop(); error = playbackMessage(cause) }
-                                }
-                            }
-
-                            override fun onPlaybackStateChanged(state: Int) {
-                                if (!ownsInput()) return
-                                if (state == Player.STATE_ENDED) {
-                                    if (liveShouldReconnect(item.kind, LivePlaybackSignal.END_REACHED,
-                                            paused = !engine.playWhenReady, preview = preview, multi = multi)) reconnect()
-                                    if (item.kind != "LIVE") {
-                                        model.progress(item, engine.duration, engine.duration)
-                                        currentEnded()
-                                    }
-                                }
-                            }
-                        }
-                    var analytics: AnalyticsListener? = null
-                    var metadata: VideoFrameMetadataListener? = null
-                    disposePlayback[0] = {
-                        if (ownsInput()) {
-                            val position = if (engine.playbackState == Player.STATE_ENDED && engine.duration > 0)
-                                engine.duration else engine.currentPosition
-                            session.capture(binding, engine.currentMediaItem?.mediaId, position, engine.duration)?.let {
-                                model.progress(item, it.position, it.duration)
-                            }
-                            session.wantsPlay = engine.playWhenReady
-                            session.unbind(binding)
-                        }
-                        engine.removeListener(mediaListener)
-                        analytics?.let(engine::removeAnalyticsListener)
-                        metadata?.let(engine::clearVideoFrameMetadataListener)
-                        // Preserve live renderer reuse. An unbound attempt never stops the old input.
-                        if (engine.currentMediaItem?.mediaId == inputId && item.kind != "LIVE") engine.stop()
-                    }
-                    engine.addListener(mediaListener)
-                    if (perfRequest != null) {
-                        // Renderer/surface reuse need not produce another Player first-frame event.
-                        // Arm only when this input reaches the renderer, rejecting buffered old frames.
-                        val inputFormat = java.util.concurrent.atomic.AtomicReference<Format?>(null)
-                        val submitted = java.util.concurrent.atomic.AtomicBoolean(false)
-                        val frameAnalytics = object : AnalyticsListener {
-                            override fun onVideoInputFormatChanged(
-                                eventTime: AnalyticsListener.EventTime,
-                                format: Format,
-                                decoderReuseEvaluation: androidx.media3.exoplayer.DecoderReuseEvaluation?,
-                            ) {
-                                val timeline = eventTime.timeline
-                                if (!timeline.isEmpty && timeline.getWindow(eventTime.windowIndex,
-                                        Timeline.Window()).mediaItem.mediaId == inputId) inputFormat.set(format)
-                            }
-                        }
-                        val frameMetadata = VideoFrameMetadataListener { _, releaseTimeNs, format, _ ->
-                            if (format === inputFormat.get() && submitted.compareAndSet(false, true)) {
-                                playbackScope.launch(Dispatchers.Main.immediate) {
-                                    // The callback precedes release to the surface; never log early.
-                                    kotlinx.coroutines.delay(((releaseTimeNs - System.nanoTime()) / 1_000_000)
-                                        .coerceAtLeast(0))
-                                    Perf.transitions.zapFirstFrame(perfRequest, "media3")
-                                }
-                            }
-                        }
-                        analytics = frameAnalytics
-                        metadata = frameMetadata
-                        engine.addAnalyticsListener(frameAnalytics)
-                        engine.setVideoFrameMetadataListener(frameMetadata)
-                    }
-                    val media = MediaItem.Builder().setUri(url).setMediaId(inputId)
-                    if (subtitle != null) media.setSubtitleConfigurations(listOf(subtitle))
-                    engine.setMediaItem(media.build(), if (item.kind == "LIVE") 0 else start)
-                    session.bind(binding, inputId, if (item.kind == "LIVE") 0 else start)
-                    monitoredEngine = engine
-                    currentReady(engine)
-                    engine.prepare()
-                    engine.playWhenReady = session.wantsPlay
-                    kotlinx.coroutines.awaitCancellation()
-                }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                if (e is Wp09PlaybackTimeoutException) {
-                    monitoredEngine?.takeIf { session.owns(binding, it.currentMediaItem?.mediaId) }?.stop()
-                }
-                disposePlayback[0]?.invoke()
-                disposePlayback[0] = null
-                if (BuildConfig.DEBUG) {
-                    val frames =
-                        e.stackTrace.take(8).joinToString(" / ") {
-                            "${it.className}.${it.methodName}:${it.lineNumber}"
-                        }
-                    android.util.Log.w("LumenaraPlayback", "${e.javaClass.simpleName} · $frames")
-                }
-                if (item.kind != "LIVE" || !retry.failed())
-                    error = if (e is Wp09PlaybackTimeoutException) "Yayın yanıt vermedi. Yeniden deneyin."
-                        else "Yayın adresi açılamadı. Kaynağı yenileyin."
-            }
-        }
+    LaunchedEffect(error) { currentFailure(error.isNotEmpty()) }
+    LaunchedEffect(controller, binding) {
+        controller.run(item, session, binding, preview, multi, retry, subtitle, liveUrls, decoderFailure, awaitPreviousInput)
     }
-    DisposableEffect(binding) {
+    DisposableEffect(controller) {
         onDispose {
-            disposePlayback[0]?.invoke()
-            disposePlayback[0] = null
-        }
-    }
-    DisposableEffect(Unit) {
-        onDispose {
-            // Dispose ordering must not make the final snapshot read a released engine.
-            currentDisposePlayback[0]?.invoke()
-            currentDisposePlayback[0] = null
             videoOutput?.keepScreenOn = false
-            player?.release()
-            player = null
-            currentReady(null)
+            controller.close()
         }
     }
-    LaunchedEffect(player, binding) {
-        val engine = player ?: return@LaunchedEffect
-        withContext(Dispatchers.Main.immediate) {
-            wallClockTicks(5000).collect {
-                if (engine.isPlaying) session.capture(binding, engine.currentMediaItem?.mediaId,
-                    engine.currentPosition, engine.duration)?.let { model.progress(item, it.position, it.duration) }
-            }
-        }
-    }
-    var appliedSubtitleDelayUs by remember(item.id) { mutableLongStateOf(0L) }
-    LaunchedEffect(player, binding, shiftedSubtitles, subtitleDelayMs) {
-        val engine = player ?: return@LaunchedEffect
-        if (preview || multi) return@LaunchedEffect
-        withContext(Dispatchers.Main.immediate) {
-            val period = androidx.media3.common.Timeline.Period()
-            var revision = 0L
-            fun clockState(): Wp14SubtitleClockState {
-                val owned = session.owns(binding, engine.currentMediaItem?.mediaId)
-                return Wp14SubtitleClockState(owned && engine.currentTracks.groups.any {
-                    it.type == C.TRACK_TYPE_TEXT && it.isSelected
-                }, owned && engine.isPlaying, revision++)
-            }
-            val clockEvents = kotlinx.coroutines.flow.MutableStateFlow(clockState())
-            val listener = object : Player.Listener {
-                override fun onEvents(player: Player, events: Player.Events) {
-                    if (session.owns(binding, engine.currentMediaItem?.mediaId))
-                        clockEvents.value = clockState()
-                }
-            }
-            engine.addListener(listener)
-            try {
-                val changes = kotlinx.coroutines.flow.combine(clockEvents, shiftedSubtitles.changes) { state, revision ->
-                    state.copy(revision = state.revision + revision)
-                }
-                wp14SubtitleClock(changes) {
-                    requireMainThread()
-                    val windowOffsetUs = if (engine.currentTimeline.isEmpty) 0L else
-                        engine.currentTimeline.getPeriod(engine.currentPeriodIndex, period).positionInWindowUs
-                    shiftedSubtitles.render(engine.currentPosition * 1000 - windowOffsetUs)
-                    appliedSubtitleDelayUs = shiftedSubtitles.appliedDelayUs
-                }
-            } finally {
-                engine.removeListener(listener)
-            }
-        }
+    LaunchedEffect(controller, player, binding, subtitleDelayMs) {
+        controller.observeSubtitles(binding, session, preview, multi)
     }
     Box(modifier.background(androidx.compose.ui.graphics.Color.Black).semantics {
         this[SubtitleEngineDelayUs] = appliedSubtitleDelayUs
@@ -466,7 +157,7 @@ internal fun Video(
             if (!preview) LaunchedEffect(error) { retryFocus.requestFocus() }
             Column(Modifier.align(Alignment.Center).background(LumenColors.surface1).padding(12.dp)) {
                 Text(error, maxLines = 3)
-                if (!preview) Button(onClick = { error = ""; retry.manual() },
+                if (!preview) Button(onClick = { controller.error = ""; retry.manual() },
                     modifier = Modifier.focusRequester(retryFocus)) { Text("Yeniden dene") }
             }
         }
@@ -486,6 +177,7 @@ internal fun Playback(
     sleepTimerExpired: () -> Unit = back,
 ) {
     val activeSleepTimer = sleepTimer ?: remember { dev.lumenara.catalog.SleepTimer() }
+    val routeSession = remember { dev.lumenara.player.api.PlaybackSession() }
     // Intent/restored launches also get a request; normal selections retain their earlier timestamp.
     // Initialize before the player's launched effects; recomposition must not re-arm a completed zap.
     DisposableEffect(item.id) {
@@ -547,6 +239,7 @@ internal fun Playback(
                 select(channel)
             },
             { multi = emptyList() },
+            awaitPreviousInput = { routeSession.awaitInputRelease() },
         )
         return
     }
@@ -607,19 +300,23 @@ internal fun Playback(
     }
         .collectAsStateWithLifecycle("Açık")
     if (preferred == null) return
-    // Keep an automatic VLC fallback for the live session, including subsequent zaps.
-    var vlc by remember(if (live) "live-player" else item.id) { mutableStateOf(preferred == "VLC") }
-    val ownership = remember(item.id) { PlaybackOwnership(item.id, initial) }
-    var switched by remember(item.id) { mutableStateOf(false) }
-    if (vlc) {
+    val ownership = remember(item.id) {
+        PlaybackOwnership(item.id, initial, routeSession).also {
+            it.select(live, if (preferred == "VLC") dev.lumenara.player.api.EngineKind.VLC
+                else dev.lumenara.player.api.EngineKind.MEDIA3)
+        }
+    }
+    // Reset collection for a new item so its select() is reflected in the first composition.
+    val requestedEngine by key(ownership) {
+        routeSession.requestedEngine.collectAsState()
+    }
+    if (requestedEngine == dev.lumenara.player.api.EngineKind.VLC) {
         VlcScreen(
             model,
             item,
             initial,
             { pos ->
-                ownership.transfer(pos)
-                switched = true
-                vlc = false
+                ownership.switchTo(dev.lumenara.player.api.EngineKind.MEDIA3, pos)
             },
             back,
             group = group,
@@ -630,9 +327,7 @@ internal fun Playback(
             liveUrls = liveUrls,
             livePlaying = { playingLive = true },
             unsupportedLive = if (preferred != "VLC" && fallback == "Açık") ({
-                ownership.transfer(0)
-                switched = true
-                vlc = false
+                ownership.switchTo(dev.lumenara.player.api.EngineKind.MEDIA3, 0)
             }) else null,
             next = { if (item.kind == "EPISODE") move(1) },
             sleepTimer = activeSleepTimer,
@@ -650,7 +345,7 @@ internal fun Playback(
     val numbers = if (live) rememberLiveNumberControl(model, item.source, item.id) { channel, rows ->
         selectChannel(channel, rows)
     } else null
-    val retry = rememberLiveRetry(item.id)
+    val retry = rememberLiveRetry(item.id, ownership = ownership)
     val playerUi by rememberPlayerUiState(engine,
         visible = panel || !fullscreen.guide && !fullscreen.finished && !sleepCountdown && fullscreen.bannerVisible)
     val subtitleSearch = rememberSubtitleSearchState(model, item, status = { subtitleNotice = it }) {
@@ -717,11 +412,7 @@ internal fun Playback(
             liveUrls = liveUrls,
             livePlaying = { playingLive = true },
             decoderFailure = { pos ->
-                if (!switched && fallback == "Açık") {
-                    switched = true
-                    ownership.transfer(pos)
-                    vlc = true
-                }
+                if (fallback == "Açık") ownership.fallbackToVlc(pos)
             },
             ended = {
                 if (item.kind == "EPISODE") episodeEnded()
@@ -797,10 +488,12 @@ internal fun Playback(
                         // ExoPlayer must be read on the main thread; this callback may resume elsewhere.
                         val snapshot = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main.immediate) {
                             engine?.takeIf { ownership.ownsMedia(it.currentMediaItem?.mediaId) }
-                                ?.let { it.currentPosition.coerceAtLeast(0) to it.duration.coerceAtLeast(0) }
+                                ?.let { p ->
+                                    ownership.captureCurrent(p.currentPosition, p.duration)
+                                }
                         }
                         if (snapshot != null)
-                            model.repo.updateMark(item.id) { it.copy(position = snapshot.first, duration = snapshot.second) }
+                            model.repo.updateMark(item.id) { it.copy(position = snapshot.position, duration = snapshot.duration) }
                         if (version.kind == "EPISODE") changeGroup(wp14SeriesCatalog(model.repo.episodeSnapshot(version.parent)).items)
                         select(version)
                     }
@@ -866,11 +559,9 @@ internal fun Playback(
                         onClick = {
                             val position = engine?.takeIf { ownership.ownsMedia(it.currentMediaItem?.mediaId) }
                                 ?.currentPosition ?: -1
-                            ownership.transfer(position)
+                            ownership.switchTo(dev.lumenara.player.api.EngineKind.VLC, position)
                             android.util.Log.d("LumenaraVlc", "switch Media3 to VLC position=$position subtitle=${subtitle != null} scheme=${subtitle?.uri?.scheme}")
-                            switched = true
                             panel = false
-                            vlc = true
                         }
                     ) {
                         Text("Motor: Media3/VLC")
@@ -881,7 +572,8 @@ internal fun Playback(
                         for (count in listOf(2, 4)) PlayerOption(
                             onClick = {
                                 scope.launch {
-                                    val slots = decoderSlots()
+                                    val load = selectedVideoLoad(engine)
+                                    val slots = backgroundWork.run { decoderSlots(load) }
                                     val options = (listOf(item) + group).distinctBy { it.id }
                                     val limits =
                                         options
@@ -1112,3 +804,7 @@ internal fun PlaybackSection(title: String) {
 /** Clean only the visible title; production identity and version selection stay intact. */
 internal fun playbackDisplayTitle(item: Item): String =
     item.cleanTitle.ifBlank { item.title }.ifBlank { "Video" }
+
+@androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
+private fun selectedVideoLoad(player: ExoPlayer?): Wp18VideoLoad? =
+    player?.videoFormat?.let { Wp18VideoLoad(it.sampleMimeType, it.width, it.height, it.frameRate) }
