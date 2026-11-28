@@ -10,6 +10,7 @@ import java.io.Closeable
 import java.io.DataInputStream
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
 import okhttp3.Call
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -29,26 +30,39 @@ class VlcInput
 private constructor(
     val descriptor: ParcelFileDescriptor,
     val demux: String,
+    private val readState: () -> String,
     private val release: () -> Unit,
 ) : Closeable {
+    private val id = ids.incrementAndGet()
     private val closed = AtomicBoolean(false)
     private val cancelled = AtomicBoolean(false)
+
+    /** No VLC calls, locks, addresses or response headers; safe during a stuck stop/read. */
+    fun diagnosticState() = "input=$id demux=$demux cancelRequested=${cancelled.get()} " +
+        "closeStarted=${closed.get()} ${readState()}"
 
     /** Unblock native reads without invalidating an fd VLC may still be opening. */
     @Synchronized fun cancel() {
         if (!cancelled.compareAndSet(false, true)) return
         // Only cancel the call here. The reading thread owns response/source cleanup;
         // closing an OkHttp body concurrently with read() races inside Okio.
+        android.util.Log.d("LumenaraVlc", "input cancel begin ${diagnosticState()}")
         release()
+        android.util.Log.d("LumenaraVlc", "input cancel end ${diagnosticState()}")
     }
 
     /** Retain this descriptor until native stop() returns (or the player is released). */
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
-        try { cancel() } finally { descriptor.close() }
+        try { cancel() } finally {
+            android.util.Log.d("LumenaraVlc", "input fd-close begin ${diagnosticState()}")
+            descriptor.close()
+            android.util.Log.d("LumenaraVlc", "input fd-close end ${diagnosticState()}")
+        }
     }
 
     companion object {
+        private val ids = AtomicInteger()
         /** Cancel a superseded channel's HTTP handshake immediately, before it owns an input. */
         suspend fun openCancellable(context: Context, url: String, allowHttp: Boolean,
             network: PlaybackNetwork = Wp18VlcNetwork): VlcInput {
@@ -154,7 +168,7 @@ private constructor(
                             "TS input read failed: ${e.javaClass.simpleName}") },
                     )
                     thread(name = "lumenara-ts", isDaemon = true) { pump.run() }
-                    return VlcInput(pipe[0], selectedDemux) { pump.cancel() }
+                    return VlcInput(pipe[0], selectedDemux, pump::diagnosticState) { pump.cancel() }
                 } catch (e: Exception) {
                     calls.cancel()
                     response.close()
@@ -171,6 +185,17 @@ private constructor(
                 range.total
             }
             val io = HandlerThread("lumenara-vlc-range").apply { start() }
+            val reads = object {
+                @Volatile var stage = "idle"
+                @Volatile var began = 0L
+                @Volatile var offset = -1L
+                @Volatile var size = 0
+                @Volatile var completed = 0L
+                @Volatile var released = false
+
+                fun describe() = "range=$stage rangeTid=${io.threadId} offset=$offset size=$size reads=$completed " +
+                    "opMs=${if (stage == "idle") 0 else SystemClock.elapsedRealtime() - began} released=$released"
+            }
             val callback =
                 object : ProxyFileDescriptorCallback() {
                     var next = -1L
@@ -179,10 +204,15 @@ private constructor(
                     override fun onGetSize() = length
 
                     override fun onRead(offset: Long, size: Int, data: ByteArray): Int {
+                        reads.began = SystemClock.elapsedRealtime()
+                        reads.offset = offset
+                        reads.size = size
+                        reads.stage = "check-active"
                         try {
                             calls.checkActive()
                             if (offset >= length) return 0
                             if (offset != next || response == null) {
+                                reads.stage = "replace-range"
                                 calls.cancelCurrent()
                                 response?.close()
                                 response = null
@@ -193,6 +223,7 @@ private constructor(
                                             .header("Range", "bytes=$offset-")
                                             .build()
                                     ) }
+                                reads.stage = "range-request"
                                 response =
                                     newCall.execute().also {
                                         val range = Wp09ContentRange.parse(it.header("Content-Range"))
@@ -209,6 +240,7 @@ private constructor(
                             // A socket read can return only one packet; returning that short
                             // count lets FUSE treat the rest as EOF/zeroes, corrupting the MP4.
                             val read = minOf(size.toLong(), length - offset).toInt()
+                            reads.stage = "body-read"
                             DataInputStream(response!!.body!!.byteStream()).readFully(data, 0, read)
                             next += read
                             return read
@@ -216,16 +248,30 @@ private constructor(
                             // FUSE may retry a failed read (including readahead). Once the
                             // representation or transport fails, this fd must stay failed;
                             // another Range could otherwise hang or mix different content.
+                            android.util.Log.d("LumenaraVlc", "range read failed ${reads.describe()}")
+                            reads.stage = "failure-cleanup"
                             calls.cancel()
                             response?.close()
                             response = null
                             throw ErrnoException("read", OsConstants.EIO)
+                        } finally {
+                            reads.completed++
+                            reads.stage = "idle"
                         }
                     }
 
                     override fun onRelease() {
+                        reads.began = SystemClock.elapsedRealtime()
+                        reads.stage = "release-cancel"
+                        android.util.Log.d("LumenaraVlc", "range release begin ${reads.describe()}")
                         calls.cancel()
-                        try { response?.close() } finally { io.quitSafely() }
+                        reads.stage = "release-response-close"
+                        try { response?.close() } finally {
+                            reads.released = true
+                            reads.stage = "idle"
+                            io.quitSafely()
+                            android.util.Log.d("LumenaraVlc", "range release end ${reads.describe()}")
+                        }
                     }
                 }
             try {
@@ -237,7 +283,7 @@ private constructor(
                             callback,
                             Handler(io.looper),
                         )
-                return VlcInput(fd, selectedDemux) { calls.cancel() }
+                return VlcInput(fd, selectedDemux, reads::describe) { calls.cancel() }
             } catch (e: Exception) {
                 calls.cancel()
                 io.quitSafely()
