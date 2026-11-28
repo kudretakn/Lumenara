@@ -240,6 +240,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: android-tv-debug-api${{ matrix.api }}${{ matrix.artifact_suffix }}
+          overwrite: true
           path: screens/
           if-no-files-found: error
 
@@ -319,6 +320,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: android-tv-qa-api${{ matrix.api }}
+          overwrite: true
           path: screens/
           if-no-files-found: error
 
