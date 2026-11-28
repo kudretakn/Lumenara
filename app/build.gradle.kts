@@ -18,6 +18,19 @@ android {
         versionName = "0.6.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
+    // WP15: release publication opts in; ordinary debug/QA and WP10's universal
+    // build evidence keep their existing APK paths. These are standalone APKs,
+    // all with the unchanged defaultConfig versionCode (no per-ABI offsets).
+    // Lead: -Pwp15.abiSplits=true :app:assembleRelease
+    splits {
+        abi {
+            isEnable = providers.gradleProperty("wp15.abiSplits").getOrElse("false").toBooleanStrict()
+            reset()
+            include("armeabi-v7a", "arm64-v8a")
+            // Exactly one ARM-universal fallback lets installed pre-WP15 updaters upgrade.
+            isUniversalApk = true
+        }
+    }
     buildFeatures { compose = true; buildConfig = true }
     buildTypes {
         getByName("debug") { applicationIdSuffix = ".debug" }

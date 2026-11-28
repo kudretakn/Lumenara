@@ -34,24 +34,42 @@ object Updates {
         return published[different] > installed[different]
     }
 
-    internal fun parseRelease(release: JSONObject, repository: String, current: String): Update? {
+    internal fun parseRelease(release: JSONObject, repository: String, current: String,
+        supportedAbis: List<String> = Build.SUPPORTED_ABIS?.toList().orEmpty()): Update? {
         val tag = release.optString("tag_name")
         if (!newer(tag, current)) return null
-        val artifact = artifact(release, repository)
+        val artifact = artifact(release, repository, supportedAbis)
         val hash = digest(artifact) ?: throw missingDigest()
         return Update(tag, release.optString("body").take(6000),
             artifact.getString("browser_download_url"), hash)
     }
 
-    internal fun artifact(release: JSONObject, repository: String): JSONObject {
+    private val apkAbi = Regex("-(armeabi-v7a|arm64-v8a|x86_64|x86|armeabi|mips64|mips)\\.apk$",
+        RegexOption.IGNORE_CASE)
+
+    internal fun artifact(release: JSONObject, repository: String,
+        supportedAbis: List<String> = Build.SUPPORTED_ABIS?.toList().orEmpty()): JSONObject {
         val assets = release.optJSONArray("assets") ?: throw missingDigest()
         val prefix = "https://github.com/$repository/releases/download/${release.optString("tag_name")}/"
         val targets = (0 until assets.length()).mapNotNull(assets::optJSONObject).filter {
             it.optString("browser_download_url").startsWith(prefix, true) &&
                 it.optString("name").endsWith(".apk", true)
         }
-        return targets.singleOrNull()
-            ?: targets.singleOrNull { it.optString("name").contains("universal", true) }
+        fun abi(asset: JSONObject) = apkAbi.find(asset.optString("name"))?.groupValues?.get(1)
+        // Android's preference order describes the userspace, unlike CPU capability.
+        // In particular, a Mi Box with a 64-bit CPU can only load armeabi-v7a.
+        for (supported in supportedAbis) {
+            val matching = targets.filter { abi(it).equals(supported, true) }
+            if (matching.size > 1) throw SourceFailure("Sürümde aynı ABI için birden fazla APK bulundu.")
+            matching.singleOrNull()?.let { return it }
+        }
+        val universal = targets.filter {
+            abi(it) == null && it.optString("name").contains("universal", true)
+        }
+        if (universal.size > 1) throw SourceFailure("Sürümde tek bir evrensel APK belirlenemedi.")
+        return universal.singleOrNull()
+            // Releases before ABI assets used one unqualified APK name.
+            ?: targets.singleOrNull()?.takeIf { abi(it) == null }
             ?: throw SourceFailure("Sürümde tek bir evrensel APK belirlenemedi.")
     }
 
