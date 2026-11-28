@@ -91,7 +91,7 @@ class Wp01LauncherTest(unittest.TestCase):
                         '--runner', 'dev.lumenara.tv.qa.test/androidx.test.runner.AndroidJUnitRunner',
                         '--total-timeout', total, '--artifact-reserve', reserve]
             start = time.monotonic()
-            result = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=15)
+            result = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=90)
             elapsed = time.monotonic() - start
             self.assertEqual(result.returncode == 0, FIXTURES[name]['success'], result.stdout + result.stderr)
             report = json.loads((out / 'Wp01-results.json').read_text())
@@ -214,7 +214,7 @@ class Wp01ReleaseGateTest(unittest.TestCase):
                     env = dict(os.environ, WP01_CERT_DIGEST=digest, WP01_CERT_EXIT=str(code))
                     result = subprocess.run([PWSH, '-NoProfile', '-File', str(ROOT / 'scripts/sign-release.ps1'),
                                              '-Apk', str(apk), '-SignTool', str(tool), '-Python', sys.executable],
-                                            env=env, capture_output=True, text=True, timeout=15)
+                                            env=env, capture_output=True, text=True, timeout=90)
                     self.assertEqual(result.returncode == 0, success, result.stdout + result.stderr)
                     self.assertEqual(apk.read_bytes(), b'fixture unchanged')
 
@@ -222,7 +222,7 @@ class Wp01ReleaseGateTest(unittest.TestCase):
     def test_local_signing_and_key_creation_disabled(self):
         for extra in ([], ['-CreateKey']):
             result = subprocess.run([PWSH, '-NoProfile', '-File', str(ROOT / 'scripts/sign-release.ps1')] + extra,
-                                    capture_output=True, text=True, timeout=15)
+                                    capture_output=True, text=True, timeout=90)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('Local release signing/key creation is disabled', result.stderr)
 

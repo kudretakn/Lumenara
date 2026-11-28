@@ -12,6 +12,7 @@ concurrency:
 
 env:
   WP10_NDK_VERSION: '28.2.13676358'
+  DEBUG_API36_SHARDS: '3'
 
 jobs:
   build:
@@ -111,10 +112,10 @@ jobs:
           if-no-files-found: error
 
   debug-device:
-    name: debug-device (API${{ matrix.api }})
+    name: debug-device (API${{ matrix.api }}${{ matrix.shard_label }})
     runs-on: ubuntu-latest
     needs: build
-    # Full API36 suite keeps its one 30-minute gate budget. Leave room for two
+    # Each API36 shard has its own 30-minute gate budget. Leave room for two
     # 15-minute boot attempts, setup and artifact collection on a bad runner.
     timeout-minutes: ${{ matrix.job_timeout }}
     strategy:
@@ -127,6 +128,27 @@ jobs:
             job_timeout: 75
             test_timeout: 1800
             classes: ''
+            shard_index: 0
+            shard_label: ' shard 0'
+            artifact_suffix: '-s0'
+          - api: 36
+            arch: x86_64
+            ram: 3072M
+            job_timeout: 75
+            test_timeout: 1800
+            classes: ''
+            shard_index: 1
+            shard_label: ' shard 1'
+            artifact_suffix: '-s1'
+          - api: 36
+            arch: x86_64
+            ram: 3072M
+            job_timeout: 75
+            test_timeout: 1800
+            classes: ''
+            shard_index: 2
+            shard_label: ' shard 2'
+            artifact_suffix: '-s2'
           # Google's API28 TV image exists only as x86; KVM runs it on x86_64 hosts.
           # Focused existing tests: Room/Vault import + marks, DPAD, Media3 and VLC.
           - api: 28
@@ -135,6 +157,8 @@ jobs:
             job_timeout: 50
             test_timeout: 600
             classes: 'dev.lumenara.tv.CatalogIntegrationTest#refreshRollbackMarksEncryptionAndEpg,dev.lumenara.tv.SettingsSetupJourneyTest,dev.lumenara.tv.PlaybackTest,dev.lumenara.tv.VlcTest'
+            shard_label: ''
+            artifact_suffix: ''
     steps:
       - name: Free disk space
         run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost /usr/local/lib/node_modules /opt/hostedtoolcache/CodeQL /usr/share/swift
@@ -166,7 +190,7 @@ jobs:
           emulator-boot-timeout: 900
           disable-animations: true
           emulator-options: '-no-window -no-snapshot -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none'
-          script: ./scripts/ci-device-tests.sh apks screens --class '${{ matrix.classes }}' --total-timeout ${{ matrix.test_timeout }} --artifact-reserve 120
+          script: ./scripts/ci-device-tests.sh apks screens --class '${{ matrix.classes }}' --total-timeout ${{ matrix.test_timeout }} --artifact-reserve 120 ${{ matrix.api == 36 && format('--num-shards {0} --shard-index {1} --test-timeout 180', env.DEBUG_API36_SHARDS, matrix.shard_index) || '' }}
       - name: Retry once if the emulator never ran the tests
         id: retry
         if: steps.attempt1.outcome == 'failure' && hashFiles('screens/summary.txt') == ''
@@ -181,7 +205,7 @@ jobs:
           emulator-boot-timeout: 900
           disable-animations: true
           emulator-options: '-no-window -no-snapshot -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none'
-          script: ./scripts/ci-device-tests.sh apks screens --class '${{ matrix.classes }}' --total-timeout ${{ matrix.test_timeout }} --artifact-reserve 120
+          script: ./scripts/ci-device-tests.sh apks screens --class '${{ matrix.classes }}' --total-timeout ${{ matrix.test_timeout }} --artifact-reserve 120 ${{ matrix.api == 36 && format('--num-shards {0} --shard-index {1} --test-timeout 180', env.DEBUG_API36_SHARDS, matrix.shard_index) || '' }}
       - name: Fail if tests failed
         if: always() && steps.attempt1.outcome != 'success' && steps.retry.outcome != 'success'
         run: |
@@ -191,7 +215,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: android-tv-debug-api${{ matrix.api }}
+          name: android-tv-debug-api${{ matrix.api }}${{ matrix.artifact_suffix }}
           path: screens/
           if-no-files-found: error
 
@@ -282,7 +306,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Download every API36 debug shard report
+        uses: actions/download-artifact@v4
+        with:
+          pattern: android-tv-debug-api36-s*
+          path: device-shards
       - name: Require every build and device matrix result
         env:
           WP10_NEEDS: ${{ toJSON(needs) }}
-        run: python3 scripts/Wp10DeviceGate.py
+        run: python3 scripts/Wp10DeviceGate.py --shard-reports device-shards --num-shards ${{ env.DEBUG_API36_SHARDS }}
