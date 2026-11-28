@@ -2,7 +2,7 @@ package dev.lumenara.data
 
 import dev.lumenara.catalog.searchable
 
-data class ProgramHit(val slot: Slot, val itemId: String)
+data class ProgramHit(@androidx.room.Embedded val slot: Slot, val itemId: String)
 data class AiringProgram(val itemId: String, val end: Long, val title: String)
 data class GuideChannel(
     val id: String,
@@ -62,6 +62,11 @@ class GuideResolver(
     fun targets(itemId: String): List<GuideTarget> = targetsByItem[itemId].orEmpty()
     fun visible(itemId: String, hidden: List<String>): Boolean =
         channelsById[itemId]?.let { it.category !in hidden } == true
+
+    internal fun searchTargets(hidden: List<String>): List<Wp13GuideSearchTarget> =
+        targetsByItem.asSequence().filter { visible(it.key, hidden) }.flatMap { (id, targets) ->
+            targets.asSequence().map { Wp13GuideSearchTarget(id, it.feed, it.channel) }
+        }.toList()
 
     fun searchPrograms(slots: List<Slot>, query: String, from: Long, now: Long,
         hidden: List<String> = emptyList()): List<ProgramHit> {
