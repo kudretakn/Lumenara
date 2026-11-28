@@ -142,6 +142,10 @@ internal class CatalogReader(
                 Wp07MaintenanceRunner(backgroundWork, { false }, android.os.SystemClock::elapsedRealtime) { limit ->
                     backfill.runBatch(limit.coerceAtMost(16))
                 }.run()
+                val series = Wp22SeriesBackfill(db)
+                Wp07MaintenanceRunner(backgroundWork, { false }, android.os.SystemClock::elapsedRealtime) { limit ->
+                    series.runBatch(limit.coerceAtMost(100))
+                }.run()
                 synchronized(this@CatalogReader) { searchBackfillFinished = true }
             } catch (cancelled: CancellationException) {
                 throw cancelled

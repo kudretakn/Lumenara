@@ -75,7 +75,7 @@ internal class CatalogImporter(
             val previousRows = userState.carryRows(source.id, spec.user.isNotEmpty())
             val old = previousRows + recovering.flatMap { it.rows }
             val incoming = ArrayList<CarryRow>()
-            val series = ArrayList<Item>()
+            val series = HashMap<String, Wp22SeriesLocator>()
             val preparedEpisodeParents = HashSet<String>()
             val restoreEpisodeDurations = HashMap<String, Long>()
             progress?.report("İçerikler hazırlanıyor…")
@@ -87,7 +87,7 @@ internal class CatalogImporter(
                             urlHash = contentKey("orphan-url", vault.decrypt(row.encryptedUrl))) else identity
                     }
                     if (incoming.size % 250 == 0) progress?.report("İçerikler hazırlanıyor · ${importCount(incoming.size)}")
-                    if (row.kind == "SERIES") series += row
+                    if (row.kind == "SERIES") series[row.id] = Wp22SeriesLocator(row.id, row.title, row.encryptedUrl)
                 }
                 val grouper = SeriesGrouper()
                 fun accept(row: Listing) {
@@ -128,17 +128,13 @@ internal class CatalogImporter(
                     val matches = matchCarryOver(previousRows.filter { it.kind == "SERIES" }, targets).ids +
                         recovering.flatMap { orphan -> matchCarryOver(orphan.rows.filter { it.kind == "SERIES" },
                             targets, categoryFallback = true).ids.entries }.associate { it.key to it.value }
-                    val parents = series.associateBy { it.id }
                     val restoreParents = wp12RestoreParentIds(restoreItems, source.id, spec, incoming) +
                         pendingItems.flatMap { wp12RestoreParentIds(it, source.id, spec, incoming) }
                     for (to in matches.filterKeys { it in expanded }.values.toSet() + restoreParents) {
-                        val parent = parents.getValue(to)
-                        val episodes = xtream.episodes(vault.decrypt(parent.encryptedUrl), parent.title).distinctBy { it.url }
+                        val parent = series.getValue(to)
                         preparedEpisodeParents += parent.id
-                        episodes.forEach {
-                            job.ensureActive()
-                            val episode = item(source.id, token, it).copy(parent = parent.id)
-                            if (to in restoreParents && it.durationMs > 0) restoreEpisodeDurations[episode.id] = it.durationMs
+                        streamEpisodes(xtream, parent, source.id, token, { job.ensureActive() }) { episode, duration ->
+                            if (to in restoreParents && duration > 0) restoreEpisodeDurations[episode.id] = duration
                             stage(episode)
                         }
                     }
@@ -173,10 +169,17 @@ internal class CatalogImporter(
                     library.writeBatch(batch.map { row ->
                         val old = previous[row.id]
                         val retained = if (row.tmdbId().isEmpty() && old != null &&
-                            searchable(productionName(row.title, row.year).title) == searchable(productionName(old.title, old.year).title))
+                            (row.title == old.title && row.year == old.year ||
+                                searchable(productionName(row.title, row.year).title) == searchable(productionName(old.title, old.year).title)))
                             row.withTmdbMatch(TmdbMatch(old.tmdbId(), old.year)) else row
-                        retained.withTmdbMatch(metadata.cachedMatch(retained))
-                            .copy(versionKey = row.id, displayTitle = row.title, displayYear = row.year)
+                        val matched = retained.withTmdbMatch(metadata.cachedMatch(retained)).copy(
+                            channelNumber = old?.channelNumber ?: 0, safeChannelNumber = old?.safeChannelNumber ?: 0)
+                        if (old != null && old.title == matched.title && old.year == matched.year &&
+                            old.search == matched.search && old.kind == matched.kind) matched.copy(
+                            versionKey = old.versionKey, isRepresentative = old.isRepresentative,
+                            displayTitle = old.displayTitle, displayYear = old.displayYear,
+                            versionRank = old.versionRank, cleanTitle = old.cleanTitle, sortKey = old.sortKey)
+                        else matched.copy(versionKey = row.id, displayTitle = row.title, displayYear = row.year)
                     })
                     imported += batch.size
                     progress?.report("İçe aktarılıyor · ${importCount(imported)} / ${importCount(incoming.size)}")
@@ -275,36 +278,9 @@ internal class CatalogImporter(
         }
     }
 
-    /** Explicit refresh boundary, including an unchanged provider body after a local TMDB match. */
+    /** Same digest and computation version consult only the durable metadata queue. */
     suspend fun prepareCatalog(source: String, generation: Long = -1) {
-        val job = currentCoroutineContext()
-        val versionStart = android.os.SystemClock.elapsedRealtime()
-        db.versionBackfill().discardSource(source)
-        val versions = VersionBackfill(db, source, generation)
-        while (versions.runBatch(250)) { job.ensureActive() }
-        // Propagate only user records in indexed groups; never allocate a source's Item list.
-        var cursor = ""
-        while (true) {
-            val groups = library.versionMarkGroups(source, cursor, 250)
-            if (groups.isEmpty()) break
-            for (group in groups) {
-                job.ensureActive()
-                val marks = library.versionGroupMarks(group.versionKey)
-                val newest = marks.maxByOrNull { it.updated } ?: continue
-                val shared = newest.copy(favorite = marks.any { it.favorite }, listed = marks.any { it.listed })
-                library.versionGroupIds(group.versionKey).forEach { library.save(shared.copy(id = it)) }
-            }
-            cursor = groups.last().id
-        }
-        StartupPerf.elapsed("refresh_version_groups", versionStart)
-        val derivedStart = android.os.SystemClock.elapsedRealtime()
-        val derived = CatalogDerivedBackfill(db)
-        derived.reset(source)
-        while (derived.runBatch(source)) { job.ensureActive() }
-        StartupPerf.elapsed("refresh_catalog_derived", derivedStart)
-        // New imports already wrote postings atomically. Legacy sources keep the old search
-        // until the idle backfill covers their rows too; facade signatures stay unchanged.
-        library.wp19PublishIfCovered()
+        Wp22Incremental(db).prepare(source, bodyChanged = generation >= 0, generation = generation)
     }
 
     private fun item(source: String, token: Long, entry: Listing) =
@@ -343,6 +319,38 @@ internal class CatalogImporter(
             tvgGroup = entry.tvgGroup,
         ).let { it.copy(versionKey = it.id, displayTitle = it.title, displayYear = it.year) }
 
+    /** Keep sorted-then-distinct URL semantics without retaining a Listing/Item list.
+     * Only the best season/episode and duration per identity stay in memory; payloads are sealed.
+     */
+    private fun streamEpisodes(xtream: Xtream, parent: Wp22SeriesLocator, source: String, token: Long,
+        checkActive: () -> Unit, emit: (Item, Long) -> Unit) {
+        val directory = wp12StageDirectory(context.cacheDir)
+        val choices = HashMap<String, Wp22EpisodeChoice>()
+        try {
+            CatalogStage(directory, source, token, spool).use { stage ->
+                stage.write { append ->
+                    append(Item(parent.id, source, parent.title, "", "SERIES", "", parent.encryptedUrl, "", token, ""))
+                    xtream.readEpisodes(vault.decrypt(parent.encryptedUrl), parent.title) { listing ->
+                        checkActive()
+                        val episode = item(source, token, listing).copy(parent = parent.id)
+                        val name = episodeName(episode.title, episode.category)
+                        val choice = Wp22EpisodeChoice(name.season, name.episode, listing.durationMs)
+                        if (choice.precedes(choices[episode.id])) choices[episode.id] = choice
+                        append(episode)
+                    }
+                }
+                val emitted = HashSet<String>()
+                stage.read { rows -> rows.filter { it.kind == "EPISODE" }.forEach { episode ->
+                    checkActive()
+                    val choice = choices.getValue(episode.id)
+                    val name = episodeName(episode.title, episode.category)
+                    if (name.season == choice.season && name.episode == choice.episode && emitted.add(episode.id))
+                        emit(episode, choice.duration)
+                } }
+            }
+        } finally { directory.deleteRecursively() }
+    }
+
     suspend fun expand(series: Item): List<Item> =
         withContext(Dispatchers.IO) {
             wp16Operation(Wp16Stage.IMPORT) { lock.withLock { expandUnlocked(series) } }
@@ -354,57 +362,70 @@ internal class CatalogImporter(
         val spec = SourceSpec.decode(vault.decrypt(source.endpoint))
         if (spec.user.isEmpty()) return library.episodeSnapshot(series.id)
         suspend fun fetch(): List<Item> {
-            val listings = Xtream(spec)
-                .episodes(vault.decrypt(series.encryptedUrl), series.title)
-                .distinctBy { it.url }
-            val previous = library.episodeSnapshot(series.id)
-            val token = maxOf(System.currentTimeMillis(), (previous.maxOfOrNull { it.generation } ?: 0) + 1)
-            val entries = listings.map { item(source.id, token, it).copy(parent = series.id) }
-            val oldRows = userState.legacyCarryRows((previous + series).map {
-                it.carryRow().copy(legacyUrl = if (it.providerId.isEmpty()) it.encryptedUrl else "")
-            })
+            val job = currentCoroutineContext()
+            val token = maxOf(System.currentTimeMillis(), library.wp22EpisodeGeneration(series.id) + 1)
+            val oldRows = userState.legacyCarryRows(library.wp22EpisodeCarry(series.id) + series.carryRow().copy(
+                legacyUrl = if (series.providerId.isEmpty()) series.encryptedUrl else ""))
             val parent = oldRows.single { it.id == series.id }
-            val incoming = entries.map { it.carryRow() }
-            val matches = wp03EpisodeMatches(parent, oldRows, incoming)
-            val commit: suspend () -> Unit = {
-                library.save(entries)
-                val preferenceReferences = preferences.carryReferences(oldRows)
-                val excluded = context.getSharedPreferences("watch_next_state", Context.MODE_PRIVATE)
-                    .getStringSet("excluded", emptySet()).orEmpty().toSet()
-                val references = preferenceReferences + excluded + library.redirects().map { it.newId }
-                // Keep unresolved state AND its ambiguity peers. A later refresh must not
-                // turn a duplicate into a unique match just because an unmarked peer was pruned.
-                val pending = orphanHistory(source.id, "", token, oldRows, emptyList(), emptyList(),
-                    library.carryProtectedIds(source.id).toSet() + references)
-                carryRoomState(db, matches.ids, references)
-                val siblings = if (entries.isEmpty()) emptyList() else reader.allVersions(series)
-                    .filter { it.id != series.id }.flatMap { library.episodeSnapshot(it.id) }
-                // Read after carry so new IDs already contain the newest local progress.
-                // Android 9 SQLite allows 999 binds; leave room for long series.
-                val marks = (entries + siblings).map { it.id }.distinct().chunked(900)
-                    .flatMap { library.marksByIds(it) }.associateBy { it.id }
-                val shared = wp03SiblingMarks(incoming, siblings.map { it.carryRow() }, marks)
-                listings.zip(entries).forEach { (listing, episode) ->
-                    val existing = marks[episode.id]
-                    var mark = shared[episode.id]?.let { mergeCarryMark(it, existing, episode.id) }
-                        ?: existing ?: Mark(episode.id)
-                    if (mark.duration <= 0 && listing.durationMs > 0)
-                        mark = mark.copy(duration = listing.durationMs)
-                    if (mark != existing && (existing != null || shared[episode.id] != null || mark.duration > 0))
-                        library.save(mark)
+            val incoming = ArrayList<CarryRow>()
+            val durations = HashMap<String, Long>()
+            val seen = HashSet<String>()
+            val directory = wp12StageDirectory(context.cacheDir)
+            try {
+                CatalogStage(directory, source.id, token, spool).use { stage ->
+                    stage.write { append ->
+                        // A parent sentinel lets an explicitly empty episode response use the
+                        // existing encrypted stage's nonempty contract. It is never published.
+                        append(series)
+                        streamEpisodes(Xtream(spec, job[ImportCalls], spool),
+                            Wp22SeriesLocator(series.id, series.title, series.encryptedUrl), source.id, token,
+                            { job.ensureActive() }) { episode, duration ->
+                            seen += episode.id
+                            incoming += episode.carryRow()
+                            if (duration > 0) durations[episode.id] = duration
+                            append(episode)
+                        }
+                    }
+                    val matches = wp03EpisodeMatches(parent, oldRows, incoming)
+                    val commit: suspend () -> Unit = {
+                        stage.read { batch ->
+                            job.ensureActive()
+                            library.writeBatch(batch.filter { it.kind == "EPISODE" })
+                        }
+                        val preferenceReferences = preferences.carryReferences(oldRows)
+                        val excluded = context.getSharedPreferences("watch_next_state", Context.MODE_PRIVATE)
+                            .getStringSet("excluded", emptySet()).orEmpty().toSet()
+                        val references = preferenceReferences + excluded + library.redirects().map { it.newId }
+                        val pending = orphanHistory(source.id, "", token, oldRows, emptyList(), emptyList(),
+                            library.carryProtectedIds(source.id).toSet() + references)
+                        carryRoomState(db, matches.ids, references)
+                        val siblings = if (incoming.isEmpty()) emptyList() else reader.allVersions(series)
+                            .filter { it.id != series.id }.flatMap { library.wp22EpisodeCarry(it.id) }
+                        val marks = (incoming.asSequence().map { it.id } + siblings.asSequence().map { it.id })
+                            .distinct().toList().chunked(900).flatMap { library.marksByIds(it) }.associateBy { it.id }
+                        val shared = wp03SiblingMarks(incoming, siblings, marks)
+                        incoming.forEach { episode ->
+                            val existing = marks[episode.id]
+                            var mark = shared[episode.id]?.let { mergeCarryMark(it, existing, episode.id) }
+                                ?: existing ?: Mark(episode.id)
+                            val duration = durations[episode.id] ?: 0
+                            if (mark.duration <= 0 && duration > 0) mark = mark.copy(duration = duration)
+                            if (mark != existing && (existing != null || shared[episode.id] != null || mark.duration > 0))
+                                library.save(mark)
+                        }
+                        wp03UnresolvedEpisodeIds(pending, seen, matches.ids.keys)
+                            .chunked(900).forEach { library.retainCarryRows(it, token) }
+                        library.pruneEpisodes(series.id, token)
+                        if (!force && matches.ids.isNotEmpty()) {
+                            val subtitleKeys = preferences.carryItems(matches.ids,
+                                carryPreferenceIdentities(oldRows, incoming + parent, matches.ids))
+                            subtitles.cache.carryKeys(subtitleKeys)
+                        }
+                    }
+                    if (!force && matches.ids.isNotEmpty()) restoreTransaction.run { commit() }
+                    else db.withTransaction { commit() }
                 }
-                val incomingIds = entries.map { it.id }.toSet()
-                wp03UnresolvedEpisodeIds(pending, incomingIds, matches.ids.keys)
-                    .chunked(900).forEach { library.retainCarryRows(it, token) }
-                library.pruneEpisodes(series.id, token)
-                if (!force && matches.ids.isNotEmpty()) {
-                    val subtitleKeys = preferences.carryItems(matches.ids,
-                        carryPreferenceIdentities(oldRows, incoming + parent, matches.ids))
-                    subtitles.cache.carryKeys(subtitleKeys)
-                }
-            }
-            if (!force && matches.ids.isNotEmpty()) restoreTransaction.run { commit() }
-            else db.withTransaction { commit() }
+            } finally { directory.deleteRecursively() }
             return library.episodeSnapshot(series.id)
         }
         return if (force) fetch() else seriesExpansionCache.get(series.id,

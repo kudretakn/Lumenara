@@ -29,6 +29,7 @@ class MigrationTest {
         verifyUpgrade(13)
         verifyUpgrade(14)
         verifyUpgrade(15)
+        verifyUpgrade(16)
     }
 
     @Test
@@ -87,6 +88,13 @@ class MigrationTest {
                     db.execSQL("""INSERT INTO items (id,source,title,category,kind,tvgId,encryptedUrl,search,generation,logo,parent)
                         VALUES (?, 'local', ?, 'Film', 'MOVIE', '', 'opaque', 'film', 1, '', '')""", arrayOf(id, title))
                 }
+                if (from >= 15) {
+                    db.execSQL("""INSERT INTO items (id,source,title,category,kind,tvgId,encryptedUrl,search,generation,logo,parent)
+                        VALUES ('series','local','Show','Series','SERIES','','opaque','show',1,'','')""")
+                    db.execSQL("""INSERT INTO items (id,source,title,category,kind,tvgId,encryptedUrl,search,generation,logo,parent)
+                        VALUES ('episode','local','Show S2E3 - Arrival','Season 2','EPISODE','','opaque','episode',1,'','series')""")
+                    db.execSQL("INSERT INTO marks VALUES ('episode',1,1,400,1000,3)")
+                }
                 db.execSQL("INSERT INTO marks VALUES ('item',1,0,250,1000,1)")
                 db.execSQL("INSERT INTO marks VALUES ('sub',1,1,100,1000,1)")
                 if (from >= 8) {
@@ -112,12 +120,19 @@ class MigrationTest {
             val db = Room.databaseBuilder(context, LibraryDb::class.java, name)
                 .addMigrations(LibraryDb.MIGRATION_7_8, LibraryDb.MIGRATION_8_9, LibraryDb.MIGRATION_9_10,
                     LibraryDb.MIGRATION_10_11, LibraryDb.MIGRATION_11_12, LibraryDb.MIGRATION_12_13,
-                    LibraryDb.MIGRATION_13_14, LibraryDb.MIGRATION_14_15).build()
+                    LibraryDb.MIGRATION_13_14, LibraryDb.MIGRATION_14_15, LibraryDb.MIGRATION_15_16).build()
             try {
                 runBlocking {
                     db.openHelper.readableDatabase.query("SELECT COUNT(*) FROM wp19_search_documents").use {
                         assertTrue(it.moveToFirst())
                         assertEquals("Opening schema $from must not fill the index", 0, it.getInt(0))
+                    }
+                    assertTrue(db.library().wp22State("local") == null)
+                    assertTrue(db.library().wp22ProjectionState() == null)
+                    assertEquals(0, db.library().item("item")!!.episodeVersion)
+                    if (from >= 15) {
+                        assertEquals(0, db.library().item("episode")!!.episodeVersion)
+                        assertEquals(400L, db.library().mark("episode")?.position)
                     }
                     assertEquals(250L, db.library().mark("item")?.position)
                     val old = db.library().item("dub")!!
@@ -169,7 +184,7 @@ class MigrationTest {
                     val columns = buildList { while (cursor.moveToNext()) add(cursor.getString(2)) }
                     assertEquals(listOf("feed", "name", "channel"), columns)
                 }
-                assertEquals(15, db.openHelper.readableDatabase.version)
+                assertEquals(16, db.openHelper.readableDatabase.version)
                 runBlocking {
                     // Empty index after DDL: fallback must work before any background batch.
                     assertTrue(!db.library().wp19SearchReady().first())
@@ -179,6 +194,12 @@ class MigrationTest {
                     while (search.runBatch(1)) { }
                     assertTrue(db.library().wp19SearchReady().first())
                     assertEquals(expected, db.library().browse("local", "", "", "fi", "", 20).first().map { it.id })
+                    if (from >= 15) {
+                        // Commit one projection batch, then let the independent Room instance
+                        // below finish its durable cursor. Marks never belong to this cache.
+                        assertTrue(dev.lumenara.data.Wp22SeriesBackfill(db).runBatch(1))
+                        assertEquals("episode", db.library().wp22ProjectionState()?.cursor)
+                    }
                 }
                 db.openHelper.readableDatabase.query("PRAGMA foreign_key_check").use { cursor ->
                     assertTrue("Migration from $from left a foreign key violation", !cursor.moveToFirst())
@@ -224,10 +245,22 @@ class MigrationTest {
                     assertTrue(reopened.library().wp19SearchReady().first())
                     assertTrue(reopened.library().item("dub") != null)
                     assertTrue(reopened.library().item("sub") != null)
+                    if (from >= 15) {
+                        assertEquals("episode", reopened.library().wp22ProjectionState()?.cursor)
+                        val projection = dev.lumenara.data.Wp22SeriesBackfill(reopened)
+                        while (projection.runBatch(1)) { }
+                        val episode = reopened.library().episodeSnapshot("series").single()
+                        assertEquals(1, episode.episodeVersion)
+                        assertEquals(2, episode.episodeSeason)
+                        assertEquals(3, episode.episodeNumber)
+                        assertEquals("Arrival", episode.episodeTitle)
+                        assertEquals(dev.lumenara.data.Mark("episode", true, true, 400, 1000, 3),
+                            reopened.library().mark("episode"))
+                    }
                 }
                 reopened.openHelper.readableDatabase.query("SELECT COUNT(*) FROM items").use { cursor ->
                     assertTrue(cursor.moveToFirst())
-                    assertEquals(3, cursor.getInt(0))
+                    assertEquals(if (from >= 15) 5 else 3, cursor.getInt(0))
                 }
                 reopened.openHelper.readableDatabase.query("PRAGMA foreign_key_check").use { cursor ->
                     assertTrue("Reopened schema from $from left a foreign key violation", !cursor.moveToFirst())

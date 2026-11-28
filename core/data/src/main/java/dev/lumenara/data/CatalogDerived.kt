@@ -6,6 +6,7 @@ import dev.lumenara.catalog.isAdultCategory
 import dev.lumenara.catalog.searchable
 import dev.lumenara.catalog.categorySortKey
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.ensureActive
 
 @Entity(tableName = "catalog_derived_state", foreignKeys = [ForeignKey(entity = Source::class,
     parentColumns = ["id"], childColumns = ["source"], onDelete = ForeignKey.CASCADE)])
@@ -54,6 +55,23 @@ interface CatalogDerivedDao {
     @Query("DELETE FROM catalog_stats WHERE source=:source") suspend fun clearStats(source: String)
     @Query("SELECT * FROM category_counts WHERE source=:source") suspend fun categories(source: String): List<CategoryCount>
     @Query("SELECT * FROM catalog_stats WHERE source=:source") suspend fun stats(source: String): List<CatalogStat>
+    @Query("SELECT * FROM category_counts WHERE source=:source AND kind=:kind AND category=:category")
+    suspend fun category(source: String, kind: String, category: String): CategoryCount?
+    @Query("SELECT * FROM catalog_stats WHERE source=:source AND kind=:kind AND showAdult=:show")
+    suspend fun stat(source: String, kind: String, show: Boolean): CatalogStat?
+    @Query("DELETE FROM catalog_stats WHERE source=:source AND kind=:kind AND showAdult=:show")
+    suspend fun deleteStat(source: String, kind: String, show: Boolean)
+    @Query("DELETE FROM category_counts WHERE source=:source AND kind=:kind AND category=:category")
+    suspend fun deleteCategory(source: String, kind: String, category: String)
+    @Query("""SELECT COUNT(*) FROM items i WHERE i.source=:source AND i.kind=:kind AND i.category=:category
+        AND (i.versionKey='' OR NOT EXISTS(SELECT 1 FROM items v WHERE v.versionKey=i.versionKey
+            AND v.category=i.category AND v.versionRank<i.versionRank))""")
+    suspend fun categorySize(source: String, kind: String, category: String): Int
+    @Query("""SELECT COUNT(*) FROM items i WHERE i.source=:source AND i.kind=:kind AND
+        ((:show=1 AND (i.versionKey='' OR i.isRepresentative=1)) OR
+        (:show=0 AND i.isAdult=0 AND (i.versionKey='' OR NOT EXISTS(SELECT 1 FROM items v
+            WHERE v.versionKey=i.versionKey AND v.isAdult=0 AND v.versionRank<i.versionRank))))""")
+    suspend fun statSize(source: String, kind: String, show: Boolean): Int
     @Query("""SELECT kind,SUM(count) AS count FROM catalog_stats WHERE showAdult=:showAdult
         AND (:source='' OR source=:source) GROUP BY kind ORDER BY kind""")
     fun totals(source: String, showAdult: Boolean): Flow<List<HubTotal>>
@@ -92,6 +110,43 @@ class CatalogDerivedBackfill(private val db: LibraryDb) {
         dao.clearStats(source)
         dao.save(CatalogDerivedState(source))
     }
+    /** Recount only categories whose membership or representative may have changed. */
+    suspend fun refreshCategories(source: String, keys: Set<Pair<String, String>>) {
+        for ((kind, category) in keys) {
+            val count = dao.categorySize(source, kind, category)
+            val old = dao.category(source, kind, category)
+            if (count == 0) {
+                if (old != null) dao.deleteCategory(source, kind, category)
+            } else {
+                val next = CategoryCount(source, kind, category, count, isAdultCategory(category),
+                    categorySortKey(category), searchable(category))
+                if (old != next) dao.save(listOf(next))
+            }
+        }
+        for (kind in keys.map { it.first }.distinct()) for (show in listOf(false, true)) {
+            val next = CatalogStat(source, kind, show, dao.statSize(source, kind, show))
+            val old = dao.stat(source, kind, show)
+            if (next.count == 0) {
+                if (old != null) dao.deleteStat(source, kind, show)
+            } else if (old != next) dao.stats(listOf(next))
+        }
+    }
+
+    suspend fun refreshChannels(source: String) {
+        var title = ""
+        var id = ""
+        var number = 0
+        var safe = 0
+        while (true) {
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            val rows = dao.channels(source, title, id, 250)
+            if (rows.isEmpty()) break
+            dao.channels(rows.map { ChannelAssignment(it.id, ++number, if (it.isAdult) 0 else ++safe) })
+            title = rows.last().sortKey
+            id = rows.last().id
+        }
+    }
+
     suspend fun runBatch(source: String, limit: Int = 250): Boolean {
         require(limit in 1..500)
         val start = android.os.SystemClock.elapsedRealtime()
@@ -112,25 +167,25 @@ class CatalogDerivedBackfill(private val db: LibraryDb) {
                 }
                 "counts" -> {
                     val rows = dao.counts(source, state.cursor, limit)
-                    val categories = dao.categories(source).associateBy { it.kind to it.category }.toMutableMap()
-                    val stats = dao.stats(source).associateBy { it.kind to it.showAdult }.toMutableMap()
+                    val categories = mutableMapOf<Pair<String, String>, CategoryCount>()
+                    val stats = mutableMapOf<Pair<String, Boolean>, CatalogStat>()
                     rows.filter { it.kind in listOf("LIVE", "MOVIE", "SERIES") }.forEach { row ->
                         if (row.categoryWinner) {
                             val key = row.kind to row.category
-                            val old = categories[key] ?: CategoryCount(source, row.kind, row.category, 0,
-                                row.isAdult, searchKey = searchable(row.category))
+                            val old = categories[key] ?: dao.category(source, row.kind, row.category)
+                                ?: CategoryCount(source, row.kind, row.category, 0, row.isAdult,
+                                    sortOrder = categorySortKey(row.category), searchKey = searchable(row.category))
                             categories[key] = old.copy(count = old.count + 1)
                         }
                         for ((show, winner) in listOf(true to row.winner, false to row.safeWinner)) if (winner) {
                             val key = row.kind to show
-                            val old = stats[key] ?: CatalogStat(source, row.kind, show, 0)
+                            val old = stats[key] ?: dao.stat(source, row.kind, show) ?: CatalogStat(source, row.kind, show, 0)
                             stats[key] = old.copy(count = old.count + 1)
                         }
                     }
                     dao.save(categories.values.toList())
                     dao.stats(stats.values.toList())
                     next = if (rows.isEmpty()) {
-                        dao.save(categories.values.map { it.copy(sortOrder = categorySortKey(it.category)) })
                         state.copy(phase = "channels", cursor = "")
                     } else state.copy(cursor = rows.last().id)
                 }
