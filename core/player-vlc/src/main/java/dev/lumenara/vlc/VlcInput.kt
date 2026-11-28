@@ -20,7 +20,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
-import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resumeWithException
 
 class UnsupportedVlcInputException(message: String = "Bu akış türü için VLC geçişi desteklenmiyor.") : IOException(message)
@@ -36,7 +35,7 @@ private constructor(
     private val cancelled = AtomicBoolean(false)
 
     /** Unblock native reads without invalidating an fd VLC may still be opening. */
-    fun cancel() {
+    @Synchronized fun cancel() {
         if (!cancelled.compareAndSet(false, true)) return
         // Only cancel the call here. The reading thread owns response/source cleanup;
         // closing an OkHttp body concurrently with read() races inside Okio.
@@ -56,14 +55,11 @@ private constructor(
             try {
                 return coroutineScope {
                     suspendCancellableCoroutine<VlcInput> { continuation ->
-                        val opening = AtomicReference<Call?>()
-                        continuation.invokeOnCancellation { opening.get()?.cancel() }
+                        val calls = Wp09CallGate<Call> { it.cancel() }
+                        continuation.invokeOnCancellation { calls.cancel() }
                         launch(Dispatchers.IO) {
                             try {
-                                val input = open(context, url, allowHttp) { call ->
-                                    opening.set(call)
-                                    if (!continuation.isActive) call.cancel()
-                                }
+                                val input = open(context, url, allowHttp, calls)
                                 continuation.resume(input) { _, abandoned, _ -> abandoned.close() }
                             } catch (e: Exception) {
                                 continuation.resumeWithException(e)
@@ -79,11 +75,11 @@ private constructor(
         }
 
         fun open(context: Context, url: String, allowHttp: Boolean): VlcInput =
-            open(context, url, allowHttp) {}
+            open(context, url, allowHttp, Wp09CallGate { it: Call -> it.cancel() })
 
-        private fun open(context: Context, url: String, allowHttp: Boolean, opening: (Call) -> Unit): VlcInput {
+        private fun open(context: Context, url: String, allowHttp: Boolean, calls: Wp09CallGate<Call>): VlcInput {
             val ext = url.toHttpUrl().pathSegments.last().substringAfterLast('.').lowercase()
-            val demux =
+            var demux =
                 when (ext) {
                     "ts",
                     "mts" -> "ts"
@@ -92,72 +88,114 @@ private constructor(
                     "mp4",
                     "mov",
                     "m4v" -> "mp4"
-                    else -> throw UnsupportedVlcInputException()
+                    "m3u", "m3u8", "mpd" -> throw UnsupportedVlcInputException()
+                    else -> null
                 }
             val request = Request.Builder().url(url).header("Accept-Encoding", "identity").build()
             val client = Transport.client(allowHttp)
-            if (demux == "ts") {
-                val call = client.newCall(request)
-                opening(call)
-                val response = call.execute()
-                if (!response.isSuccessful) {
+            fun execute(request: Request): Response = calls.create { client.newCall(request) }.execute()
+            fun rejectManifest(response: Response) {
+                val type = response.header("Content-Type").orEmpty().substringBefore(';').trim().lowercase()
+                if (type in setOf("application/vnd.apple.mpegurl", "application/x-mpegurl",
+                        "audio/mpegurl", "audio/x-mpegurl", "application/dash+xml")) {
+                    calls.cancel()
                     response.close()
-                    throw IOException("Yayın erişimi reddedildi.")
+                    throw UnsupportedVlcInputException()
                 }
-                val pipe = ParcelFileDescriptor.createPipe()
-                val pump = VlcInputPump(
-                    source = response.body!!.byteStream(),
-                    response = response,
-                    output = ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]),
-                    cancelCall = { call.cancel() },
-                    onFailure = { e -> android.util.Log.w("LumenaraVlc",
-                        "TS input read failed: ${e.javaClass.simpleName}") },
-                )
-                thread(name = "lumenara-ts", isDaemon = true) { pump.run() }
-                return VlcInput(pipe[0], demux) { pump.cancel() }
+            }
+            var stream: Response? = null
+            if (demux == null || demux == "ts") {
+                val response = execute(request)
+                try {
+                    if (!response.isSuccessful) throw IOException("Yayın erişimi reddedildi.")
+                    rejectManifest(response)
+                    if (demux == null) {
+                        val source = checkNotNull(response.body).source()
+                        source.request(12)
+                        demux = Wp09VlcSniff.demux(source.buffer.clone().readByteArray(minOf(12L, source.buffer.size)))
+                        if (demux == null) {
+                            source.request(Wp09VlcSniff.MAX_BYTES.toLong())
+                            demux = Wp09VlcSniff.demux(source.buffer.clone()
+                                .readByteArray(minOf(Wp09VlcSniff.MAX_BYTES.toLong(), source.buffer.size)))
+                        }
+                        if (demux == null) throw UnsupportedVlcInputException()
+                    }
+                    if (demux == "ts") stream = response
+                    else {
+                        // A sniff must not drain an unbounded file response on close.
+                        // Cancel just this probe, leaving the input gate available for Range.
+                        calls.cancelCurrent()
+                        response.close()
+                    }
+                } catch (e: Exception) {
+                    calls.cancel()
+                    response.close()
+                    throw e
+                }
+            }
+            val selectedDemux = checkNotNull(demux)
+            if (selectedDemux == "ts") {
+                val response = checkNotNull(stream)
+                val pipe = try { ParcelFileDescriptor.createPipe() } catch (e: Exception) {
+                    calls.cancel()
+                    response.close()
+                    throw e
+                }
+                try {
+                    val pump = VlcInputPump(
+                        source = response.body!!.byteStream(),
+                        response = response,
+                        output = ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]),
+                        cancelCall = { calls.cancel() },
+                        onFailure = { e -> android.util.Log.w("LumenaraVlc",
+                            "TS input read failed: ${e.javaClass.simpleName}") },
+                    )
+                    thread(name = "lumenara-ts", isDaemon = true) { pump.run() }
+                    return VlcInput(pipe[0], selectedDemux) { pump.cancel() }
+                } catch (e: Exception) {
+                    calls.cancel()
+                    response.close()
+                    pipe.forEach { it.close() }
+                    throw e
+                }
             }
 
-            val lengthCall = client.newCall(request.newBuilder().header("Range", "bytes=0-0").build())
-            opening(lengthCall)
-            val length = lengthCall.execute()
-                    .use {
-                        if (it.code != 206)
-                            throw UnsupportedVlcInputException("Sağlayıcı dosya konumlandırmayı desteklemiyor.")
-                        it.header("Content-Range")
-                            ?.substringAfterLast('/')
-                            ?.toLongOrNull()
-                            ?.takeIf { size -> size > 0 }
-                            ?: throw UnsupportedVlcInputException("Dosya uzunluğu alınamadı.")
-                    }
+            val length = execute(request.newBuilder().header("Range", "bytes=0-0").build()).use {
+                rejectManifest(it)
+                val range = Wp09ContentRange.parse(it.header("Content-Range"))
+                if (it.code != 206 || range == null || range.first != 0L || range.last != 0L)
+                    throw UnsupportedVlcInputException("Sağlayıcı dosya konumlandırmayı desteklemiyor.")
+                range.total
+            }
             val io = HandlerThread("lumenara-vlc-range").apply { start() }
             val callback =
                 object : ProxyFileDescriptorCallback() {
                     var next = -1L
-                    @Volatile var call: Call? = null
                     var response: Response? = null
 
                     override fun onGetSize() = length
 
                     override fun onRead(offset: Long, size: Int, data: ByteArray): Int {
-                        if (offset >= length) return 0
                         try {
+                            calls.checkActive()
+                            if (offset >= length) return 0
                             if (offset != next || response == null) {
+                                calls.cancelCurrent()
                                 response?.close()
+                                response = null
                                 val newCall =
-                                    client.newCall(
+                                    calls.create { client.newCall(
                                         request
                                             .newBuilder()
                                             .header("Range", "bytes=$offset-")
                                             .build()
-                                    )
-                                call = newCall
+                                    ) }
                                 response =
                                     newCall.execute().also {
-                                        if (
-                                            it.code != 206 ||
-                                                it.header("Content-Range")
-                                                    ?.startsWith("bytes $offset-") != true
-                                        ) {
+                                        val range = Wp09ContentRange.parse(it.header("Content-Range"))
+                                        if (it.code != 206 || range == null || range.first != offset ||
+                                            range.total != length) {
+                                            calls.cancelCurrent()
                                             it.close()
                                             throw IOException()
                                         }
@@ -177,8 +215,8 @@ private constructor(
                     }
 
                     override fun onRelease() {
-                        response?.close()
-                        io.quitSafely()
+                        calls.cancel()
+                        try { response?.close() } finally { io.quitSafely() }
                     }
                 }
             try {
@@ -190,8 +228,9 @@ private constructor(
                             callback,
                             Handler(io.looper),
                         )
-                return VlcInput(fd, demux) { callback.call?.cancel() }
+                return VlcInput(fd, selectedDemux) { calls.cancel() }
             } catch (e: Exception) {
+                calls.cancel()
                 io.quitSafely()
                 throw e
             }
