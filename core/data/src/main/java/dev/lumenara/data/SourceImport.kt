@@ -78,7 +78,7 @@ internal class SourceImports(private val lock: Mutex) {
                     }
                 } catch (error: Exception) {
                     currentCoroutineContext().ensureActive()
-                    throw error
+                    throw wp16Failure(error, Wp16Stage.IMPORT)
                 } finally { monitor.cancel() }
             }
         } ?: throw SourceFailure("Kaynak işlemi 15 dakika içinde tamamlanamadı. Yeniden deneyin veya başka bir sunucu adresi kullanın.")

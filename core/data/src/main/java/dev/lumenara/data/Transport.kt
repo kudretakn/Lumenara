@@ -66,9 +66,9 @@ object Transport {
     }
 
     internal fun <T> read(url: String, allowHttp: Boolean, calls: ImportCalls?,
-        parse: (java.io.InputStream, String) -> T): T {
+        parse: (java.io.InputStream, String) -> T): T = wp16Operation(Wp16Stage.TRANSPORT) {
         val request = Request.Builder().url(url).get().build()
-        return execute(request, allowHttp, calls) { response ->
+        execute(request, allowHttp, calls) { response ->
             validate(response, allowHttp)
             parse(
                 bounded(checkNotNull(response.body).byteStream()),
@@ -94,10 +94,16 @@ object Transport {
                 if (segments.last().contains('.')) resolved.removePathSegment(segments.lastIndex)
                 resolved.build().toString().trimEnd('/')
             }
+        } catch (error: kotlinx.coroutines.CancellationException) {
+            throw error
         } catch (error: SourceFailure) {
-            throw SourceFailure("Sunucu adresi çözümlenemedi. ${error.message}")
-        } catch (_: Exception) {
-            throw SourceFailure("Sunucu adresi çözümlenemedi. Adresi ve bağlantıyı kontrol edin; HTTP adresi için HTTP uyumluluğunu açın.")
+            throw SourceFailure("Sunucu adresi çözümlenemedi. ${error.message}").also {
+                it.diagnostic = wp16Diagnostic(error, Wp16Stage.RESOLVE)
+            }
+        } catch (error: Exception) {
+            throw SourceFailure("Sunucu adresi çözümlenemedi. Adresi ve bağlantıyı kontrol edin; HTTP adresi için HTTP uyumluluğunu açın.").also {
+                it.diagnostic = wp16Diagnostic(error, Wp16Stage.RESOLVE)
+            }
         }
     }
 
@@ -108,8 +114,8 @@ object Transport {
         calls?.track(call)
         try {
             return call.execute().use(read)
-        } catch (_: java.io.InterruptedIOException) {
-            throw SourceFailure("Sunucu isteği zaman aşımına uğradı. Yeniden deneyin veya başka bir sunucu adresi kullanın.")
+        } catch (error: Exception) {
+            throw wp16Failure(error, Wp16Stage.TRANSPORT)
         } finally { calls?.release(call) }
     }
 
@@ -117,14 +123,15 @@ object Transport {
     internal fun download(url: String, allowHttp: Boolean, cache: File, previous: FetchState = FetchState(),
         limit: Long = 64L * 1024 * 1024, checkActive: () -> Unit = {}, calls: ImportCalls? = null,
         progress: (Long) -> Unit = {}, stallWindowMillis: Long = 60_000L,
-        stallMinimumBytes: Long = 64L * 1024): Download {
+        stallMinimumBytes: Long = 64L * 1024, spool: EncryptedSpool = EncryptedSpool.ephemeral()): Download =
+        wp16Operation(Wp16Stage.TRANSPORT) {
         require(stallWindowMillis > 0 && stallMinimumBytes > 0)
         checkActive()
         val request = Request.Builder().url(url).apply {
             if (previous.etag.isNotEmpty()) header("If-None-Match", previous.etag)
             if (previous.modified.isNotEmpty()) header("If-Modified-Since", previous.modified)
         }.build()
-        return execute(request, allowHttp, calls, timeoutMillis = null) { response ->
+        execute(request, allowHttp, calls, timeoutMillis = null) { response ->
             checkActive()
             if (response.code == 304) {
                 if (previous.digest.isEmpty() || (previous.etag.isEmpty() && previous.modified.isEmpty()))
@@ -135,7 +142,7 @@ object Transport {
                     response.close()
                     return@execute download(url, allowHttp, cache, limit = limit, checkActive = checkActive,
                         calls = calls, progress = progress, stallWindowMillis = stallWindowMillis,
-                        stallMinimumBytes = stallMinimumBytes)
+                        stallMinimumBytes = stallMinimumBytes, spool = spool)
                 }
                 return@execute Download(null, response.request.url.toString(), previous.copy(
                     etag = response.header("ETag") ?: previous.etag,
@@ -143,11 +150,11 @@ object Transport {
                 ), true)
             }
             validate(response, allowHttp)
-            val file = File.createTempFile("refresh-", ".body", cache)
+            val file = spool.create(cache)
             try {
                 val digest = MessageDigest.getInstance("SHA-256")
                 DigestInputStream(bounded(checkNotNull(response.body).byteStream(), limit), digest).use { input ->
-                    file.outputStream().buffered().use { output ->
+                    file.write { output ->
                         val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                         var total = 0L
                         var reported = 0L
@@ -175,7 +182,7 @@ object Transport {
                 Download(file, response.request.url.toString(), state,
                     state.digest == previous.digest && previous.finalUrl == response.request.url.toString())
             } catch (error: Throwable) {
-                file.delete()
+                file.close()
                 throw error
             }
         }
@@ -239,16 +246,27 @@ internal data class FetchState(val etag: String = "", val modified: String = "",
     }
 }
 
-internal class Download(private val file: File?, val finalUrl: String, state: FetchState, val unchanged: Boolean) : Closeable {
+internal class Download(private val file: EncryptedSpool.Blob?, val finalUrl: String, state: FetchState, val unchanged: Boolean) : Closeable {
     val state = state.copy(finalUrl = finalUrl)
     suspend fun importIfChanged(applyImport: suspend () -> Unit): Boolean {
         if (unchanged) return false
         applyImport()
         return true
     }
-    fun <T> read(parse: (java.io.InputStream, String) -> T): T =
-        checkNotNull(file).inputStream().buffered().use { parse(it, finalUrl) }
-    override fun close() { file?.delete() }
+    fun <T> read(parse: (java.io.InputStream, String) -> T): T = wp16Operation(Wp16Stage.CATALOG_PARSE) {
+        checkNotNull(file).input().use { input ->
+            // Parsers may close early or stop at the JSON/XML end marker. Authenticate all
+            // remaining records and the EOF tag before publishing any parsed catalogue.
+            val borrowed = object : java.io.FilterInputStream(input) { override fun close() = Unit }
+            val result = parse(borrowed, finalUrl)
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (input.read(buffer) != -1) { /* bounded drain; never accumulate plaintext */ }
+            result
+        }
+    }
+    override fun close() { file?.close() }
 }
 
-class SourceFailure(message: String) : Exception(message)
+class SourceFailure(message: String) : Exception(message) {
+    internal var diagnostic: String = "DATA_FAILED|IMPORT|SourceFailure"
+}

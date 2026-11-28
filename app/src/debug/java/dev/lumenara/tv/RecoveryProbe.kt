@@ -16,6 +16,7 @@ import dev.lumenara.data.Member
 import dev.lumenara.data.Preferences
 import dev.lumenara.data.Repository
 import dev.lumenara.data.SourceSpec
+import dev.lumenara.data.StartupCoordinator
 import java.io.File
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
@@ -30,8 +31,9 @@ import kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED
 
 /**
  * WP11 emulator-only fault injector. No Activity, HTTP listener, exported component or log payload.
- * Reflection decorates the CURRENT production storage calls, without adding production test hooks
- * or copying RestoreTransaction. A renamed hook fails the test instead of silently losing coverage.
+ * Reflection decorates the CURRENT production storage calls, without copying RestoreTransaction.
+ * The database is supplied through Repository's internal startup seam before services capture it.
+ * A renamed hook fails the test instead of silently losing coverage.
  * The parent instrumentation process never opens these stores (DataStore is single-process).
  */
 class RecoveryProbe : Service() {
@@ -158,13 +160,8 @@ class RecoveryProbe : Service() {
         }
     }
 
-    private fun open(): Repository {
+    private suspend fun open(): Repository {
         repository?.let { return it }
-        val repo = Repository.get(fixture)
-        check(field(repo, "context") === fixture) { "WP11 fixture isolation" }
-        repository = repo
-        preferences = field(repo, "preferences") as Preferences
-        val originalDb = field(repo, "db")
         // Room is an implementation dependency of core/data. Keep reflection here rather than
         // changing shared Gradle ownership or exposing internal storage APIs just for the probe.
         val room = Class.forName("androidx.room.Room")
@@ -193,12 +190,19 @@ class RecoveryProbe : Service() {
         }
         builder.javaClass.getMethod("setQueryCallback", callbackType, Executor::class.java)
             .invoke(builder, callback, Executor { it.run() })
-        val replacement = builder.javaClass.getMethod("build").invoke(builder)
-        replace(repo, "db", replacement)
-        replace(repo, "library", replacement.javaClass.getMethod("library").invoke(replacement))
-        replace(repo, "guide", replacement.javaClass.getMethod("guide").invoke(replacement))
-        originalDb.javaClass.getMethod("close").invoke(originalDb)
-        database = replacement
+        val observedDb = builder.javaClass.getMethod("build").invoke(builder)
+        // Closing/replacing an already-published Room instance cancels its query scope. The
+        // extracted services retain that instance, so install the observer before normal startup
+        // recovery/publication instead. Every service and boundary now uses the same database.
+        val startup = Repository.Companion::class.java
+            .getMethod("startupForTesting", Context::class.java, dbType)
+            .invoke(Repository.Companion, fixture, observedDb) as StartupCoordinator
+        val repo = startup.awaitReady()
+        check(field(repo, "context") === fixture) { "WP11 fixture isolation" }
+        check(field(repo, "db") === observedDb) { "WP11 database isolation" }
+        repository = repo
+        preferences = field(repo, "preferences") as Preferences
+        database = observedDb
 
         val coordinator = field(repo, "restoreTransaction")
         val storage = field(coordinator, "storage")

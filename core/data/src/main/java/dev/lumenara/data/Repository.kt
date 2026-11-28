@@ -1,14 +1,10 @@
 package dev.lumenara.data
 
 import android.content.Context
-import android.net.Uri
-import androidx.room.InvalidationTracker
+import androidx.annotation.VisibleForTesting
 import androidx.room.withTransaction
 import androidx.work.*
 import dev.lumenara.catalog.*
-import java.net.URI
-import java.security.GeneralSecurityException
-import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.Dispatchers
@@ -24,7 +20,6 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.cancel
 import org.json.JSONObject
-import org.json.JSONException
 
 data class SourceSpec(
     val address: String,
@@ -56,246 +51,115 @@ data class SourceSpec(
 data class LiveWindow(val rows: List<Item>, val revision: Long, val hidden: List<String>)
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-class Repository private constructor(private val context: Context) {
-    private val db = LibraryDb.build(context)
+class Repository private constructor(private val context: Context, private val db: LibraryDb) {
     val library = db.library()
     val guide = db.guide()
     private val vault = Vault(context)
     private val metadata = Metadata(context, vault)
     private val preferences = Preferences(context)
-    private val restoreTransaction = RestoreTransaction(object : RestoreStorage {
-        override suspend fun pending() = db.restoreJournal().pending()
-        override suspend fun snapshot(): String = vault.encrypt(JSONObject()
-            .put("settings", preferences.snapshotSettings())
-            .put("tmdb", metadata.encryptedToken() ?: JSONObject.NULL).toString())
-        override suspend fun savePending(snapshot: String) {
-            db.restoreJournal().save(RestorePending(snapshot = snapshot))
-            // Android WAL normally uses synchronous=NORMAL. A FULL checkpoint fsyncs the undo
-            // record before DataStore can publish anything, even if power is lost before Room
-            // commits. A busy checkpoint aborts before restore writes; the journal remains safe.
-            db.openHelper.writableDatabase.query("PRAGMA wal_checkpoint(FULL)").use {
-                check(it.moveToFirst() && it.getInt(0) == 0) { "Geri yükleme günlüğü kaydedilemedi." }
-            }
-        }
-        override suspend fun restoreSnapshot(snapshot: String) {
-            val old = JSONObject(vault.decrypt(snapshot))
-            preferences.restoreSnapshot(old.getString("settings"))
-            metadata.restoreEncryptedToken(if (old.isNull("tmdb")) null else old.getString("tmdb"))
-        }
-        override suspend fun clearPending() = db.restoreJournal().clear()
-        override suspend fun <T> transaction(block: suspend () -> T): T = db.withTransaction { block() }
-    })
+    private val restoreTransaction = wp16RestoreTransaction(db, vault, preferences, metadata)
+    private val spool = EncryptedSpool(vault)
     // Called on IO by the process coordinator, before publishing this instance.
     private suspend fun recoverBeforePublication() {
         try {
+            EncryptedSpool.cleanup(context.cacheDir)
             StartupPerf.measure("startup_room_open") { db.openHelper.writableDatabase }
             StartupPerf.measure("startup_room_recovery") { restoreTransaction.recover() }
         } catch (error: Throwable) {
             catalogScope.cancel()
             liveScope.cancel()
             db.close()
+            if (error is Exception) throw wp16Failure(error, Wp16Stage.BACKUP)
             throw error
         }
     }
     private val catalogScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val catalog = CatalogStreams(library.visibleAdultCategoryNames(),
-        { kind, source, hidden -> library.categoryCounts(kind, source, hidden) },
-        { source, hidden -> library.sourceCategoryCounts(source, hidden) },
-        preferences.showAdult, catalogScope, StartupPerf::duration, preclassified = true)
-    val hidden: Flow<List<String>> = catalog.hidden
-    private val seriesExpansionCache = SeriesExpansionCache(
-        readStamp = { preferences.text("series_expanded_$it").first().toLongOrNull() ?: 0L },
-        writeStamp = { id, stamp -> preferences.set("series_expanded_$id", stamp.toString()) },
-    )
-
-    // Upgraded rows use their original category until stored classification is available.
-    private fun Flow<List<Item>>.storedVisibility(): Flow<List<Item>> =
-        combine(preferences.showAdult) { rows, show -> rows.visibleStoredRows(show) }
+    private val liveScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    // Retain the existing bounded order-cache ownership and trim contract.
+    private val liveOrders = mutableMapOf<String, StateFlow<List<LiveChannelId>>>()
+    private val reader = CatalogReader(db, preferences, catalogScope, liveScope, liveOrders)
+    val hidden: Flow<List<String>> = reader.hidden
 
     fun browse(source: String, kind: String, category: String, query: String, shelf: String, limit: Int,
-               year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0) =
-        hidden.flatMapLatest { library.browse(source, kind, category, query, shelf, limit, year, genre, language, minRating, it) }.storedVisibility()
+               year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0) = reader.browse(source, kind, category, query, shelf, limit, year, genre, language, minRating)
 
     fun browsePage(source: String, kind: String, category: String, query: String, shelf: String,
-        limit: Int, offset: Int, year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0) =
-        hidden.flatMapLatest { library.browsePage(source, kind, category, query, shelf, limit, offset,
-            year, genre, language, minRating, it) }.storedVisibility()
+        limit: Int, offset: Int, year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0) = reader.browsePage(source, kind, category, query, shelf, limit, offset, year, genre, language, minRating)
 
     fun browseCount(source: String, kind: String, category: String, query: String, shelf: String,
-        year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0) =
-        hidden.flatMapLatest { library.browseTotal(source, kind, category, query, shelf,
-            year, genre, language, minRating, it) }
+        year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0) = reader.browseCount(source, kind, category, query, shelf, year, genre, language, minRating)
 
     suspend fun browseIndex(source: String, kind: String, category: String, query: String, shelf: String,
-        id: String, year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0) =
-        library.browseIndex(source, kind, category, query, shelf, id, year, genre, language, minRating, hidden.first())
+        id: String, year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0) = reader.browseIndex(source, kind, category, query, shelf, id, year, genre, language, minRating)
 
     fun browseKinds(source: String, kind: String, category: String, query: String, shelf: String,
-        year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0) =
-        hidden.flatMapLatest { library.browseKinds(source, kind, category, query, shelf,
-            year, genre, language, minRating, it) }
+        year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0) = reader.browseKinds(source, kind, category, query, shelf, year, genre, language, minRating)
 
-    fun shelfCount(source: String, kind: String, shelf: String) =
-        hidden.flatMapLatest { library.shelfCount(source, kind, shelf, it) }
+    fun shelfCount(source: String, kind: String, shelf: String) = reader.shelfCount(source, kind, shelf)
 
-    fun categoryCounts(kind: String, source: String) = catalog.categoryCounts(kind, source)
-    fun categories(kind: String, source: String) = categoryCounts(kind, source).map { groups -> groups.map { it.category } }
-    fun liveCategoryCounts(source: String) =
-        hidden.flatMapLatest { hidden -> library.liveCategoryCounts(source, hidden) }
-            .distinctUntilChanged()
-    /** A bounded visible page, with no whole-catalog GuideResolver or future schedules. */
-    fun liveNow(rows: List<Item>, now: Long): Flow<Map<String, Slot>> = flow {
-        if (rows.isEmpty()) emit(emptyMap()) else emitAll(
-            library.liveNow(rows, now).map { current ->
-                current.groupBy { it.itemId }.mapValues { (_, hits) -> hits.first().slot }
-            })
-    }.flowOn(Dispatchers.Default)
-    fun liveByIds(source: String, ids: List<String>) =
-        hidden.flatMapLatest { library.liveByIds(source, ids, it) }.storedVisibility()
-    private val liveScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val liveOrders = mutableMapOf<String, StateFlow<List<LiveChannelId>>>()
-    // Channel badges use demand-driven snapshots. Keep explicit order subscribers warm
-    // briefly across navigation, then release the observed list and Room subscription.
-    fun liveChannelOrder(source: String): StateFlow<List<LiveChannelId>> = synchronized(liveOrders) {
-        liveOrders.getOrPut(source) {
-            hidden.flatMapLatest { library.liveChannelOrder(source, it) }
-                .distinctUntilChanged().stateIn(liveScope, SharingStarted.WhileSubscribed(
-                    stopTimeoutMillis = 30_000, replayExpirationMillis = 0), emptyList())
-        }
-    }
-    suspend fun liveChannel(number: Int, source: String): Item? {
-        if (number < 1) return null
-        val show = preferences.showAdult.first()
-        val ready = library.catalogReady(source).first()
-        val excluded = if (show || ready) emptyList() else library.visibleAdultCategoryNames().first()
-        suspend fun at(id: String, value: Int) = if (!ready) library.providerChannel(id, value - 1, excluded)
-            else if (show) db.derived().channel(id, value) else db.derived().safeChannel(id, value)
-        val selected = source.ifEmpty {
-            library.snapshot().firstOrNull { at(it.id, 1) != null }?.id ?: return null
-        }
-        return at(selected, number)
-    }
+    fun categoryCounts(kind: String, source: String) = reader.categoryCounts(kind, source)
 
-    fun livePage(source: String, category: String, query: String, shelf: String, limit: Int, offset: Int) =
-        hidden.flatMapLatest { library.livePage(source, category, query, shelf, limit, offset, it) }.storedVisibility()
+    fun categories(kind: String, source: String) = reader.categories(kind, source)
+
+    fun liveCategoryCounts(source: String) = reader.liveCategoryCounts(source)
+
+    fun liveNow(rows: List<Item>, now: Long): Flow<Map<String, Slot>> = reader.liveNow(rows, now)
+
+    fun liveByIds(source: String, ids: List<String>) = reader.liveByIds(source, ids)
+
+    fun liveChannelOrder(source: String): StateFlow<List<LiveChannelId>> = reader.liveChannelOrder(source)
+
+    suspend fun liveChannel(number: Int, source: String): Item? = reader.liveChannel(number, source)
+
+    fun livePage(source: String, category: String, query: String, shelf: String, limit: Int, offset: Int) = reader.livePage(source, category, query, shelf, limit, offset)
+
     fun livePageAfter(source: String, category: String, query: String, shelf: String, limit: Int,
-        after: LiveCursor?, backwards: Boolean = false) =
-        hidden.flatMapLatest { library.livePageAfter(source, category, query, shelf, limit, after, backwards, it) }.storedVisibility()
+        after: LiveCursor?, backwards: Boolean = false) = reader.livePageAfter(source, category, query, shelf, limit, after, backwards)
 
     fun liveNeighbors(source: String, category: String, query: String, shelf: String, limit: Int,
-        id: String, backwards: Boolean = false) =
-        hidden.flatMapLatest { library.liveNeighbors(source, category, query, shelf, limit, id, backwards, it) }.storedVisibility()
+        id: String, backwards: Boolean = false) = reader.liveNeighbors(source, category, query, shelf, limit, id, backwards)
 
-    /** Keep absolute lazy-list indices correct if an import/mark/visibility change moves a boundary. */
     fun liveWindow(source: String, category: String, query: String, shelf: String, limit: Int,
-        offset: Int, after: LiveWindowCursor?): Flow<LiveWindow> = hidden.flatMapLatest { visible ->
-        flow {
-            val cursor = after?.takeIf { it.revision == liveWindowEpoch(shelf) && it.hidden == visible }?.cursor
-            var initial = true
-            val rows = if (cursor == null) library.livePage(source, category, query, shelf, limit, offset, visible)
-                else library.livePageAfter(source, category, query, shelf, limit, cursor, hidden = visible)
-            rows.collect { page ->
-                val current = if (initial || cursor == null) page
-                    else library.livePage(source, category, query, shelf, limit, offset, visible).first()
-                emit(LiveWindow(current.visibleStoredRows(preferences.showAdult.first()), liveWindowEpoch(shelf), visible))
-                initial = false
-            }
-        }
-    }
+        offset: Int, after: LiveWindowCursor?): Flow<LiveWindow> = reader.liveWindow(source, category, query, shelf, limit, offset, after)
 
-    private val liveOrderEpoch = java.util.concurrent.atomic.AtomicLong()
-    private val liveFavoriteEpoch = java.util.concurrent.atomic.AtomicLong()
-    private fun liveWindowEpoch(shelf: String): Long =
-        if (shelf == "favorite") liveFavoriteEpoch.get() else liveOrderEpoch.get()
-    private val liveInvalidation = object : InvalidationTracker.Observer("items", "marks", "catalog_derived_state") {
-        override fun onInvalidated(tables: Set<String>) {
-            if ("items" in tables || "catalog_derived_state" in tables) liveOrderEpoch.incrementAndGet()
-            liveFavoriteEpoch.incrementAndGet()
-        }
-    }
-    init { db.invalidationTracker.addObserver(liveInvalidation) }
+    fun liveChannelNumbers(source: String, ids: List<String>): Flow<Map<String, Int>> = reader.liveChannelNumbers(source, ids)
 
-    /** Only requested IDs; pending upgrades use the same provider order as live pages. */
-    fun liveChannelNumbers(source: String, ids: List<String>): Flow<Map<String, Int>> =
-        combine(preferences.showAdult, library.catalogReady(source).distinctUntilChanged()) { show, ready -> show to ready }
-            .flatMapLatest { (show, ready) -> flow {
-                val excluded = if (show || ready) emptyList() else library.visibleAdultCategoryNames().first()
-                val rows = ids.distinct().chunked(250).flatMap {
-                    if (ready) db.derived().numbered(source, it) else library.providerChannelNumbers(source, it, excluded)
-                }
-                emit(rows.mapNotNull { row ->
-                    val number = if (show) row.channelNumber else row.safeChannelNumber
-                    number.takeIf { it > 0 }?.let { row.id to it }
-                }.toMap())
-            } }.flowOn(Dispatchers.IO)
+    fun hubTotals(source: String): Flow<List<HubTotal>> = reader.hubTotals(source)
 
-    fun hubTotals(source: String): Flow<List<HubTotal>> = preferences.showAdult.flatMapLatest { show ->
-        library.withCatalog(source) { ready ->
-            if (ready) db.derived().totals(source, show)
-            else if (show) library.fallbackHubTotals(source, emptyList())
-            else library.visibleAdultCategoryNames().flatMapLatest { library.fallbackHubTotals(source, it) }
-        }
-    }.distinctUntilChanged()
+    fun liveCount(source: String, category: String = "", query: String = "", shelf: String = "") = reader.liveCount(source, category, query, shelf)
 
-    fun liveCount(source: String, category: String = "", query: String = "", shelf: String = "") =
-        hidden.flatMapLatest { hidden -> library.liveCount(source, category, query, shelf, hidden) }
-    suspend fun liveIndex(source: String, id: String, category: String = "", query: String = "", shelf: String = "") =
-        library.liveIndex(source, id, category, query, shelf, hidden.first())
-    fun episodes(id: String) = hidden.flatMapLatest { library.episodes(id, it) }
-    suspend fun episodeSnapshot(id: String) = library.episodeSnapshot(id, hidden.first())
-    // Visibility for history needs only marked cards, their parents and those parents' episodes.
-    // Do not make the Hub wait for names/counts over the complete provider catalog.
-    private val historyHidden = combine(preferences.showAdult, library.continueWatchingCategories()
-        .traceFirstResult("startup_hub_history_visibility_ready")) { show, names ->
-        if (show) emptyList() else names.filter(::isAdultCategory)
-    }.distinctUntilChanged()
-    fun continueWatching(source: String) =
-        historyHidden.flatMapLatest { library.continueWatching(source, it)
-            .traceFirstResult("startup_hub_resume_query_ready") }.flowOn(Dispatchers.Default)
-    fun recentLive(source: String) = preferences.recentLive.flatMapLatest { saved ->
-        val ids = saved.distinct().take(20)
-        if (ids.isEmpty()) return@flatMapLatest flowOf(emptyList<Item>())
-        // Twenty primary-key probes need no full-catalog category-name query. Apply the same
-        // visibility rule to these bounded rows, preserving DataStore's recency order.
-        combine(library.liveByIds(source, ids).traceFirstResult("startup_hub_recent_query_ready"),
-            preferences.showAdult) { rows, showAdult ->
-            val byId = rows.associateBy { it.id }
-            visibleRecentIds(ids, rows.associate { it.id to it.category }, showAdult).mapNotNull { byId[it] }
-        }
-    }.flowOn(Dispatchers.Default)
-    private val guideStore by lazy { GuideStore(guide, liveScope, hidden, traceWork = StartupPerf::duration) }
-    fun cardProgrammes(source: String, itemId: String): Flow<List<Slot>> = guideStore.cardProgrammes(source, itemId)
-    fun nowAiring(source: String, now: Long, query: String = ""): Flow<List<AiringProgram>> = nowAiring(source, flowOf(now), query)
-    fun nowAiring(source: String, now: Flow<Long>, query: String = ""): Flow<List<AiringProgram>> = guideStore.nowAiring(source, now, query)
-    fun searchPrograms(source: String, query: String, from: Long, now: Long): Flow<List<ProgramHit>> =
-        searchPrograms(source, query, flowOf(from to now))
-    fun searchPrograms(source: String, query: String, times: Flow<Pair<Long, Long>>): Flow<List<ProgramHit>> =
-        guideStore.searchPrograms(source, query, times)
+    suspend fun liveIndex(source: String, id: String, category: String = "", query: String = "", shelf: String = "") = reader.liveIndex(source, id, category, query, shelf)
+
+    fun episodes(id: String) = reader.episodes(id)
+
+    suspend fun episodeSnapshot(id: String) = reader.episodeSnapshot(id)
+
+    fun continueWatching(source: String) = reader.continueWatching(source)
+
+    fun recentLive(source: String) = reader.recentLive(source)
+
+    fun cardProgrammes(source: String, itemId: String): Flow<List<Slot>> = reader.cardProgrammes(source, itemId)
+
+    fun nowAiring(source: String, now: Long, query: String = ""): Flow<List<AiringProgram>> = reader.nowAiring(source, now, query)
+
+    fun nowAiring(source: String, now: Flow<Long>, query: String = ""): Flow<List<AiringProgram>> = reader.nowAiring(source, now, query)
+
+    fun searchPrograms(source: String, query: String, from: Long, now: Long): Flow<List<ProgramHit>> = reader.searchPrograms(source, query, from, now)
+
+    fun searchPrograms(source: String, query: String, times: Flow<Pair<Long, Long>>): Flow<List<ProgramHit>> = reader.searchPrograms(source, query, times)
 
     val subtitles = SubtitleService(preferences, SubtitleCache(java.io.File(context.cacheDir, "subtitles")))
 
-    suspend fun production(item: Item): Item = if (item.kind == "EPISODE") library.item(item.parent) ?: item
-        else library.item(item.id) ?: item
+    suspend fun production(item: Item): Item = reader.production(item)
 
     fun trim() {
         synchronized(liveOrders) { liveOrders.clear() }
 
     }
 
-    suspend fun versions(item: Item): List<Item> {
-        val all = allVersions(item)
-        return if (preferences.showAdult.first()) all else all.filterNot { isAdultCategory(it.category) }
-    }
+    suspend fun versions(item: Item): List<Item> = reader.versions(item)
 
-    private suspend fun allVersions(item: Item): List<Item> = withContext(Dispatchers.IO) {
-        val base = production(item)
-        if (base.kind !in listOf("MOVIE", "SERIES")) return@withContext listOf(base)
-        if (db.versionBackfill().pending(base.id)) return@withContext listOf(base)
-        if (base.versionKey.isNotEmpty()) return@withContext library.versionRows(base.versionKey)
-        // Legacy rows from the 7 to 8 migration have no grouping key. Avoid scanning the full
-        // source on first detail/playback; the next import assigns keys in one bounded projection.
-        listOf(base)
-    }
+    private suspend fun allVersions(item: Item): List<Item> = reader.allVersions(item)
 
     suspend fun preferenceKey(item: Item): String {
         val base = production(item)
@@ -423,9 +287,10 @@ class Repository private constructor(private val context: Context) {
                     }.run()
                 } catch (error: kotlinx.coroutines.CancellationException) {
                     throw error
-                } catch (_: Exception) {
+                } catch (error: Exception) {
                     // The committed cursor survives. A later foreground launch retries it.
                     StartupPerf.duration("version_backfill_failed", 0)
+                    android.util.Log.w("LumenaraRepository", wp16Diagnostic(error, Wp16Stage.BACKFILL))
                 }
             }
         }
@@ -443,40 +308,47 @@ class Repository private constructor(private val context: Context) {
     // overtake the first composition. Downloads do not hold up this snapshot.
     suspend fun sourceSnapshot(): List<Source> = db.withTransaction { library.snapshot() }
 
-    private val backups by lazy {
-        BackupStore(db, vault, preferences, metadata, restoreTransaction,
-            { source, spec, items -> prepareRestoreCatalog(source, spec, items) }) { source ->
-            for (feed in guide.feeds(source.id)) syncGuide(source, feed)
+    private val userState: UserStateCarry by lazy { UserStateCarry(context, db, vault, preferences, restoreTransaction) }
+    private val guideImporter: GuideImporter by lazy { GuideImporter(context, db, vault, preferences, lock, imports, spool) }
+    private val catalogImporter: CatalogImporter by lazy {
+        CatalogImporter(context, db, vault, metadata, preferences, restoreTransaction, userState,
+            reader, subtitles, lock, spool) { source, spec, incoming -> backups.retryPending(source, spec, incoming) }
+    }
+    private val importCoordinator: ImportCoordinator by lazy {
+        ImportCoordinator(context.cacheDir, db, vault, preferences, imports, userState, catalogImporter, spool)
+    }
+    private val backups: BackupService by lazy {
+        BackupService(db, lock, vault, preferences, metadata, restoreTransaction,
+            { source, spec, items -> catalogImporter.prepareRestoreCatalog(source, spec, items) }) { source ->
+            for (feed in guide.feeds(source.id)) guideImporter.syncGuide(source, feed)
         }
     }
 
-    suspend fun createBackup(password: CharArray): ByteArray = withContext(Dispatchers.IO) {
-        lock.withLock { BackupCodec.encrypt(backups.snapshot(), password) }
-    }
-
-    suspend fun previewBackup(bytes: ByteArray, password: CharArray): BackupPreview = withContext(Dispatchers.IO) {
-        lock.withLock { BackupPreview(BackupCodec.decrypt(bytes, password)) }
-    }
-
-    suspend fun restoreBackup(preview: BackupPreview): BackupRestoreResult = withContext(Dispatchers.IO) {
-        lock.withLock {
-            val result = backups.restore(preview.data)
-            // Scheduling is follow-up work; its failure must not report a committed restore as failed.
-            try { schedule(preferences.text("hours", "12").first().toLongOrNull()?.coerceIn(1L, 168L) ?: 12L) }
-            catch (e: kotlinx.coroutines.CancellationException) { throw e }
-            catch (_: Exception) { /* The saved interval will be scheduled on the next launch. */ }
-            result
-        }
-    }
+    suspend fun createBackup(password: CharArray): ByteArray = backups.createBackup(password)
+    suspend fun previewBackup(bytes: ByteArray, password: CharArray): BackupPreview = backups.previewBackup(bytes, password)
+    suspend fun restoreBackup(preview: BackupPreview): BackupRestoreResult =
+        backups.restoreBackup(preview) { hours -> schedule(hours) }
 
     companion object {
         @Volatile private var instance: Repository? = null
 
         @Volatile private var coordinator: StartupCoordinator? = null
 
-        fun startup(context: Context): StartupCoordinator = coordinator ?: synchronized(this) {
+        fun startup(context: Context): StartupCoordinator = startup(context) { LibraryDb.build(context) }
+
+        // Supply a database before any service captures it. Replacing/closing db after
+        // construction leaves Room queries and the restore journal on a cancelled scope.
+        @VisibleForTesting
+        @JvmName("startupForTesting")
+        internal fun startupForTesting(context: Context, database: LibraryDb): StartupCoordinator =
+            synchronized(this) {
+                check(coordinator == null && instance == null) { "Repository already started" }
+                startup(context) { database }
+            }
+
+        private fun startup(context: Context, database: () -> LibraryDb): StartupCoordinator = coordinator ?: synchronized(this) {
             coordinator ?: StartupCoordinator {
-                Repository(context.applicationContext).also {
+                Repository(context.applicationContext, database()).also {
                     it.recoverBeforePublication()
                     instance = it
                 }
@@ -493,527 +365,21 @@ class Repository private constructor(private val context: Context) {
             ?: kotlinx.coroutines.runBlocking { awaitReady(context) }
     }
 
-    suspend fun add(name: String, spec: SourceSpec, progress: ImportProgress? = null) =
-        withContext(Dispatchers.IO) {
-            require(name.isNotBlank()) { "Kaynak adını girin." }
-            val id = UUID.randomUUID().toString()
-            // Cleanup runs under the same lock, including cancellation after the DB commit.
-            imports.run(progress, onFailure = { removeUnlocked(id) }) {
-                val resolved = resolveSource(spec, progress)
-                val source = Source(id, name.trim(), vault.encrypt(resolved.encode()), resolved.allowHttp, 0, 0)
-                import(source, resolved, progress = progress)
-            }
-        }
+    suspend fun add(name: String, spec: SourceSpec, progress: ImportProgress? = null) = importCoordinator.add(name, spec, progress)
 
-    suspend fun refresh(id: String, progress: ImportProgress? = null) =
-        withContext(Dispatchers.IO) {
-            imports.run(progress) {
-                val source = library.source(id) ?: return@run
-                import(source, SourceSpec.decode(vault.decrypt(source.endpoint)), progress = progress)
-            }
-        }
+    suspend fun refresh(id: String, progress: ImportProgress? = null) = importCoordinator.refresh(id, progress)
 
-    private suspend fun resolveSource(spec: SourceSpec, progress: ImportProgress?): SourceSpec {
-        if (spec.user.isEmpty()) return spec
-        progress?.report("Sunucu adresi çözümleniyor…")
-        val address = Transport.resolveBase(spec.address, spec.allowHttp, currentCoroutineContext()[ImportCalls])
-        currentCoroutineContext().ensureActive()
-        progress?.resolved(address)
-        return spec.copy(address = address)
-    }
+    suspend fun sourceSpec(id: String): SourceSpec = importCoordinator.sourceSpec(id)
 
-    suspend fun sourceSpec(id: String): SourceSpec = withContext(Dispatchers.IO) {
-        SourceSpec.decode(vault.decrypt(checkNotNull(library.source(id)).endpoint))
-    }
-
-    private suspend fun carryRows(source: String, xtream: Boolean): List<CarryRow> {
-        val rows = library.carryRows(source, legacy = xtream)
-        return if (xtream) legacyCarryRows(rows) else rows
-    }
-
-    private fun legacyCarryRows(rows: List<CarryRow>): List<CarryRow> {
-        val parents = rows.filter { it.kind == "SERIES" }.associate { row -> row.id to row.providerId.ifEmpty {
-            legacyProviderId(vault.decrypt(row.legacyUrl), row.kind)
-        } }
-        return rows.map { row ->
-            if (row.providerId.isNotEmpty() || row.legacyUrl.isEmpty()) row.copy(legacyUrl = "")
-            else row.copy(providerId = legacyProviderId(vault.decrypt(row.legacyUrl), row.kind,
-                parents[row.parent].orEmpty()), legacyUrl = "")
-        }
-    }
-
-    suspend fun editSource(id: String, name: String, spec: SourceSpec, progress: ImportProgress? = null) = withContext(Dispatchers.IO) {
-        require(name.isNotBlank()) { "Kaynak adını girin." }
-        imports.run(progress) {
-            val old = library.source(id) ?: throw SourceFailure("Kaynak bulunamadı.")
-            val resolved = resolveSource(spec, progress)
-            import(old.copy(name = name.trim(), endpoint = vault.encrypt(resolved.encode()), allowHttp = resolved.allowHttp), resolved,
-                force = sourceSpec(id) != resolved, progress = progress)
-        }
-    }
+    suspend fun editSource(id: String, name: String, spec: SourceSpec, progress: ImportProgress? = null) = importCoordinator.editSource(id, name, spec, progress)
 
     suspend fun remove(id: String) = withContext(Dispatchers.IO) {
-        lock.withLock { removeUnlocked(id) }
+        wp16Operation(Wp16Stage.CARRY) { lock.withLock { userState.removeUnlocked(id) } }
     }
 
-    // Only decoding belongs in this block: database and preference failures must propagate.
-    private inline fun <T> decodeRemovalSnapshot(block: () -> T): T? = try {
-        block()
-    } catch (_: GeneralSecurityException) {
-        removalSnapshotWarning()
-        null
-    } catch (_: IllegalArgumentException) {
-        removalSnapshotWarning()
-        null
-    } catch (_: JSONException) {
-        removalSnapshotWarning()
-        null
-    }
+    suspend fun addGuide(sourceId: String, url: String) = guideImporter.addGuide(sourceId, url)
 
-    private fun removalSnapshotWarning() {
-        android.util.Log.w("LumenaraRepository", "Skipping history carry-over: stored source data could not be decoded")
-    }
-
-    // Also used for a cancelled add after its catalog committed: re-save recovered state before cleanup.
-    private suspend fun removeUnlocked(id: String) {
-        val source = library.source(id) ?: return
-        val spec = decodeRemovalSnapshot { SourceSpec.decode(vault.decrypt(source.endpoint)) } ?: run {
-            library.deleteSource(id)
-            return
-        }
-        val now = System.currentTimeMillis()
-        val snapshots = preferences.orphanSnapshots(now)
-        val storedRows = library.carryRows(id, legacy = true)
-        val rows = decodeRemovalSnapshot {
-            if (spec.user.isNotEmpty()) legacyCarryRows(storedRows) else storedRows.map { row ->
-                row.copy(urlHash = row.legacyUrl.takeIf { it.isNotEmpty() }
-                    ?.let { contentKey("orphan-url", vault.decrypt(it)) }.orEmpty(), legacyUrl = "")
-            }
-        } ?: run {
-            library.deleteSource(id)
-            return
-        }
-        val excluded = context.getSharedPreferences("watch_next_state", Context.MODE_PRIVATE)
-            .getStringSet("excluded", emptySet()).orEmpty().toSet()
-        val provider = orphanProvider(spec)
-        val ids = rows.map { it.id }.toSet()
-        val redirects = library.redirects().filter { it.newId in ids }
-        val snapshot = provider?.let { orphanHistory(id, it, now, rows, library.backupMarks(),
-            library.carryMembers(), preferences.carryReferences(rows) + excluded + redirects.map { it.newId })
-            .copy(redirects = redirects) }
-        restoreTransaction.run {
-            preferences.saveOrphanSnapshots(snapshots + listOfNotNull(snapshot?.takeIf { it.pendingIds().isNotEmpty() }))
-            library.deleteSource(id)
-        }
-    }
-
-    suspend fun addGuide(sourceId: String, url: String) =
-        withContext(Dispatchers.IO) {
-            lock.withLock {
-                val source = library.source(sourceId) ?: throw SourceFailure("Kaynak bulunamadı.")
-                val address = url.ifBlank {
-                    val spec = SourceSpec.decode(vault.decrypt(source.endpoint))
-                    if (spec.user.isEmpty()) throw SourceFailure("XMLTV adresini girin.")
-                    Xtream(spec).guideAddress()
-                }
-                syncGuide(
-                    source,
-                    Feed(contentKey(sourceId, address), sourceId, vault.encrypt(address)),
-                )
-            }
-        }
-
-    suspend fun refreshGuides(sourceId: String, progress: ImportProgress? = null) =
-        withContext(Dispatchers.IO) {
-            imports.run(progress) {
-                val source = library.source(sourceId) ?: return@run
-                progress?.report("Rehber indiriliyor…")
-                for (feed in guide.feeds(sourceId)) syncGuide(source, feed)
-            }
-        }
-
-    private suspend fun syncGuide(source: Source, feed: Feed) {
-        val key = "feed_${feed.id}"
-        val job = currentCoroutineContext()
-        Transport.download(vault.decrypt(feed.encryptedAddress), source.allowHttp, context.cacheDir,
-            preferences.fetchState(key), limit = 256L * 1024 * 1024, checkActive = { job.ensureActive() },
-            calls = job[ImportCalls]).use { downloaded ->
-            job.ensureActive()
-            val now = System.currentTimeMillis()
-            val changed = downloaded.importIfChanged {
-                db.withTransaction {
-                    downloaded.read { input, _ ->
-                        val buffered = input.buffered()
-                        buffered.mark(2)
-                        val gzip = buffered.read() == 0x1f && buffered.read() == 0x8b
-                        buffered.reset()
-                        val xml = if (gzip) bounded(java.util.zip.GZIPInputStream(buffered), 256L * 1024 * 1024)
-                            else buffered
-                        populateGuide(db, feed, xml, now) { job.ensureActive() }
-                    }
-                }
-            }
-            if (!changed) {
-                // Window maintenance is independent of importing an unchanged feed.
-                val (from, until) = guideWindow(now)
-                if (guide.hasOutsideWindow(feed.id, from, until)) guide.pruneWindow(feed.id, from, until)
-            }
-            preferences.setFetchState(key, downloaded.state)
-        }
-    }
-
-    private suspend fun import(source: Source, spec: SourceSpec, updatePreferences: Boolean = true, force: Boolean = false,
-        progress: ImportProgress? = null) {
-        val token = maxOf(System.currentTimeMillis(), source.refreshed + 1)
-        val key = "source_${source.id}"
-        val identity = contentKey("catalog", spec.encode())
-        // Pending restore episodes may not exist in Room yet. Reparse even an unchanged
-        // top-level catalog so their parents can be prepared and their state retried.
-        val pendingRestore = updatePreferences && preferences.wp12PendingRestores().any { pending ->
-            pending.data.sources.any { saved -> pending.sources[saved.id] == source.id &&
-                saved.spec.address == spec.address && saved.spec.user == spec.user }
-        }
-        val previous = if (source.refreshed > 0 && !force && !pendingRestore &&
-            preferences.text("catalog_identity_${source.id}").first() == identity) preferences.fetchState(key) else FetchState()
-        val job = currentCoroutineContext()
-        val xtream = if (spec.user.isNotEmpty()) Xtream(spec, job[ImportCalls]) else null
-        var downloaded: Download? = null
-        var snapshot: Xtream.Snapshot? = null
-        try {
-            if (xtream != null) snapshot = xtream.prepare(context.cacheDir, previous,
-                progress = { progress?.report(it) }) { job.ensureActive() }
-            else if (!spec.address.startsWith("content://"))
-                downloaded = Transport.download(spec.address, spec.allowHttp, context.cacheDir, previous,
-                    checkActive = { job.ensureActive() }, calls = job[ImportCalls],
-                    progress = { progress?.report("Liste indiriliyor · ${it / (1024 * 1024)} MB") })
-            job.ensureActive()
-            val body = downloaded
-            val catalog = snapshot
-            val state = catalog?.state ?: body?.state
-            val changed = if (body != null) body.importIfChanged {
-                importChanged(source, spec, token, xtream, catalog, body, updatePreferences, progress)
-            } else if (catalog?.unchanged != true) {
-                importChanged(source, spec, token, xtream, catalog, body, updatePreferences, progress)
-                true
-            } else false
-            if (!changed) {
-                progress?.report("Katalog düzenleniyor…")
-                db.withTransaction {
-                    prepareCatalog(source.id)
-                    library.save(source.copy(refreshed = token))
-                }
-            }
-            val providerLimit = catalog?.account?.optJSONObject("user_info")?.optInt("max_connections", 0) ?: 0
-            // Restore publishes all settings in one edit, after every source has imported.
-            if (updatePreferences) {
-                if (providerLimit > 0) preferences.set("provider_${source.id}", providerLimit.toString())
-                if (state != null) preferences.setFetchState(key, state)
-                preferences.set("catalog_identity_${source.id}", identity)
-            }
-        } finally {
-            snapshot?.close()
-            downloaded?.close()
-        }
-    }
-
-    private suspend fun importChanged(source: Source, spec: SourceSpec, token: Long,
-        xtream: Xtream?, snapshot: Xtream.Snapshot?, downloaded: Download?, carryPreferences: Boolean,
-        progress: ImportProgress? = null) {
-        prepareImportChanged(source, spec, token, xtream, snapshot, downloaded, carryPreferences, progress).use { prepared ->
-            if (carryPreferences && prepared.needsJournal) restoreTransaction.run { prepared.commit() }
-            else db.withTransaction { prepared.commit() }
-            val matches = prepared.matches
-            android.util.Log.i("LumenaraPerf", "history_carry_over matched=${matches.ids.size} ambiguous=${matches.ambiguous} unmatched=${matches.unmatched}")
-        }
-    }
-
-    private suspend fun prepareImportChanged(source: Source, spec: SourceSpec, token: Long,
-        xtream: Xtream?, snapshot: Xtream.Snapshot?, downloaded: Download?, carryPreferences: Boolean,
-        progress: ImportProgress? = null, restoreItems: List<BackupItem> = emptyList()): Wp12PreparedCatalog {
-        // Each prepared source owns its stage until the single restore commit finishes.
-        val stageDirectory = wp12StageDirectory(context.cacheDir)
-        val staged = CatalogStage(stageDirectory, source.id, token)
-        try {
-            val job = currentCoroutineContext()
-            val carryStart = android.os.SystemClock.elapsedRealtime()
-            // Backup imports must never read or consume device-local recovery state.
-            val retainedOrphans = if (carryPreferences) preferences.orphanSnapshots(System.currentTimeMillis()) else emptyList()
-            val recovering = retainedOrphans.filter { it.provider == orphanProvider(spec) }
-            val pendingRestores = if (carryPreferences) preferences.wp12PendingRestores().filter { pending ->
-                pending.data.sources.any { saved -> pending.sources[saved.id] == source.id &&
-                    saved.spec.address == spec.address && saved.spec.user == spec.user }
-            } else emptyList()
-            val pendingItems = pendingRestores.flatMap { pending -> pending.data.sources.filter { saved ->
-                pending.sources[saved.id] == source.id && saved.spec.address == spec.address && saved.spec.user == spec.user
-            }.map { saved -> pending.data.items.filter { it.source == saved.id &&
-                (it.id in pending.ids || it.parentAddress.isEmpty()) } } }
-            val previousRows = carryRows(source.id, spec.user.isNotEmpty())
-            val old = previousRows + recovering.flatMap { it.rows }
-            val incoming = ArrayList<CarryRow>()
-            val series = ArrayList<Item>()
-            val preparedEpisodeParents = HashSet<String>()
-            val restoreEpisodeDurations = HashMap<String, Long>()
-            progress?.report("İçerikler hazırlanıyor…")
-            staged.write { append ->
-                fun stage(row: Item) {
-                    append(row)
-                    incoming += row.carryRow().let { identity ->
-                        if (recovering.isNotEmpty() && spec.user.isEmpty()) identity.copy(
-                            urlHash = contentKey("orphan-url", vault.decrypt(row.encryptedUrl))) else identity
-                    }
-                    if (incoming.size % 250 == 0) progress?.report("İçerikler hazırlanıyor · ${importCount(incoming.size)}")
-                    if (row.kind == "SERIES") series += row
-                }
-                val grouper = SeriesGrouper()
-                fun accept(row: Listing) {
-                    job.ensureActive()
-                    if (spec.user.isNotEmpty()) stage(item(source.id, token, row))
-                    else grouper.accept(row) { stage(item(source.id, token, it)) }
-                }
-                when {
-                    spec.user.isNotEmpty() -> checkNotNull(xtream).read(snapshot, ::accept)
-                    spec.address.startsWith("content://") ->
-                        context.contentResolver.openInputStream(Uri.parse(spec.address))?.use {
-                            Playlist.read(
-                                bounded(it).bufferedReader(),
-                                null,
-                                spec.allowHttp,
-                                ::accept,
-                            )
-                        }
-                    else ->
-                        checkNotNull(downloaded).read { input, finalUrl ->
-                            Playlist.read(
-                                input.bufferedReader(),
-                                URI(finalUrl),
-                                spec.allowHttp,
-                                ::accept,
-                            )
-                        }
-                }
-                // Xtream episodes are lazy. Rebuild only already-expanded series whose locator
-                // changed, before pruning their old parents. A failed fetch leaves the old catalog intact.
-                if (xtream != null) {
-                    val expanded = previousRows.filter { it.kind == "EPISODE" }.map { it.parent }.toSet() +
-                        recovering.flatMap { orphan ->
-                            val pending = orphan.pendingIds()
-                            orphan.rows.filter { it.kind == "EPISODE" && it.id in pending }.map { it.parent }
-                        }
-                    val targets = incoming.filter { it.kind == "SERIES" }
-                    val matches = matchCarryOver(previousRows.filter { it.kind == "SERIES" }, targets).ids +
-                        recovering.flatMap { orphan -> matchCarryOver(orphan.rows.filter { it.kind == "SERIES" },
-                            targets, categoryFallback = true).ids.entries }.associate { it.key to it.value }
-                    val parents = series.associateBy { it.id }
-                    val restoreParents = wp12RestoreParentIds(restoreItems, source.id, spec, incoming) +
-                        pendingItems.flatMap { wp12RestoreParentIds(it, source.id, spec, incoming) }
-                    for (to in matches.filterKeys { it in expanded }.values.toSet() + restoreParents) {
-                        val parent = parents.getValue(to)
-                        val episodes = xtream.episodes(vault.decrypt(parent.encryptedUrl), parent.title).distinctBy { it.url }
-                        preparedEpisodeParents += parent.id
-                        episodes.forEach {
-                            job.ensureActive()
-                            val episode = item(source.id, token, it).copy(parent = parent.id)
-                            if (to in restoreParents && it.durationMs > 0) restoreEpisodeDurations[episode.id] = it.durationMs
-                            stage(episode)
-                        }
-                    }
-                }
-            }
-            val incomingIds = incoming.map { it.id }.toSet()
-            val refreshedParents = preparedEpisodeParents + incoming.filter { it.kind == "EPISODE" }.map { it.parent }
-            val existingMatches = matchCarryOver(previousRows.filterNot {
-                it.kind == "EPISODE" && it.parent in incomingIds && it.parent !in refreshedParents
-            }, incoming)
-            val orphanMatches = matchOrphanHistories(recovering, incoming)
-            val matches = CarryMatch(existingMatches.ids + orphanMatches.ids,
-                existingMatches.ambiguous + orphanMatches.ambiguous, existingMatches.unmatched + orphanMatches.unmatched)
-            // M3U supplies the complete episode catalog. Missing episodes must be pruned even
-            // when marked; matched locator changes have already carried their state forward.
-            // Xtream episodes are lazy, so absence from its top-level catalog proves nothing.
-            val playlistEpisodes = if (spec.user.isEmpty())
-                old.filter { it.kind == "EPISODE" }.map { it.id }.toSet() else emptySet()
-            StartupPerf.elapsed("refresh_history_carry_over", carryStart)
-            val commit: suspend () -> Unit = {
-                // A full import supplies current assignments; staged snapshots must not
-                // overwrite refreshed metadata in a later migration batch.
-                db.versionBackfill().discardSource(source.id)
-                library.save(source)
-                var imported = 0
-                progress?.report("İçe aktarılıyor · 0 / ${importCount(incoming.size)}")
-                staged.read { batch ->
-                    job.ensureActive()
-                    // Keep late metadata matches on unchanged streams, even if Android evicted
-                    // their JSON cache before this provider refresh.
-                    val previous = library.importedVersionSeeds(batch.map { it.id }).associateBy { it.id }
-                    library.writeBatch(batch.map { row ->
-                        val old = previous[row.id]
-                        val retained = if (row.tmdbId().isEmpty() && old != null &&
-                            searchable(productionName(row.title, row.year).title) == searchable(productionName(old.title, old.year).title))
-                            row.withTmdbMatch(TmdbMatch(old.tmdbId(), old.year)) else row
-                        retained.withTmdbMatch(metadata.cachedMatch(retained))
-                            .copy(versionKey = row.id, displayTitle = row.title, displayYear = row.year)
-                    })
-                    imported += batch.size
-                    progress?.report("İçe aktarılıyor · ${importCount(imported)} / ${importCount(incoming.size)}")
-                }
-                val preferenceReferences = preferences.carryReferences(old)
-                val excluded = context.getSharedPreferences("watch_next_state", Context.MODE_PRIVATE)
-                    .getStringSet("excluded", emptySet()).orEmpty().toSet()
-                val orphanReferences = recovering.flatMap { it.pendingIds() }.toSet()
-                // Explicitly prepared parents can keep the same URL. Preserve their unresolved
-                // local history and ambiguity peers before pruning stale episode locators.
-                val pendingEpisodes = if (preparedEpisodeParents.isEmpty()) null else orphanHistory(
-                    source.id, "", token, previousRows, emptyList(), emptyList(),
-                    library.carryProtectedIds(source.id).toSet() + preferenceReferences + excluded)
-                carryRoomState(db, matches.ids, preferenceReferences + excluded + orphanReferences)
-                // Preserve the duration seed previously supplied by forced restore expansion.
-                for ((id, duration) in restoreEpisodeDurations) {
-                    val mark = library.mark(id)
-                    if ((mark?.duration ?: 0) <= 0) library.save((mark ?: Mark(id)).copy(duration = duration))
-                }
-                for (orphan in recovering) {
-                    for (mark in orphan.marks) {
-                        val target = orphanMatches.ids[mark.id] ?: continue
-                        library.save(mergeCarryMark(mark, library.mark(target), target))
-                    }
-                    for (member in orphan.members) {
-                        val target = orphanMatches.ids[member.id] ?: continue
-                        if (library.member(target) == null) library.collection(member.copy(id = target))
-                    }
-                    for (redirect in orphan.redirects) {
-                        val target = orphanMatches.ids[redirect.newId] ?: continue
-                        if (redirect.oldId != target && library.redirectedId(redirect.oldId) == null)
-                            library.redirect(redirect.copy(newId = target))
-                    }
-                }
-                // Keep other unresolved user records for a future/manual retry, including
-                // lazy episode parents, rather than guessing or cascading their removal.
-                val protected = (library.carryProtectedIds(source.id) + preferenceReferences)
-                    .filter { it !in matches.ids && it !in incomingIds && it !in playlistEpisodes }.toMutableSet()
-                pendingEpisodes?.let { pending ->
-                    val parents = previousRows.associate { it.id to it.parent }
-                    protected += wp03UnresolvedEpisodeIds(pending, incomingIds, matches.ids.keys)
-                        .filter { parents[it] in preparedEpisodeParents }
-                }
-                old.filter { it.id in protected && it.parent.isNotBlank() }.forEach { protected += it.parent }
-                protected.removeAll(incomingIds)
-                protected.toList().chunked(900).forEach { library.retainCarryRows(it, token) }
-                if (spec.user.isEmpty()) library.prunePlaylist(source.id, token)
-                else {
-                    for (parent in preparedEpisodeParents) library.pruneEpisodes(parent, token)
-                    library.prune(source.id, token)
-                }
-                library.orphans(source.id)
-                protected.toList().chunked(900).forEach { library.isolateCarryRows(it, token - 1) }
-                progress?.report("Katalog düzenleniyor…")
-                prepareCatalog(source.id, token)
-                if (carryPreferences && pendingRestores.isNotEmpty()) backups.retryPending(source.id, spec, incoming)
-                if (carryPreferences && matches.ids.isNotEmpty()) {
-                    val current = library.carryRows(source.id)
-                    val subtitleKeys = preferences.carryItems(matches.ids, carryPreferenceIdentities(old, current, matches.ids),
-                        old.filter { it.id in matches.ids }.associate { it.source to source.id })
-                    subtitles.cache.carryKeys(subtitleKeys)
-                }
-                if (recovering.isNotEmpty()) preferences.saveOrphanSnapshots(
-                    retainedOrphans.filterNot { it in recovering } + recovering.mapNotNull {
-                        pendingOrphanHistory(it, orphanMatches.ids.keys)
-                    })
-                job.ensureActive()
-                library.save(source.copy(refreshed = token, count = library.count(source.id)))
-            }
-            return Wp12PreparedCatalog(incoming, matches, matches.ids.isNotEmpty() || recovering.isNotEmpty() || pendingRestores.isNotEmpty(), commit) {
-                staged.close()
-                stageDirectory.deleteRecursively()
-            }
-        } catch (failure: Throwable) {
-            staged.close()
-            stageDirectory.deleteRecursively()
-            throw failure
-        }
-    }
-
-    private suspend fun prepareRestoreCatalog(source: Source, spec: SourceSpec,
-        items: List<BackupItem>): Wp12PreparedCatalog {
-        val job = currentCoroutineContext()
-        val xtream = if (spec.user.isNotEmpty()) Xtream(spec, job[ImportCalls]) else null
-        var downloaded: Download? = null
-        var snapshot: Xtream.Snapshot? = null
-        try {
-            if (xtream != null) snapshot = xtream.prepare(context.cacheDir, FetchState(), checkActive = { job.ensureActive() })
-            else if (!spec.address.startsWith("content://")) downloaded = Transport.download(
-                spec.address, spec.allowHttp, context.cacheDir, checkActive = { job.ensureActive() }, calls = job[ImportCalls])
-            return prepareImportChanged(source, spec, maxOf(System.currentTimeMillis(), source.refreshed + 1),
-                xtream, snapshot, downloaded, carryPreferences = false, restoreItems = items)
-        } finally {
-            snapshot?.close()
-            downloaded?.close()
-        }
-    }
-
-    /** Explicit refresh boundary, including an unchanged provider body after a local TMDB match. */
-    private suspend fun prepareCatalog(source: String, generation: Long = -1) {
-        val job = currentCoroutineContext()
-        val versionStart = android.os.SystemClock.elapsedRealtime()
-        db.versionBackfill().discardSource(source)
-        val versions = VersionBackfill(db, source, generation)
-        while (versions.runBatch(250)) { job.ensureActive() }
-        // Propagate only user records in indexed groups; never allocate a source's Item list.
-        var cursor = ""
-        while (true) {
-            val groups = library.versionMarkGroups(source, cursor, 250)
-            if (groups.isEmpty()) break
-            for (group in groups) {
-                job.ensureActive()
-                val marks = library.versionGroupMarks(group.versionKey)
-                val newest = marks.maxByOrNull { it.updated } ?: continue
-                val shared = newest.copy(favorite = marks.any { it.favorite }, listed = marks.any { it.listed })
-                library.versionGroupIds(group.versionKey).forEach { library.save(shared.copy(id = it)) }
-            }
-            cursor = groups.last().id
-        }
-        StartupPerf.elapsed("refresh_version_groups", versionStart)
-        val derivedStart = android.os.SystemClock.elapsedRealtime()
-        val derived = CatalogDerivedBackfill(db)
-        derived.reset(source)
-        while (derived.runBatch(source)) { job.ensureActive() }
-        StartupPerf.elapsed("refresh_catalog_derived", derivedStart)
-    }
-
-    private fun item(source: String, token: Long, entry: Listing) =
-        Item(
-            contentKey(source, entry.url),
-            source,
-            entry.title,
-            entry.group,
-            entry.kind.name,
-            entry.tvgId,
-            vault.encrypt(entry.url),
-            searchable("${entry.title} ${entry.group} ${entry.tvgId}") +
-                (entry.tmdbId.toLongOrNull()?.takeIf { it > 0 }?.let { " [tmdb:$it]" } ?: ""),
-            token,
-            entry.logo.takeIf { it.startsWith("https://") }?.let(vault::encrypt).orEmpty(),
-            parent = entry.parentUrl.takeIf(String::isNotBlank)?.let { contentKey(source, it) }.orEmpty(),
-            summary = entry.summary,
-            year = entry.year,
-            genre = entry.genre,
-            rating = entry.rating,
-            language = entry.language,
-            castNames = entry.cast,
-            archive =
-                entry.archive
-                    .takeIf { it.isNotEmpty() && entry.days > 0 }
-                    ?.let(vault::encrypt)
-                    .orEmpty(),
-            archiveDays = entry.days,
-            archiveZone = entry.zone,
-            introStartMs = entry.introStartMs,
-            introEndMs = entry.introEndMs,
-            backdrop =
-                entry.backdrop.takeIf { it.startsWith("https://") }?.let(vault::encrypt).orEmpty(),
-            providerId = entry.providerId,
-            tvgName = entry.tvgName,
-            tvgGroup = entry.tvgGroup,
-        ).let { it.copy(versionKey = it.id, displayTitle = it.title, displayYear = it.year) }
+    suspend fun refreshGuides(sourceId: String, progress: ImportProgress? = null) = guideImporter.refreshGuides(sourceId, progress)
 
     suspend fun replay(channel: Item, slot: Slot): Item =
         withContext(Dispatchers.IO) {
@@ -1035,73 +401,12 @@ class Repository private constructor(private val context: Context) {
             )
         }
 
-    suspend fun expand(series: Item): List<Item> =
-        withContext(Dispatchers.IO) {
-            lock.withLock { expandUnlocked(series) }
-        }
+    suspend fun expand(series: Item): List<Item> = catalogImporter.expand(series)
 
-    // The caller owns the repository lock; forced expansion bypasses a warm episode cache.
-    private suspend fun expandUnlocked(series: Item, force: Boolean = false): List<Item> {
-        val source = library.source(series.source) ?: return emptyList()
-        val spec = SourceSpec.decode(vault.decrypt(source.endpoint))
-        if (spec.user.isEmpty()) return library.episodeSnapshot(series.id)
-        suspend fun fetch(): List<Item> {
-            val listings = Xtream(spec)
-                .episodes(vault.decrypt(series.encryptedUrl), series.title)
-                .distinctBy { it.url }
-            val previous = library.episodeSnapshot(series.id)
-            val token = maxOf(System.currentTimeMillis(), (previous.maxOfOrNull { it.generation } ?: 0) + 1)
-            val entries = listings.map { item(source.id, token, it).copy(parent = series.id) }
-            val oldRows = legacyCarryRows((previous + series).map {
-                it.carryRow().copy(legacyUrl = if (it.providerId.isEmpty()) it.encryptedUrl else "")
-            })
-            val parent = oldRows.single { it.id == series.id }
-            val incoming = entries.map { it.carryRow() }
-            val matches = wp03EpisodeMatches(parent, oldRows, incoming)
-            val commit: suspend () -> Unit = {
-                library.save(entries)
-                val preferenceReferences = preferences.carryReferences(oldRows)
-                val excluded = context.getSharedPreferences("watch_next_state", Context.MODE_PRIVATE)
-                    .getStringSet("excluded", emptySet()).orEmpty().toSet()
-                val references = preferenceReferences + excluded + library.redirects().map { it.newId }
-                // Keep unresolved state AND its ambiguity peers. A later refresh must not
-                // turn a duplicate into a unique match just because an unmarked peer was pruned.
-                val pending = orphanHistory(source.id, "", token, oldRows, emptyList(), emptyList(),
-                    library.carryProtectedIds(source.id).toSet() + references)
-                carryRoomState(db, matches.ids, references)
-                val siblings = if (entries.isEmpty()) emptyList() else allVersions(series)
-                    .filter { it.id != series.id }.flatMap { library.episodeSnapshot(it.id) }
-                // Read after carry so new IDs already contain the newest local progress.
-                // Android 9 SQLite allows 999 binds; leave room for long series.
-                val marks = (entries + siblings).map { it.id }.distinct().chunked(900)
-                    .flatMap { library.marksByIds(it) }.associateBy { it.id }
-                val shared = wp03SiblingMarks(incoming, siblings.map { it.carryRow() }, marks)
-                listings.zip(entries).forEach { (listing, episode) ->
-                    val existing = marks[episode.id]
-                    var mark = shared[episode.id]?.let { mergeCarryMark(it, existing, episode.id) }
-                        ?: existing ?: Mark(episode.id)
-                    if (mark.duration <= 0 && listing.durationMs > 0)
-                        mark = mark.copy(duration = listing.durationMs)
-                    if (mark != existing && (existing != null || shared[episode.id] != null || mark.duration > 0))
-                        library.save(mark)
-                }
-                val incomingIds = entries.map { it.id }.toSet()
-                wp03UnresolvedEpisodeIds(pending, incomingIds, matches.ids.keys)
-                    .chunked(900).forEach { library.retainCarryRows(it, token) }
-                library.pruneEpisodes(series.id, token)
-                if (!force && matches.ids.isNotEmpty()) {
-                    val subtitleKeys = preferences.carryItems(matches.ids,
-                        carryPreferenceIdentities(oldRows, incoming + parent, matches.ids))
-                    subtitles.cache.carryKeys(subtitleKeys)
-                }
-            }
-            if (!force && matches.ids.isNotEmpty()) restoreTransaction.run { commit() }
-            else db.withTransaction { commit() }
-            return library.episodeSnapshot(series.id)
-        }
-        return if (force) fetch() else seriesExpansionCache.get(series.id,
-            cached = { library.episodeSnapshot(series.id) }, fetch = { fetch() })
-    }
+    @VisibleForTesting
+    @JvmName("setSeriesExpansionStampForTesting")
+    internal suspend fun setSeriesExpansionStampForTesting(id: String, stamp: Long) =
+        catalogImporter.setSeriesExpansionStampForTesting(id, stamp)
 
     suspend fun address(item: Item) =
         withContext(Dispatchers.IO) { vault.decrypt(item.encryptedUrl) }
@@ -1242,9 +547,9 @@ class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorke
                 prefs.set("sync_${source.id}", "Güncel")
             } catch (error: kotlinx.coroutines.CancellationException) {
                 throw error
-            } catch (_: Exception) {
+            } catch (error: Exception) {
                 failed = true
-                prefs.set("sync_${source.id}", "Yenileme başarısız")
+                prefs.set("sync_${source.id}", wp16Diagnostic(error, Wp16Stage.IMPORT))
             }
         }
         if (!failed) repo.completePendingRefresh()

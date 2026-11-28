@@ -5,6 +5,29 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class SeriesExpansionCacheTest {
+    @Test fun testStampReloadsPersistenceWithoutExpiringAnotherSeries() = runTest {
+        val now = SeriesExpansionCache.SIX_HOURS_MS + 1_000L
+        val stored = mutableMapOf<String, Long>()
+        var reads = 0
+        var requests = 0
+        val cache = SeriesExpansionCache(
+            readStamp = { reads++; stored[it] ?: 0L },
+            writeStamp = { id, stamp -> stored[id] = stamp }, clock = { now },
+        )
+        suspend fun open(id: String) = cache.get(id, cached = { "cached" }) { requests++; "fresh" }
+        assertEquals("fresh", open("series"))
+        assertEquals("fresh", open("sibling"))
+        cache.setStampForTesting("series", 1_000L)
+        assertEquals(1_000L, stored["series"])
+        assertEquals("cached", open("sibling"))
+        assertEquals("fresh", open("series"))
+        assertEquals(3, reads)
+        assertEquals(3, requests)
+        assertEquals(now, stored["series"])
+        assertEquals("cached", open("series"))
+        assertEquals(3, requests)
+    }
+
     @Test fun reopeningUsesMemoryThenPersistentStampUntilSixHourBoundary() = runTest {
         var now = 1_000L
         var reads = 0

@@ -8,7 +8,8 @@ import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.json.JSONObject
 
-internal class Xtream(private val spec: SourceSpec, private val calls: ImportCalls? = null) {
+internal class Xtream(private val spec: SourceSpec, private val calls: ImportCalls? = null,
+    private val spool: EncryptedSpool? = null) {
     private val base = spec.address.trimEnd('/').plus("/").toHttpUrl()
 
     private fun api(action: String = "") =
@@ -32,6 +33,7 @@ internal class Xtream(private val spec: SourceSpec, private val calls: ImportCal
         progress("Hesap doğrulanıyor…")
         val account = account()
         val bodies = linkedMapOf<String, Download>()
+        val bodySpool = spool ?: EncryptedSpool.ephemeral()
         try {
             for (type in listOf("live", "vod", "series")) {
                 val stage = when (type) {
@@ -41,7 +43,7 @@ internal class Xtream(private val spec: SourceSpec, private val calls: ImportCal
                 }
                 for (action in listOf("get_${type}_categories", if (type == "series") "get_series" else "get_${type}_streams"))
                     bodies[action] = Transport.download(api(action).build().toString(), spec.allowHttp, cache,
-                        checkActive = checkActive, calls = calls,
+                        checkActive = checkActive, calls = calls, spool = bodySpool,
                         progress = { bytes -> progress("$stage · ${bytes / (1024 * 1024)} MB") })
             }
             val digest = java.security.MessageDigest.getInstance("SHA-256")

@@ -2,6 +2,7 @@ package dev.lumenara.tv
 
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.lumenara.data.*
+import java.lang.reflect.InvocationTargetException
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.async
@@ -11,6 +12,8 @@ import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.*
 import org.junit.Assert.*
 import org.junit.Test
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.intrinsics.suspendCoroutineUninterceptedOrReturn
 
 class SeriesExpansionTest {
     @Test fun reopeningAnXtreamSeriesUsesCachedEpisodesAndPreservesMarks() = runBlocking {
@@ -105,12 +108,17 @@ class SeriesExpansionTest {
     }
 
     private suspend fun expireExpansion(repo: Repository, series: Item): Long {
-        // Exercise the production six-hour boundary without sleeping or adding a production test API.
+        // Exercise the production six-hour boundary through the cache owner's locked test seam.
         val stamp = System.currentTimeMillis() - 7 * 60 * 60 * 1000L
-        Preferences(InstrumentationRegistry.getInstrumentation().targetContext).set("series_expanded_${series.id}", stamp.toString())
-        val cache = Repository::class.java.getDeclaredField("seriesExpansionCache").apply { isAccessible = true }.get(repo)
-        val stamps = cache.javaClass.getDeclaredField("stamps").apply { isAccessible = true }.get(cache)
-        (stamps as MutableMap<*, *>).remove(series.id)
+        // The seam is Kotlin-internal to core/data, with an explicit stable JVM name for
+        // instrumentation in app. No cache fields or coroutine scopes are inspected/mutated.
+        suspendCoroutineUninterceptedOrReturn<Unit> { continuation ->
+            try {
+                Repository::class.java.getMethod("setSeriesExpansionStampForTesting",
+                    String::class.java, java.lang.Long.TYPE, Continuation::class.java)
+                    .invoke(repo, series.id, stamp, continuation)
+            } catch (failure: InvocationTargetException) { throw failure.targetException }
+        }
         return stamp
     }
 
