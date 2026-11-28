@@ -17,6 +17,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  WP10_NDK_VERSION: '28.2.13676358'
   # The unchanged personal certificate pin lives in scripts/test-results/Wp01ReleaseGate.py.
   RELEASES_REPO: kudretakn/Lumenara-releases
 
@@ -49,7 +50,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - uses: android-actions/setup-android@v3
         with:
-          packages: platform-tools build-tools;36.0.0
+          packages: platform-tools build-tools;36.0.0 ndk;${{ env.WP10_NDK_VERSION }}
 
       - name: Check that the tag matches versionName
         id: version
@@ -84,6 +85,17 @@ jobs:
           TMDB_READ_TOKEN: ${{ secrets.TMDB_READ_TOKEN }}
         run: ./gradlew test :app:assembleRelease --stacktrace
 
+      - name: Verify release native stripping and record build evidence
+        run: |
+          set -euo pipefail
+          apk="app/build/outputs/apk/release/app-release-unsigned.apk"
+          python3 scripts/apk-size-report.py "$apk" --output app/build/reports/wp10/release-unsigned-size.json
+          python3 scripts/verify-native.py "$apk" --ndk "$ANDROID_HOME/ndk/$WP10_NDK_VERSION" \
+            --merged-libs app/build/intermediates/merged_native_libs/release/mergeReleaseNativeLibs/out/lib \
+            --require-abi armeabi-v7a --require-abi arm64-v8a \
+            --output app/build/reports/wp10/release-native.json
+          test -s app/build/outputs/mapping/release/mapping.txt
+
       - name: Sign and verify
         env:
           KEYSTORE_B64: ${{ secrets.LUMENARA_KEYSTORE_B64 }}
@@ -110,6 +122,23 @@ jobs:
           printf '%s\n' "$certs" > "$RUNNER_TEMP/Wp01-certificate.txt"
           python3 scripts/test-results/Wp01ReleaseGate.py certificate "$RUNNER_TEMP/Wp01-certificate.txt"
           sha256sum "$out" | tee dist/SHA256SUMS.txt
+
+      - name: Measure the signed APK
+        run: |
+          set -euo pipefail
+          for apk in dist/*.apk; do
+            python3 scripts/apk-size-report.py "$apk" --output app/build/reports/wp10/release-signed-size.json
+          done
+
+      - name: Keep release mapping and measured size/native reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-build-evidence
+          path: |
+            app/build/outputs/mapping/release/
+            app/build/reports/wp10/
+          if-no-files-found: error
 
       - name: Release notes from CHANGELOG
         if: github.event_name == 'push'
