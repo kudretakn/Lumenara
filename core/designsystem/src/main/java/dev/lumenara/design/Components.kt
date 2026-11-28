@@ -232,11 +232,6 @@ fun ProgressLine(progress: Float, modifier: Modifier = Modifier) {
     }
 }
 
-@Deprecated("Use Chip", ReplaceWith("Chip(text, selected, onClick, modifier)"))
-@Composable
-fun Pill(text: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) =
-    Chip(text, selected, onClick, modifier)
-
 private fun focusDuration(focused: Boolean) =
     if (focused) Motion.focusEnterMillis else Motion.focusExitMillis
 

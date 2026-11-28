@@ -1,5 +1,6 @@
 package dev.lumenara.tv
 
+import androidx.activity.compose.setContent
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -33,15 +34,30 @@ class AudioSubtitleTest {
         screen.onNode(matcher and isFocused()).performKeyInput { pressKey(Key.DirectionCenter) }
         screen.waitForIdle()
     }
+    private fun returnToDetails() {
+        // Options and the startup timeline each consume Back. Observe each result before
+        // issuing the next key, and fail if the real navigation contract does not complete.
+        repeat(4) {
+            if (screen.onAllNodesWithTag("details-content").fetchSemanticsNodes().isNotEmpty()) {
+                screen.onNodeWithContentDescription("Tam ekran oynatıcı").assertDoesNotExist()
+                return
+            }
+            screen.wp21AwaitNode(hasContentDescription("Tam ekran oynatıcı"))
+            screen.back()
+            screen.wp21AwaitWindowFrames()
+        }
+        screen.wp21AwaitNode(hasTestTag("details-content"))
+        screen.onNodeWithContentDescription("Tam ekran oynatıcı").assertDoesNotExist()
+    }
     private fun capture(name: String) {
-        screen.waitForIdle()
+        screen.wp21AwaitWindowFrames()
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val output = File(context.getExternalFilesDir(null), "screens/$name.png")
         output.parentFile!!.mkdirs()
         assertTrue(UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).takeScreenshot(output))
     }
     private fun optionsScrollTo(matcher: SemanticsMatcher) {
-        screen.onNodeWithTag("player-options").performScrollToNode(matcher)
+        screen.wp21ScrollTo("player-options", matcher)
     }
     private fun assertEngineDelay(us: Long) {
         // Media3 reports the shift output's applied clock; VLC reads native spuDelay.
@@ -130,6 +146,8 @@ class AudioSubtitleTest {
                 assertEquals(movieTitle.displayTitle(), movie.title)
                 val versions = runBlocking { repo.versions(movie) }
                 assertEquals(2, versions.size)
+                val subtitledVersion = versions.single { it.title.contains("Altyazılı", ignoreCase = true) }
+                val dubbedVersion = versions.single { it.title.contains("Dublaj", ignoreCase = true) }
                 assertTrue(versions.all { it.title.startsWith(movieTitle) })
                 runBlocking {
                     repo.updateMark(movie.id) { it.copy(favorite = true, listed = true, position = 500, duration = 120000, updated = 1) }
@@ -150,12 +168,16 @@ class AudioSubtitleTest {
                 screen.onNodeWithTag("details-content").performScrollToIndex(0)
                 select(hasText("Devam et"))
                 screen.waitUntil(30_000) { videoRequested.get() == "102.mp4" }
+                screen.wp21AwaitMedia3Ready(runBlocking { repo.address(subtitledVersion) })
+                waitFor(hasContentDescription("Tam ekran oynatıcı") and isFocused())
                 screen.dpad(Key.Menu)
                 assertOptionsKeepRemoteFocus()
                 optionsScrollTo(hasTestTag("version-DUBBED"))
                 select(hasTestTag("version-DUBBED"))
                 screen.waitUntil(30_000) { videoRequested.get() == "101.mp4" }
+                screen.wp21AwaitMedia3Ready(runBlocking { repo.address(dubbedVersion) })
                 assertEquals(0, searches.get()); assertEquals(0, downloads.get())
+                waitFor(hasContentDescription("Tam ekran oynatıcı") and isFocused())
                 screen.dpad(Key.Menu)
                 optionsScrollTo(hasTestTag("subtitle-search"))
                 select(hasTestTag("subtitle-search"))
@@ -180,39 +202,39 @@ class AudioSubtitleTest {
                 val key = runBlocking { repo.preferenceKey(movie) }
                 assertNotNull(repo.subtitles.cache.find(key))
                 // Close and reopen: the same UTF-8 cache is attached with no subtitle request.
-                repeat(2) {
-                    if (screen.onAllNodesWithContentDescription("Tam ekran oynatıcı").fetchSemanticsNodes().isNotEmpty()) screen.back()
-                }
-                waitFor(hasTestTag("details-content"))
+                returnToDetails()
                 screen.onNodeWithTag("details-content").performScrollToIndex(0)
                 select(hasText("Devam et"))
                 waitFor(cue)
+                screen.wp21AwaitMedia3Ready(runBlocking { repo.address(dubbedVersion) })
                 assertEquals(2, searches.get()); assertEquals(1, downloads.get())
+                waitFor(hasContentDescription("Tam ekran oynatıcı") and isFocused())
                 screen.dpad(Key.Menu)
                 optionsScrollTo(hasTestTag("subtitle-delay-plus-100"))
                 repeat(3) { select(hasTestTag("subtitle-delay-plus-100")) }
                 waitFor(hasText("Altyazı gecikmesi · +0,3 sn"))
                 assertEngineDelay(300_000L)
-                val delayItem = versions.single { it.title.contains("Dublaj", ignoreCase = true) }
+                val delayItem = dubbedVersion
                 screen.waitUntil(5000) { runBlocking { prefs.subtitleDelay(delayItem) } == 300L }
                 assertEquals(0L, runBlocking { prefs.subtitleDelay(versions.single { it.id != delayItem.id }) })
                 // Back closes options first. The startup timeline can still be visible after
                 // reopening cached playback and consumes its own Back before the player exits.
                 screen.back()
+                screen.wp21AwaitNode(hasTestTag("player-options"), present = false)
                 screen.onNodeWithTag("player-options").assertDoesNotExist()
-                repeat(2) {
-                    if (screen.onAllNodesWithContentDescription("Tam ekran oynatıcı").fetchSemanticsNodes().isNotEmpty()) screen.back()
-                }
-                waitFor(hasTestTag("details-content"))
+                returnToDetails()
                 screen.onNodeWithTag("details-content").performScrollToIndex(0)
                 select(hasText("Devam et"))
                 waitFor(cue)
+                screen.wp21AwaitMedia3Ready(runBlocking { repo.address(dubbedVersion) })
                 assertEngineDelay(300_000L)
+                waitFor(hasContentDescription("Tam ekran oynatıcı") and isFocused())
                 screen.dpad(Key.Menu)
                 optionsScrollTo(hasText("Motor: Media3/VLC"))
                 select(hasText("Motor: Media3/VLC"))
                 waitFor(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "İndirilen altyazı etkin"))
                 assertEngineDelay(300_000L)
+                waitFor(hasContentDescription("Tam ekran oynatıcı") and isFocused())
                 screen.dpad(Key.Menu)
                 assertOptionsKeepRemoteFocus()
                 optionsScrollTo(hasTestTag("subtitle-delay-minus-1000"))
@@ -227,6 +249,7 @@ class AudioSubtitleTest {
                 screen.dpad(Key.DirectionRight)
                 waitFor(hasTestTag("vod-timeline"))
                 capture("subtitle-playing-vlc")
+                waitFor(hasContentDescription("Tam ekran oynatıcı") and isFocused())
                 screen.dpad(Key.Menu)
                 optionsScrollTo(hasTestTag("subtitle-search"))
                 select(hasTestTag("subtitle-search"))
@@ -234,12 +257,20 @@ class AudioSubtitleTest {
                 screen.onAllNodesWithTag("player-options").assertCountEquals(0)
                 capture("subtitle-search-vlc")
                 assertEquals(3, searches.get()); assertEquals(1, downloads.get())
+                screen.wp21Await("version mark positions persisted equally") {
+                    runBlocking {
+                        val marks = versions.map { repo.library.mark(it.id) }
+                        marks.all { it != null } && marks.map { it?.position }.distinct().size == 1
+                    }
+                }
                 runBlocking {
                     val marks = versions.map { repo.library.mark(it.id)!! }
                     assertEquals(1, marks.map { it.position }.distinct().size)
                     assertEquals(1, marks.map { it.favorite }.distinct().size)
                 }
             } finally {
+                screen.runOnUiThread { screen.activity.setContent { } }
+                screen.waitForIdle()
                 runBlocking {
                     prefs.set("engine", previousEngine)
                     prefs.set("subtitle_remaining", previousRemaining)

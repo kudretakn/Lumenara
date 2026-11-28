@@ -1,5 +1,6 @@
 package dev.lumenara.design
 
+import androidx.compose.ui.graphics.toArgb
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -7,17 +8,18 @@ import org.junit.Test
 class FocusCardContrastTest {
     @Test
     fun focusPreservesTheDarkFillAndPrimaryTextColor() {
-        assertEquals("Focus must not replace a card's dark fill", SURFACE_2, FOCUSED_CONTAINER)
-        assertEquals("Focus must not change card text colour", TEXT_PRIMARY, FOCUSED_CONTENT)
-        assertEquals(SURFACE_2, FOCUSED_CONTAINER)
-        assertEquals(255, alpha(FOCUSED_CONTAINER))
+        assertEquals("Focus must not replace a card's dark fill", LumenColors.surface2, FocusCardDefaults.focusedContainerColor)
+        assertEquals("Focus must not change card text colour", LumenColors.textPrimary, FocusCardDefaults.focusedContentColor)
+        assertEquals(FocusCardDefaults.containerColor, FocusCardDefaults.focusedContainerColor)
+        assertEquals(FocusCardDefaults.contentColor, FocusCardDefaults.focusedContentColor)
+        assertEquals(255, alpha(FocusCardDefaults.focusedContainerColor.toArgb()))
     }
 
     @Test
     fun focusedCardTextMeetsWcagAaContrast() {
-        assertReadable("primary", TEXT_PRIMARY, FOCUSED_CONTAINER)
+        assertReadable("primary", FocusCardDefaults.focusedContentColor.toArgb(), FocusCardDefaults.focusedContainerColor.toArgb())
         // This is the metadata colour that became unreadable on Material's light focus fill.
-        assertReadable("secondary", TEXT_SECONDARY, FOCUSED_CONTAINER)
+        assertReadable("secondary", FocusCardDefaults.secondaryContentColor.toArgb(), FocusCardDefaults.focusedContainerColor.toArgb())
     }
 
     private fun assertReadable(role: String, foreground: Int, background: Int) {
@@ -41,13 +43,5 @@ class FocusCardContrastTest {
         val green = linear((argb ushr 8) and 0xFF)
         val blue = linear(argb and 0xFF)
         return 0.2126 * red + 0.7152 * green + 0.0722 * blue
-    }
-
-    private companion object {
-        const val SURFACE_2 = 0xFF1C1D21.toInt()
-        const val FOCUSED_CONTAINER = SURFACE_2
-        const val TEXT_PRIMARY = 0xFFF4F4F5.toInt()
-        const val FOCUSED_CONTENT = TEXT_PRIMARY
-        const val TEXT_SECONDARY = 0xFFA3A5AC.toInt()
     }
 }

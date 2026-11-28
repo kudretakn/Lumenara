@@ -2,6 +2,7 @@ package dev.lumenara.data
 
 import java.io.IOException
 import java.util.concurrent.TimeUnit
+import okhttp3.Request
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.*
@@ -16,10 +17,43 @@ class TransportTest {
     @Test fun httpEnabledClientCanReadHttpSource() = MockWebServer().use { s ->
         s.enqueue(MockResponse().setBody("ok")); assertEquals("ok", Transport.read(s.url("/").toString(), true) { i, _ -> i.reader().readText() })
     }
-    @Test fun httpsOnlyClientRejectsHttpRedirect() = MockWebServer().use { s ->
-        s.enqueue(MockResponse().setResponseCode(302).addHeader("Location", "http://example.com/private"))
-        val e = runCatching { Transport.read(s.url("/").toString().replace("http://", "https://"), false) { _, _ -> Unit } }.exceptionOrNull()
-        assertNotNull(e)
+    @Test fun httpsOnlyClientRejectsHttpRedirect() {
+        val tls = Wp21TlsFixture()
+        MockWebServer().use { http ->
+            MockWebServer().use { https ->
+                https.useHttps(tls.serverSocketFactory, false)
+                http.start()
+                https.start()
+                val destination = http.url("/private?token=fixture")
+                // Follow a same-scheme hop before encountering the actual downgrade.
+                https.enqueue(MockResponse().setResponseCode(302).addHeader("Location", "/next"))
+                https.enqueue(MockResponse().setResponseCode(301).addHeader("Location", destination))
+                http.enqueue(MockResponse().setBody("allowed"))
+                tls.client(false).newCall(Request.Builder().url(https.url("/start")).build())
+                    .execute().use { response ->
+                        assertEquals(301, response.code)
+                        assertEquals("/next", response.request.url.encodedPath)
+                        assertTrue(response.request.url.isHttps)
+                        assertEquals(destination.toString(), response.header("Location"))
+                        assertNotNull("TLS must succeed before checking redirect policy", response.handshake)
+                    }
+                assertEquals("/start", https.takeRequest(1, TimeUnit.SECONDS)?.path)
+                assertEquals("/next", https.takeRequest(1, TimeUnit.SECONDS)?.path)
+                assertEquals(2, https.requestCount)
+                assertEquals(0, http.requestCount)
+                // A positive control proves the destination works with source HTTP opt-in.
+                https.enqueue(MockResponse().setResponseCode(301).addHeader("Location", destination))
+                tls.client(true).newCall(Request.Builder().url(https.url("/opted-in")).build())
+                    .execute().use { response ->
+                        assertEquals(200, response.code)
+                        assertEquals(destination, response.request.url)
+                        assertEquals("allowed", response.body?.string())
+                    }
+                assertEquals("/opted-in", https.takeRequest(1, TimeUnit.SECONDS)?.path)
+                assertEquals("/private?token=fixture", http.takeRequest(1, TimeUnit.SECONDS)?.path)
+                assertEquals(1, http.requestCount)
+            }
+        }
     }
     @Test fun redirectsWithoutLocationFailWithSafeMessage() = MockWebServer().use { s ->
         s.enqueue(MockResponse().setResponseCode(301)); val e = runCatching { Transport.read(s.url("/").toString(), true) { _, _ -> Unit } }.exceptionOrNull()
