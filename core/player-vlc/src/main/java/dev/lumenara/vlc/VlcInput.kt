@@ -210,6 +210,12 @@ private constructor(
                             next += read
                             return read
                         } catch (_: IOException) {
+                            // FUSE may retry a failed read (including readahead). Once the
+                            // representation or transport fails, this fd must stay failed;
+                            // another Range could otherwise hang or mix different content.
+                            calls.cancel()
+                            response?.close()
+                            response = null
                             throw ErrnoException("read", OsConstants.EIO)
                         }
                     }

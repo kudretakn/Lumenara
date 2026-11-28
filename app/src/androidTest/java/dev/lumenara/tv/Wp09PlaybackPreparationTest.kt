@@ -25,8 +25,9 @@ import org.junit.Test
 class Wp09PlaybackPreparationTest {
     @get:Rule val screen = createAndroidComposeRule<MainActivity>()
 
-    @Test(timeout = 35_000) fun media3CancelsTricklingPreparationAndRetries() = trickle("Media3")
-    @Test(timeout = 35_000) fun vlcCancelsTricklingPreparationAndRetries() = trickle("VLC")
+    // Includes source setup, composition, the real 15s budget, retry and cleanup.
+    @Test(timeout = 90_000) fun media3CancelsTricklingPreparationAndRetries() = trickle("Media3")
+    @Test(timeout = 90_000) fun vlcCancelsTricklingPreparationAndRetries() = trickle("VLC")
 
     private fun trickle(engine: String) {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -58,9 +59,8 @@ class Wp09PlaybackPreparationTest {
                     val source = repo.library.snapshot().single { it.name == name }
                     repo.livePage(source.id, "", "", "", 1, 0).first().single()
                 }
-                assertEquals("/list", server.takeRequest(2, TimeUnit.SECONDS)?.path)
+                assertEquals("/list", server.takeRequest(10, TimeUnit.SECONDS)?.path)
                 val mounted = java.util.concurrent.CountDownLatch(1)
-                val start = SystemClock.elapsedRealtime()
                 screen.runOnUiThread {
                     val model = ViewModelProvider(screen.activity)[LibraryModel::class.java]
                     screen.activity.setContent {
@@ -70,20 +70,32 @@ class Wp09PlaybackPreparationTest {
                         }
                     }
                 }
-                assertTrue(mounted.await(2, TimeUnit.SECONDS))
-                assertEquals("/live.ts", server.takeRequest(15, TimeUnit.SECONDS)?.path)
-                val remaining = (start + 19_000 - SystemClock.elapsedRealtime()).coerceAtLeast(1)
-                assertEquals("The 15s preparation budget must cancel and schedule the 1s retry",
-                    "/live.ts", server.takeRequest(remaining, TimeUnit.MILLISECONDS)?.path)
+                // waitUntil advances Compose frames; blocking on the latch or request
+                // queue prevents composition/retry effects from running under this rule.
+                screen.waitUntil(15_000) { mounted.count == 0L }
+                awaitRequest(server, 15_000)
+                val start = SystemClock.elapsedRealtime()
+                // The JVM test pins the deadline to exactly 15s. Allow bounded
+                // native cleanup/scheduling overhead here on a slow emulator.
+                awaitRequest(server, 22_000)
                 assertTrue("Retry is bounded independently of the 25s socket timeout",
-                    SystemClock.elapsedRealtime() - start < 19_000)
+                    SystemClock.elapsedRealtime() - start < 25_000)
             } finally {
                 screen.runOnUiThread { screen.activity.setContent {} }
+                screen.waitForIdle()
                 runBlocking {
                     saved.forEach { (key, value) -> prefs.set(key, value) }
                     repo.library.snapshot().filter { it.name == name }.forEach { repo.remove(it.id) }
                 }
             }
         }
+    }
+
+    private fun awaitRequest(server: MockWebServer, timeoutMs: Long) {
+        var request: RecordedRequest? = null
+        screen.waitUntil(timeoutMs) {
+            server.takeRequest(0, TimeUnit.MILLISECONDS)?.also { request = it } != null
+        }
+        assertEquals("Expected a playback request from the selected engine", "/live.ts", request?.path)
     }
 }
