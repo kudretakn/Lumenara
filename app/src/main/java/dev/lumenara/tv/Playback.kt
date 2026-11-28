@@ -57,6 +57,7 @@ internal fun Video(
     liveUrls: LiveUrlCache? = null,
     livePlaying: () -> Unit = {},
     ownership: PlaybackOwnership? = null,
+    subtitleDelayMs: Long = 0,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val owner = LocalLifecycleOwner.current
@@ -379,17 +380,39 @@ internal fun Video(
         }
     }
     var appliedSubtitleDelayUs by remember(item.id) { mutableLongStateOf(0L) }
-    LaunchedEffect(player, shiftedSubtitles) {
+    LaunchedEffect(player, binding, shiftedSubtitles, subtitleDelayMs) {
         val engine = player ?: return@LaunchedEffect
         if (preview || multi) return@LaunchedEffect
         withContext(Dispatchers.Main.immediate) {
             val period = androidx.media3.common.Timeline.Period()
-            wallClockTicks(50).collect {
-                requireMainThread()
-                val windowOffsetUs = if (engine.currentTimeline.isEmpty) 0L else
-                    engine.currentTimeline.getPeriod(engine.currentPeriodIndex, period).positionInWindowUs
-                shiftedSubtitles.render(engine.currentPosition * 1000 - windowOffsetUs)
-                appliedSubtitleDelayUs = shiftedSubtitles.appliedDelayUs
+            var revision = 0L
+            fun clockState(): Wp14SubtitleClockState {
+                val owned = session.owns(binding, engine.currentMediaItem?.mediaId)
+                return Wp14SubtitleClockState(owned && engine.currentTracks.groups.any {
+                    it.type == C.TRACK_TYPE_TEXT && it.isSelected
+                }, owned && engine.isPlaying, revision++)
+            }
+            val clockEvents = kotlinx.coroutines.flow.MutableStateFlow(clockState())
+            val listener = object : Player.Listener {
+                override fun onEvents(player: Player, events: Player.Events) {
+                    if (session.owns(binding, engine.currentMediaItem?.mediaId))
+                        clockEvents.value = clockState()
+                }
+            }
+            engine.addListener(listener)
+            try {
+                val changes = kotlinx.coroutines.flow.combine(clockEvents, shiftedSubtitles.changes) { state, revision ->
+                    state.copy(revision = state.revision + revision)
+                }
+                wp14SubtitleClock(changes) {
+                    requireMainThread()
+                    val windowOffsetUs = if (engine.currentTimeline.isEmpty) 0L else
+                        engine.currentTimeline.getPeriod(engine.currentPeriodIndex, period).positionInWindowUs
+                    shiftedSubtitles.render(engine.currentPosition * 1000 - windowOffsetUs)
+                    appliedSubtitleDelayUs = shiftedSubtitles.appliedDelayUs
+                }
+            } finally {
+                engine.removeListener(listener)
             }
         }
     }
@@ -476,6 +499,7 @@ internal fun Playback(
     var channelQuery by remember { mutableStateOf("") }
     var category by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
+    val episodeCatalog = rememberWp14SeriesCatalog(if (item.kind == "EPISODE") group else emptyList())
     val zap = remember(scope) { LiveZapController<Pair<Item, List<Item>>>(scope, targetId = { it.first.id }) }
     SideEffect { zap.synchronize(item.id) }
     DisposableEffect(zap) { onDispose { zap.cancel(); Perf.zapCancel() } }
@@ -508,12 +532,8 @@ internal fun Playback(
     }
     var sleepTimerVersion by remember { mutableIntStateOf(0) }
     val currentSleepTimerExpired by rememberUpdatedState(sleepTimerExpired)
-    LaunchedEffect(activeSleepTimer) {
-        while (true) {
-            kotlinx.coroutines.delay(1000)
-            sleepTimerVersion++
-            if (activeSleepTimer.poll()) currentSleepTimerExpired()
-        }
+    LaunchedEffect(activeSleepTimer, sleepTimerVersion) {
+        wp14SleepTimerWake(activeSleepTimer, { sleepTimerVersion++ }, { currentSleepTimerExpired() })
     }
     val sleepCountdown = sleepTimerVersion.let { activeSleepTimer.showCountdown() }
     LaunchedEffect(sleepCountdown) { if (sleepCountdown) { panel = false; multi = emptyList() } }
@@ -538,7 +558,7 @@ internal fun Playback(
     val fullscreen = rememberFullscreenState(item)
     fun episodeEnded() {
         if (activeSleepTimer.episodeEnded()) sleepTimerExpired()
-        else if (item.kind == "EPISODE") fullscreen.finished = group.nextItem(item) != null
+        else if (item.kind == "EPISODE") fullscreen.finished = episodeCatalog?.neighbor(item.id, 1) != null
     }
     var subtitle by remember(item.id) { mutableStateOf<MediaItem.SubtitleConfiguration?>(null) }
     var preferenceKey by remember(item.id) { mutableStateOf("") }
@@ -569,9 +589,11 @@ internal fun Playback(
             }, start = { (channel, rows) -> selectChannel(channel, rows, queued = true) })
             return
         }
-        if (item.kind == "EPISODE" && delta == 1) group.nextItem(item)?.let(select)
-        else {
-            val rows = if (item.kind == "EPISODE") group.seriesOrder() else group
+        if (item.kind == "EPISODE") scope.launch {
+            val rows = episodeCatalog ?: wp14SeriesCatalog(group)
+            rows.neighbor(item.id, delta)?.let(select)
+        } else {
+            val rows = group
             val at = rows.indexOfFirst { it.id == item.id }
             if (at >= 0) rows.getOrNull(at + delta)?.let(select)
         }
@@ -621,6 +643,7 @@ internal fun Playback(
             delayReady = preferenceKey.isNotEmpty(),
             changeSubtitleDelay = ::changeSubtitleDelay,
             ownership = ownership,
+            seriesCatalog = episodeCatalog,
         )
         return
     }
@@ -629,7 +652,7 @@ internal fun Playback(
     } else null
     val retry = rememberLiveRetry(item.id)
     val playerUi by rememberPlayerUiState(engine,
-        visible = panel || !fullscreen.guide && !sleepCountdown && fullscreen.bannerUntil > fullscreen.now)
+        visible = panel || !fullscreen.guide && !fullscreen.finished && !sleepCountdown && fullscreen.bannerVisible)
     val subtitleSearch = rememberSubtitleSearchState(model, item, status = { subtitleNotice = it }) {
         subtitle = it
         panel = false
@@ -690,6 +713,7 @@ internal fun Playback(
             ownership = ownership,
             subtitle = subtitle,
             subtitleDelayUs = subtitleDelay,
+            subtitleDelayMs = delayMs,
             liveUrls = liveUrls,
             livePlaying = { playingLive = true },
             decoderFailure = { pos ->
@@ -707,11 +731,11 @@ internal fun Playback(
             { channel, rows -> selectChannel(channel, rows) },
             { panel = true },
             playerUi.position, playerUi.duration,
-            if (item.kind == "EPISODE" && group.nextItem(item) != null)
-                ({ move(1) }) else null)
+            if (item.kind == "EPISODE" && episodeCatalog?.neighbor(item.id, 1) != null)
+                ({ move(1) }) else null, episodeCatalog = episodeCatalog)
         numbers?.let { NumberEntry(it) }
         SubtitleNotice(subtitleNotice) { subtitleNotice = "" }
-        SleepTimerCard(activeSleepTimer, sleepTimerVersion) {
+        SleepTimerCard(activeSleepTimer, sleepTimerVersion, { sleepTimerVersion++ }) {
             activeSleepTimer.cancel()
             sleepTimerVersion++
         }
@@ -777,7 +801,7 @@ internal fun Playback(
                         }
                         if (snapshot != null)
                             model.repo.updateMark(item.id) { it.copy(position = snapshot.first, duration = snapshot.second) }
-                        if (version.kind == "EPISODE") changeGroup(model.repo.episodeSnapshot(version.parent).seriesOrder())
+                        if (version.kind == "EPISODE") changeGroup(wp14SeriesCatalog(model.repo.episodeSnapshot(version.parent)).items)
                         select(version)
                     }
                 } }
@@ -975,6 +999,7 @@ internal fun SleepTimerChoices(
 internal fun androidx.compose.foundation.layout.BoxScope.SleepTimerCard(
     timer: dev.lumenara.catalog.SleepTimer,
     version: Int,
+    changed: () -> Unit,
     cancel: () -> Unit,
 ) {
     @Suppress("UNUSED_VARIABLE") val refresh = version
@@ -989,7 +1014,7 @@ internal fun androidx.compose.foundation.layout.BoxScope.SleepTimerCard(
     ) {
         Text("Lumenara $seconds sn sonra duracak")
         Button(onClick = cancel, modifier = Modifier.focusRequester(cancelFocus)) { Text("İptal (OK)") }
-        Button(onClick = { timer.addFifteenMinutes() }) { Text("+15 dk") }
+        Button(onClick = { timer.addFifteenMinutes(); changed() }) { Text("+15 dk") }
     }
 }
 

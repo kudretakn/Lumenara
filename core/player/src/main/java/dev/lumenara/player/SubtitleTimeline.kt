@@ -11,9 +11,10 @@ internal class SubtitleTimeline<T>(private val merge: Boolean) {
         else entries[start] = mutableListOf(value)
     }
 
-    fun at(time: Long): List<T> = if (merge)
-        entries.headMap(time, true).values.flatten().filter { time < it.end }.flatMap { it.cues }
-    else entries.floorEntry(time)?.value?.lastOrNull()?.takeIf { time < it.end }?.cues.orEmpty()
+    fun at(time: Long): List<T> = if (merge) buildList {
+        for (group in entries.headMap(time, true).values)
+            for (entry in group) if (time < entry.end) addAll(entry.cues)
+    } else entries.floorEntry(time)?.value?.lastOrNull()?.takeIf { time < it.end }?.cues.orEmpty()
 
     fun prune(before: Long) {
         val floor = entries.floorKey(before) ?: return
