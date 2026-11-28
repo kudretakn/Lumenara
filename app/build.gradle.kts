@@ -17,13 +17,54 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures { compose = true; buildConfig = true }
-    buildTypes { getByName("debug") { applicationIdSuffix = ".debug" } }
-    // Android TV boxes are ARM; x86 libs (~110 MB of VLC) only serve emulators, which use debug and baseline-profile builds.
+    buildTypes {
+        getByName("debug") { applicationIdSuffix = ".debug" }
+        getByName("release") {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // AGP retains mapping.txt/configuration.txt under build/outputs/mapping/release.
+        }
+        create("qa") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".qa"
+            signingConfig = signingConfigs.getByName("debug")
+            isDebuggable = false
+            matchingFallbacks += "release"
+            proguardFile("proguard-qa-rules.pro")
+            testProguardFiles("proguard-test-rules.pro")
+            // Same optimizer/rules as release; mapping is under build/outputs/mapping/qa.
+        }
+    }
+    // AGP instruments one build type per invocation. Ordinary debug checks stay unchanged.
+    // Lead: -Pwp02.testBuildType=qa :app:assembleQa :app:assembleQaAndroidTest
+    testBuildType = providers.gradleProperty("wp02.testBuildType").getOrElse("debug").also {
+        require(it == "debug" || it == "qa") { "wp02.testBuildType must be debug or qa" }
+    }
+    if (testBuildType == "qa") {
+        // Black-box QA tests do not keep app implementation APIs alive just for instrumentation.
+        sourceSets.getByName("androidTest") {
+            java.setSrcDirs(listOf("src/androidTestQa/java"))
+            kotlin.setSrcDirs(listOf("src/androidTestQa/java"))
+        }
+    }
+    // Android TV boxes are ARM; x86 libraries serve debug/profile collection and optimized QA.
     androidComponents.onVariants(androidComponents.selector().withBuildType("release")) { variant ->
         variant.packaging.jniLibs.excludes.addAll(listOf("lib/x86/**", "lib/x86_64/**"))
     }
+    androidComponents.onVariants(androidComponents.selector().withBuildType("qa")) { variant ->
+        variant.packaging.jniLibs.excludes.addAll(listOf("lib/armeabi-v7a/**", "lib/arm64-v8a/**"))
+    }
     sourceSets.getByName("androidTest").assets.srcDir(rootProject.file("core/data/schemas"))
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
+}
+// Opt in for WP17's stability review; no stability allowlist or compiler behavior changes.
+// Lead: -Pwp02.composeReports=true :app:assembleRelease
+composeCompiler {
+    if (providers.gradleProperty("wp02.composeReports").getOrElse("false").toBooleanStrict()) {
+        reportsDestination = layout.buildDirectory.dir("reports/compose/reports")
+        metricsDestination = layout.buildDirectory.dir("reports/compose/metrics")
+    }
 }
 baselineProfile {
     automaticGenerationDuringBuild = false
