@@ -1,9 +1,12 @@
 package dev.lumenara.tv
 
+import android.app.Activity
 import android.app.SearchManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.database.sqlite.SQLiteDatabase
+import android.net.ConnectivityManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Process
@@ -11,6 +14,8 @@ import android.os.SystemClock
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
+import androidx.test.runner.lifecycle.Stage
 import androidx.test.uiautomator.UiDevice
 import java.util.UUID
 import okhttp3.mockwebserver.Dispatcher
@@ -87,8 +92,12 @@ class Wp02OptimizedSmokeTest {
             val wrapped = context.getSharedPreferences("vault", 0).getString("data-key", null)
             assertFalse("Vault must retain a wrapped data key", wrapped.isNullOrEmpty())
 
-            // Age only our fixture, then recreate the Activity/ViewModel. The real startup
-            // path queues a stale-source check. Foreground refresh defers, so a successful
+            // Finish the old Activity before starting a fresh Activity/ViewModel. CLEAR_TASK
+            // can start the replacement before the old onStop, which resets RefreshGate's
+            // global foreground flag and leaves startup idle work waiting indefinitely.
+            finishActivity()
+            // Age only our fixture. The real startup path queues a stale-source check.
+            // Foreground refresh defers, so a successful
             // startup-refresh plus an enqueued deferred-refresh proves default WorkerFactory
             // + doWork; the five-minute follow-up itself should not run during this wait.
             SQLiteDatabase.openDatabase(context.getDatabasePath("lumenara.db").path, null,
@@ -98,10 +107,14 @@ class Wp02OptimizedSmokeTest {
                     assertEquals(1, statement.executeUpdateDelete())
                 }
             }
+            assertEquals("Fixture must be stale by the app's elapsed-time rule", "0",
+                scalar("SELECT refreshed FROM sources WHERE id = ?", sourceId))
             val scheduledAfter = System.currentTimeMillis().toString()
-            launch(recreate = true)
-            await("recreated Hub") { nodeWithTag("hub") != null }
-            await("successful worker and deferred follow-up", 45_000) {
+            var lastWorkQueryError: Throwable? = null
+            val diagnostics = { workerDiagnostics(sourceId, scheduledAfter, lastWorkQueryError) }
+            launch()
+            await("recreated Hub", onTimeout = diagnostics) { nodeWithTag("hub") != null }
+            await("successful worker and deferred follow-up", 45_000, onTimeout = diagnostics) {
                 // WorkManager 2.11.1 opens its database in no_backup, not databases/.
                 val database = java.io.File(context.noBackupFilesDir, "androidx.work.workdb")
                 database.exists() && runCatching { readScalar(database.path,
@@ -110,9 +123,11 @@ class Wp02OptimizedSmokeTest {
                         AND w.state = 2 AND w.last_enqueue_time >= CAST(? AS INTEGER)
                         AND EXISTS (SELECT 1 FROM WorkSpec d JOIN WorkName dn ON dn.work_spec_id = d.id
                             WHERE dn.name = 'deferred-refresh' AND d.worker_class_name = ?
+                            AND d.state IN (0, 4) AND d.initial_delay > 0
                             AND d.last_enqueue_time >= CAST(? AS INTEGER)) LIMIT 1""",
                     "dev.lumenara.data.RefreshWorker", scheduledAfter,
-                    "dev.lumenara.data.RefreshWorker", scheduledAfter) }.getOrNull() != null
+                    "dev.lumenara.data.RefreshWorker", scheduledAfter) }
+                    .onFailure { lastWorkQueryError = it }.getOrNull() != null
             }
 
             val beforeMedia3 = frameCount("media3")
@@ -154,11 +169,28 @@ class Wp02OptimizedSmokeTest {
         }
     }
 
-    private fun launch(recreate: Boolean = false) {
+    private fun finishActivity() {
+        val monitor = ActivityLifecycleMonitorRegistry.getInstance()
+        lateinit var previous: Activity
+        instrumentation.runOnMainSync {
+            previous = monitor.getActivitiesInStage(Stage.RESUMED).single {
+                it.componentName.className == "dev.lumenara.tv.MainActivity"
+            }
+            previous.finish()
+        }
+        await("old Activity destruction") {
+            var destroyed = false
+            instrumentation.runOnMainSync {
+                destroyed = monitor.getLifecycleStageOf(previous) == Stage.DESTROYED
+            }
+            destroyed
+        }
+    }
+
+    private fun launch() {
         context.startActivity(Intent(Intent.ACTION_MAIN)
             .setClassName(context.packageName, "dev.lumenara.tv.MainActivity")
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or
-                if (recreate) Intent.FLAG_ACTIVITY_CLEAR_TASK else 0))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
     private fun openSources() {
@@ -233,6 +265,47 @@ class Wp02OptimizedSmokeTest {
             }
         }
 
+    private fun workerDiagnostics(sourceId: String, scheduledAfter: String, queryError: Throwable?): String =
+        buildString {
+            appendLine("scheduledAfter=$scheduledAfter now=${System.currentTimeMillis()}")
+            appendLine("source.refreshed=" + runCatching {
+                scalar("SELECT refreshed FROM sources WHERE id = ?", sourceId) ?: "<source missing>"
+            }.getOrElse { "<read failed: $it>" })
+            appendLine("last WorkSpec polling error=${queryError ?: "<none>"}")
+            appendLine("network=" + runCatching {
+                val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                "active=${manager.activeNetwork} capabilities=${manager.getNetworkCapabilities(manager.activeNetwork)}"
+            }.getOrElse { "<read failed: $it>" })
+            val file = java.io.File(context.noBackupFilesDir, "androidx.work.workdb")
+            appendLine("WorkManager database=${file.path} exists=${file.exists()}")
+            if (file.exists()) append(runCatching {
+                SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY).use { database ->
+                    // Dump every persisted column, including all embedded Constraints fields
+                    // and network/content-trigger blobs. Read the live database with its WAL.
+                    database.rawQuery("""SELECT w.*,
+                        (SELECT GROUP_CONCAT(n.name, ',') FROM WorkName n WHERE n.work_spec_id = w.id) AS unique_names
+                        FROM WorkSpec w WHERE w.worker_class_name = ? OR w.id IN
+                        (SELECT work_spec_id FROM WorkName WHERE name IN ('iptv', 'startup-refresh', 'deferred-refresh'))
+                        ORDER BY w.last_enqueue_time, w.id""", arrayOf("dev.lumenara.data.RefreshWorker")).use { cursor ->
+                        buildString {
+                            appendLine("Relevant WorkSpec rows=${cursor.count} (state: 0=ENQUEUED, 1=RUNNING, 2=SUCCEEDED, 3=FAILED, 4=BLOCKED, 5=CANCELLED)")
+                            while (cursor.moveToNext()) {
+                                appendLine((0 until cursor.columnCount).joinToString(prefix = "{", postfix = "}") { column ->
+                                    val value = when (cursor.getType(column)) {
+                                        android.database.Cursor.FIELD_TYPE_NULL -> "NULL"
+                                        android.database.Cursor.FIELD_TYPE_BLOB -> "0x" + cursor.getBlob(column)
+                                            .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+                                        else -> cursor.getString(column)
+                                    }
+                                    "${cursor.getColumnName(column)}=$value"
+                                })
+                            }
+                        }
+                    }
+                }
+            }.getOrElse { "<WorkSpec dump failed: $it>" })
+        }
+
     private fun frameCount(engine: String) = device.executeShellCommand(
         "logcat -d --pid=${Process.myPid()} -s LumenaraPerf:I '*:S'"
     ).lineSequence().count { it.contains("zap_first_frame ") && it.contains("engine=$engine") }
@@ -240,12 +313,12 @@ class Wp02OptimizedSmokeTest {
     private fun awaitFrame(engine: String, before: Int) =
         await("$engine decoded frame", 30_000) { frameCount(engine) > before }
 
-    private fun await(label: String, timeout: Long = 15_000, ready: () -> Boolean) {
+    private fun await(label: String, timeout: Long = 15_000, onTimeout: () -> String = { "" }, ready: () -> Boolean) {
         val deadline = SystemClock.uptimeMillis() + timeout
         while (SystemClock.uptimeMillis() < deadline) {
             if (ready()) return
             SystemClock.sleep(100)
         }
-        fail("Timed out waiting for $label")
+        fail("Timed out waiting for $label\n${onTimeout()}")
     }
 }
