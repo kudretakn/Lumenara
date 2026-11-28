@@ -18,6 +18,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.focus.FocusRequester
@@ -37,9 +39,11 @@ import kotlinx.coroutines.flow.*
 @Composable
 internal fun Poster(model: LibraryModel, item: Item, modifier: Modifier,
     allowHttp: Boolean? = null, width: Int = 0, height: Int = 0) {
-    val image by produceState<String?>(null, item.id, item.logo) { value = model.repo.poster(item) }
-    Artwork(model, item.copy(title = item.cleanTitle.ifEmpty { item.title }), image, modifier, contentScale = ContentScale.Crop,
-        allowHttp = allowHttp, width = width, height = height)
+    // Keep the outer paging slot stable, but discard the previous item's resolver and painter.
+    Wp05PosterImage(item, { model.repo.poster(item) }) { image ->
+        Artwork(model, item.copy(title = item.cleanTitle.ifEmpty { item.title }), image, modifier, contentScale = ContentScale.Crop,
+            allowHttp = allowHttp, width = width, height = height)
+    }
 }
 
 /** Hub shelves keep their text stationary while the 16:9 image receives focus. */
@@ -112,9 +116,9 @@ private fun HubChannelShelf(
     HubShelf("SON KANAL", "channel-shelf-Son kanal") {
         items(rows, key = { it.id }) { item ->
             val current = programmes[item.id]
-            val logo by produceState<String?>(null, item.id, item.logo) {
+            val logo = wp05ResolvedHubImage(item.id, item.logo) {
                 model.awaitFirstDraw()
-                value = model.repo.poster(item)
+                Wp05HubImage(model.repo.poster(item))
             }
             Column(Modifier.width(150.dp), verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
                 HubShelfTile(item, { play(item, rows) }, focus,
@@ -156,11 +160,10 @@ private fun HubResumeShelf(model: LibraryModel, rows: List<Item>, open: (Item) -
                 model.repo.library.observeMark(item.id)
             }.collectAsStateWithLifecycle(null)
             val mark = if (item.kind == "SERIES") marks.firstOrNull { it.id == continuing?.id } else observedMark
-            val backdrop by produceState<String?>(null, item.id, item.backdrop, item.logo) {
+            val backdrop = wp05ResolvedHubImage(item.id, item.backdrop, item.logo) {
                 model.awaitFirstDraw()
                 // Listing backdrops can be absent even when a provider poster is available.
-                value = model.repo.backdrop(item)?.takeIf(String::isNotBlank)
-                    ?: model.repo.poster(item)?.takeIf(String::isNotBlank)
+                wp05ResolveHubImage({ model.repo.backdrop(item) }, { model.repo.poster(item) })
             }
             val episode = continuing?.seriesEpisode()
             val remaining = mark?.takeIf { it.duration > 0 }?.let {
@@ -186,26 +189,28 @@ private fun HubResumeShelf(model: LibraryModel, rows: List<Item>, open: (Item) -
     }
 }
 
-/** Local 16:9 fallback; the shared poster fallback and shared channel cards belong to D1/D3. */
+/** Address resolution, loader initialization and Coil loading are all pending artwork. */
 @Composable
-private fun HubArtwork(model: LibraryModel, item: Item, address: String?, channel: Boolean = false) {
+private fun HubArtwork(model: LibraryModel, item: Item, image: Wp05HubImage?, channel: Boolean = false) {
     val drawn by model.firstDrawn.collectAsStateWithLifecycle()
     val artworkReady by (LocalContext.current.applicationContext as LumenaraApp)
         .hubArtworkReady.collectAsStateWithLifecycle()
-    // Text tiles are part of the first draw, even before Coil or decryption is ready.
-    if (channel) {
-        ChannelLogo(model, item, address.takeIf { drawn && artworkReady }, Modifier.fillMaxSize())
-        return
-    }
-    Box(Modifier.fillMaxSize().background(LumenColors.surface2), contentAlignment = Alignment.BottomStart) {
-        Text(item.title, Modifier.padding(Spacing.cardGap), style = LumenType.label,
-            color = LumenColors.textPrimary, maxLines = 3, overflow = TextOverflow.Ellipsis)
-        LumenIcon(if (item.kind == "SERIES") LumenIcon.Series else LumenIcon.Film,
-            contentDescription = null, modifier = Modifier.align(Alignment.TopEnd).padding(Spacing.cardGap),
-            tint = LumenColors.textPrimary.copy(alpha = .4f))
-        if (drawn && artworkReady && address != null) {
-            Artwork(model, item, address, Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop, role = "backdrop")
+    val showImage = drawn && artworkReady && image?.address != null
+    key(item.id) {
+        val pendingModifier = if (!showImage) Modifier.wp05HubImageDraw(image, image != null && image.address == null)
+            else Modifier
+        if (channel) {
+            if (showImage) Wp05HubChannelArtwork(model, item, checkNotNull(image?.address))
+            else ChannelLogo(model, item, null, Modifier.fillMaxSize().then(pendingModifier))
+        } else Box(Modifier.fillMaxSize().then(pendingModifier).background(LumenColors.surface2),
+            contentAlignment = Alignment.BottomStart) {
+            Text(item.title, Modifier.padding(Spacing.cardGap), style = LumenType.label,
+                color = LumenColors.textPrimary, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            LumenIcon(if (item.kind == "SERIES") LumenIcon.Series else LumenIcon.Film,
+                contentDescription = null, modifier = Modifier.align(Alignment.TopEnd).padding(Spacing.cardGap),
+                tint = LumenColors.textPrimary.copy(alpha = .4f))
+            if (showImage) Artwork(model, item, image?.address, Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop, role = checkNotNull(image).role, showFallback = false)
         }
     }
 }
@@ -218,15 +223,18 @@ private fun HubNavigationCard(
 ) {
     val artworkReady by (LocalContext.current.applicationContext as LumenaraApp)
         .hubArtworkReady.collectAsStateWithLifecycle()
-    val backdrop by produceState<String?>(null, artworkItem?.id, artworkItem?.backdrop) {
+    val backdrop = wp05ResolvedHubImage(artworkItem?.id, artworkItem?.backdrop) {
         model.awaitFirstDraw()
         // Only a real wide image is eligible; never substitute a channel logo or poster.
-        value = artworkItem?.let { model.repo.backdrop(it) }
+        Wp05HubImage(artworkItem?.let { model.repo.backdrop(it) }?.takeIf(String::isNotBlank), "backdrop")
     }
-    FocusCard(click, modifier, focusedScale = Motion.hubFocusScale) {
-        if (!compact && backdrop != null && artworkReady) {
+    val pendingImage = !compact && (backdrop == null || (backdrop?.address != null && !artworkReady))
+    val trackedModifier = if (!compact && (pendingImage || backdrop?.address == null))
+        modifier.wp05HubImageDraw(artworkItem?.id, !pendingImage) else modifier
+    FocusCard(click, trackedModifier, focusedScale = Motion.hubFocusScale) {
+        if (!compact && backdrop?.address != null && artworkReady) {
             Box(Modifier.fillMaxSize().clip(RoundedCornerShape(Radii.card))) {
-                Artwork(model, artworkItem, backdrop, Modifier.align(Alignment.CenterEnd).fillMaxHeight().fillMaxWidth(.6f),
+                Artwork(model, artworkItem, backdrop?.address, Modifier.align(Alignment.CenterEnd).fillMaxHeight().fillMaxWidth(.6f),
                     contentScale = ContentScale.Crop, role = "backdrop")
                 Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(
                     LumenColors.surface2, LumenColors.surface2.copy(alpha = .65f),
@@ -289,6 +297,8 @@ internal fun Home(
     // Capture whether shelves were part of this composition, before draw mutates the state.
     val shelvesComposed = shellDrawn
     val shellReported = remember { booleanArrayOf(false) }
+    val hubDraw = remember(source) { Wp05HubDraw() }
+    var hasHubFocus by remember(source) { mutableStateOf(false) }
     val update by model.update.collectAsStateWithLifecycle()
     var focused by rememberSaveable { mutableStateOf(lastCard) }
     val entry = remember { FocusRequester() }
@@ -314,94 +324,101 @@ internal fun Home(
             restored = true
         }
     }
-    LazyColumn(Modifier.fillMaxSize().testTag("hub").reportScrollPosition(list).focusRestorer().focusGroup().drawWithContent {
-        drawContent()
-        if (!shellReported[0]) {
-            shellReported[0] = true
-            Perf.elapsed("startup", "startup_hub_shell_first_draw")
-        }
-        // Observe the populated draw itself. Waiting for two Choreographer callbacks
-        // overstates drawing by whole delayed frames when Main is busy composing rows.
-        if (!shellDrawn) shellDrawn = true
-        if (rowsReady && shelvesComposed && !rowsDrawn) {
-            Perf.since("startup", "startup_hub_first_draw")
-            rowsDrawn = true
-            model.onFirstDraw()
-        }
-    }, state = list,
-        contentPadding = PaddingValues(bottom = Spacing.shelfGap),
-        verticalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
-        item {
-            Row(Modifier.fillMaxWidth().height(45.dp),
-                verticalAlignment = Alignment.CenterVertically) {
-                LumenaraLogo(showName = true)
-                Spacer(Modifier.weight(1f))
-                Box(Modifier.widthIn(max = 480.dp)) { sourceSelector() }
+    CompositionLocalProvider(LocalWp05HubDraw provides hubDraw) {
+        LazyColumn(Modifier.fillMaxSize().testTag("hub").reportScrollPosition(list)
+            .onFocusChanged { hasHubFocus = it.hasFocus }.focusRestorer().focusGroup()
+            .onGloballyPositioned { hubDraw.viewport = it.boundsInWindow() }.drawWithContent {
+            drawContent()
+            if (!shellReported[0]) {
+                shellReported[0] = true
+                Perf.hubDraw("startup_hub_shell_first_draw")
             }
-        }
-        items(2) { row ->
-            Row(Modifier.padding(bottom = if (row == 1) Spacing.cardGap else 0.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                repeat(3) { column ->
-                    val index = row * 3 + column
-                    val name = cards[index]
-                    val caption = if (index < 3 && counts[index] != null) {
-                        val number = java.text.NumberFormat.getIntegerInstance(java.util.Locale.forLanguageTag("tr"))
-                            .format(counts[index] ?: 0)
-                        "$number " + listOf("kanal", "film", "dizi")[index]
-                    } else ""
-                    // Measure the grid slot independently of the card's focus transform.
-                    Box(Modifier.weight(1f).height(if (row == 0) 100.dp else 40.dp)
-                        .testTag("hub-slot-$name")) {
-                        HubNavigationCard(model, name, caption,
-                            listOf(LumenIcon.Tv, LumenIcon.Film, LumenIcon.Series, LumenIcon.Bookmark, LumenIcon.Search, LumenIcon.Settings)[index],
-                            Modifier.fillMaxSize()
-                                .testTag("hub-$name").semantics {
-                                    contentDescription = name
-                                    if (name == "Ayarlar" && update != null) stateDescription = "Güncelleme hazır"
-                                }.then(if (name == target) Modifier.focusRequester(entry) else Modifier)
-                                .onFocusChanged { if (it.isFocused) focused = name },
-                            update = name == "Ayarlar" && update != null,
-                            compact = row == 1,
-                            loading = index < 3 && counts[index] == null,
-                            artworkItem = when (index) {
-                                0 -> recent.firstOrNull()
-                                1 -> resume.firstOrNull { it.kind == "MOVIE" }
-                                2 -> resume.firstOrNull { it.kind == "SERIES" }
-                                else -> null
-                            },
-                        ) { navigate(name) }
+            // Observe the populated draw itself. Waiting for two Choreographer callbacks
+            // overstates drawing by whole delayed frames when Main is busy composing rows.
+            if (!shellDrawn) shellDrawn = true
+            if (rowsReady && shelvesComposed && !rowsDrawn) {
+                // Legacy name remains the shelf gate; it is never full-Hub acceptance.
+                Perf.hubDraw("startup_hub_first_draw")
+                Perf.hubDraw("startup_hub_shelves_draw")
+                rowsDrawn = true
+                model.onFirstDraw()
+            }
+            hubDraw.onDraw(rowsReady && shelvesComposed, scopedTotals != null, hasHubFocus, Perf::hubDraw)
+        }, state = list,
+            contentPadding = PaddingValues(bottom = Spacing.shelfGap),
+            verticalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
+            item {
+                Row(Modifier.fillMaxWidth().height(45.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    LumenaraLogo(showName = true)
+                    Spacer(Modifier.weight(1f))
+                    Box(Modifier.widthIn(max = 480.dp)) { sourceSelector() }
+                }
+            }
+            items(2) { row ->
+                Row(Modifier.padding(bottom = if (row == 1) Spacing.cardGap else 0.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    repeat(3) { column ->
+                        val index = row * 3 + column
+                        val name = cards[index]
+                        val caption = if (index < 3 && counts[index] != null) {
+                            val number = java.text.NumberFormat.getIntegerInstance(java.util.Locale.forLanguageTag("tr"))
+                                .format(counts[index] ?: 0)
+                            "$number " + listOf("kanal", "film", "dizi")[index]
+                        } else ""
+                        // Measure the grid slot independently of the card's focus transform.
+                        Box(Modifier.weight(1f).height(if (row == 0) 100.dp else 40.dp)
+                            .testTag("hub-slot-$name")) {
+                            HubNavigationCard(model, name, caption,
+                                listOf(LumenIcon.Tv, LumenIcon.Film, LumenIcon.Series, LumenIcon.Bookmark, LumenIcon.Search, LumenIcon.Settings)[index],
+                                Modifier.fillMaxSize()
+                                    .testTag("hub-$name").semantics {
+                                        contentDescription = name
+                                        if (name == "Ayarlar" && update != null) stateDescription = "Güncelleme hazır"
+                                    }.then(if (name == target) Modifier.focusRequester(entry) else Modifier)
+                                    .onFocusChanged { if (it.isFocused) focused = name },
+                                update = name == "Ayarlar" && update != null,
+                                compact = row == 1,
+                                loading = index < 3 && counts[index] == null,
+                                artworkItem = when (index) {
+                                    0 -> recent.firstOrNull()
+                                    1 -> resume.firstOrNull { it.kind == "MOVIE" }
+                                    2 -> resume.firstOrNull { it.kind == "SERIES" }
+                                    else -> null
+                                },
+                            ) { navigate(name) }
+                        }
                     }
                 }
             }
-        }
-        if (recentResult == null) item {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                repeat(4) {
-                    Box(Modifier.width(150.dp).aspectRatio(16f / 9f)
-                        .background(LumenColors.surface2, RoundedCornerShape(Radii.card)).testTag("list-loading"))
+            if (recentResult == null) item {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    repeat(4) {
+                        Box(Modifier.width(150.dp).aspectRatio(16f / 9f)
+                            .background(LumenColors.surface2, RoundedCornerShape(Radii.card)).testTag("list-loading"))
+                    }
                 }
             }
-        }
-        if (resumeResult == null) item {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                repeat(4) {
-                    Box(Modifier.width(180.dp).aspectRatio(16f / 9f)
-                        .background(LumenColors.surface2, RoundedCornerShape(Radii.card)).testTag("list-loading"))
+            if (resumeResult == null) item {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    repeat(4) {
+                        Box(Modifier.width(180.dp).aspectRatio(16f / 9f)
+                            .background(LumenColors.surface2, RoundedCornerShape(Radii.card)).testTag("list-loading"))
+                    }
                 }
             }
-        }
-        if (shelvesComposed && recent.isNotEmpty()) item(key = "recent-live") {
-            HubChannelShelf(model, recent, play, { focused = "recent" })
-        }
-        if (shelvesComposed && resume.isNotEmpty()) item(key = "resume") {
-            Box(Modifier.padding(top = if (recent.isNotEmpty()) Spacing.cardGap else 0.dp)) {
-                HubResumeShelf(model, resume, open, { focused = "resume" })
+            if (shelvesComposed && recent.isNotEmpty()) item(key = "recent-live") {
+                HubChannelShelf(model, recent, play, { focused = "recent" })
             }
-        }
-        if (counts.all { it == 0 }) item {
-            Text("İçerik eklemek için Ayarlar bölümünden IPTV Kaynakları’nı açın.",
-                style = LumenType.body, color = LumenColors.textSecondary)
+            if (shelvesComposed && resume.isNotEmpty()) item(key = "resume") {
+                Box(Modifier.padding(top = if (recent.isNotEmpty()) Spacing.cardGap else 0.dp)) {
+                    HubResumeShelf(model, resume, open, { focused = "resume" })
+                }
+            }
+            if (counts.all { it == 0 }) item {
+                Text("İçerik eklemek için Ayarlar bölümünden IPTV Kaynakları’nı açın.",
+                    style = LumenType.body, color = LumenColors.textSecondary)
+            }
         }
     }
 }

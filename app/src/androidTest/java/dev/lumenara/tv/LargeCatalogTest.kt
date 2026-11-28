@@ -2,8 +2,14 @@ package dev.lumenara.tv
 
 import android.os.SystemClock
 import android.util.Log
+import android.os.Build
+import androidx.room.Room
+import androidx.room.RoomDatabase
+import androidx.room.withTransaction
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.lumenara.data.Item
+import dev.lumenara.data.LibraryDb
+import dev.lumenara.data.Source
 import dev.lumenara.data.Repository
 import dev.lumenara.data.SourceSpec
 import kotlinx.coroutines.flow.first
@@ -17,6 +23,58 @@ import org.junit.Assert.assertSame
 import org.junit.Test
 
 class LargeCatalogTest {
+    @Test
+    fun preparedCountsHaveSubFiftyMillisecondP95With39682Items() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val name = "wp06-count-${System.nanoTime()}.db"
+        val db = Room.databaseBuilder(context, LibraryDb::class.java, name)
+            .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING).build()
+        try {
+            val dao = db.library()
+            db.withTransaction {
+                for (source in listOf("a", "b")) dao.save(Source(source, source, "sealed", false, 0, 0))
+                for (start in 0 until 39_682 step 256) {
+                    dao.save((start until minOf(start + 256, 39_682)).map { id ->
+                        val production = id / 3
+                        val rank = id % 3
+                        val source = if (production % 2 == 0) "a" else "b"
+                        val kind = if (production % 4 < 2) "MOVIE" else "SERIES"
+                        val category = if (rank == 0 && production % 5 == 0) "Adult"
+                            else if (rank == 2) "Alternate" else "Film"
+                        Item("$source:$id", source, "Production $production", category, kind, "", "sealed",
+                            "production $production", 1, "", rating = if (rank == 2) "8.0" else "",
+                            versionKey = "$source|$kind|wp06:$production", isRepresentative = rank == 0,
+                            versionRank = rank)
+                    })
+                }
+                prepareTestCatalog(db)
+            }
+            assertEquals(39_682, dao.count("a") + dao.count("b"))
+            for (source in listOf("", "a")) for (kind in listOf("MOVIE", "SERIES")) {
+                for ((category, hidden) in listOf("" to emptyList(), "" to listOf("Adult"), "Film" to emptyList())) {
+                    val expected = dao.browse(source, kind, category, "", "", Int.MAX_VALUE, hidden = hidden).first().size
+                    suspend fun total() = dao.browseTotal(source, kind, category, "", "", hidden = hidden).first()
+                    repeat(5) { assertEquals(expected, total()) }
+                    val samples = (0 until 40).map {
+                        val start = SystemClock.elapsedRealtimeNanos()
+                        assertEquals(expected, total())
+                        (SystemClock.elapsedRealtimeNanos() - start) / 1_000_000.0
+                    }.sorted()
+                    val p50 = samples[19]
+                    val p95 = samples[37] // nearest rank: ceil(40 * .95) - 1
+                    Log.i("LumenaraBenchmark", "wp=06 rows=39682 api=${Build.VERSION.SDK_INT} " +
+                        "sourceAll=${source.isEmpty()} kind=$kind categorySelected=${category.isNotEmpty()} " +
+                        "adultHidden=${hidden.isNotEmpty()} count=$expected samples=40 " +
+                        "countP50Ms=$p50 countP95Ms=$p95 countMaxMs=${samples.last()}")
+                    assertTrue("Prepared count p95=${p95}ms; API28 acceptance is <50ms", p95 < 50.0)
+                }
+            }
+        } finally {
+            db.close()
+            context.deleteDatabase(name)
+        }
+    }
+
     @Test
     fun homeAndMovieShelvesStayFastWithThirtyThousandMovies() = runBlocking {
         val repo = Repository.get(InstrumentationRegistry.getInstrumentation().targetContext)

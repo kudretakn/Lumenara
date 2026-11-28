@@ -6,6 +6,51 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CatalogPagingQueryTest {
+    @Test fun preparedCountsChooseProductionOrCategoryTotalsAndKeepTheOldCountAsFallback() {
+        for (kind in listOf("MOVIE", "SERIES")) for (category in listOf("", "Films")) {
+            val filter = CatalogFilter(source = "provider", kind = kind, category = category, minRating = 0.0)
+            val prepared = checkNotNull(preparedBrowseCountQuery(filter))
+            assertTrue(prepared.sql.contains(if (category.isEmpty()) "FROM catalog_stats" else "FROM category_counts"))
+            assertTrue(prepared.sql.contains("CAST(i.rating AS REAL)<0"))
+            assertTrue(prepared.sql.contains("phase IN ('normalize','resolve','apply')"))
+            assertTrue(prepared.sql.contains("d.phase!='done'"))
+            val fallback = browseCountQuery(filter)
+            assertTrue(prepared.sql.contains("ELSE (${fallback.sql}) END"))
+            assertEquals(arguments(fallback), arguments(prepared).takeLast(fallback.argCount))
+            assertFalse(prepared.sql.contains("provider"))
+        }
+        val noRating = checkNotNull(preparedBrowseCountQuery(CatalogFilter(kind = "MOVIE")))
+        assertFalse(noRating.sql.contains("CAST(i.rating AS REAL)<0"))
+        assertNotNull(preparedBrowseCountQuery(CatalogFilter(kind = "MOVIE", shelf = "recent")))
+    }
+
+    @Test fun preparedWholeCountsValidateTheExactHiddenPolicyInsteadOfSummingCategories() {
+        val hidden = listOf("Adult", "' OR 1=1 --")
+        val filter = CatalogFilter(source = "provider", kind = "MOVIE", hidden = hidden, minRating = 0.0)
+        val query = checkNotNull(preparedBrowseCountQuery(filter))
+        assertTrue(query.sql.contains("isAdult=1 AND category NOT IN (?, ?)"))
+        assertTrue(query.sql.contains("isAdult=0 AND category IN (?, ?)"))
+        assertTrue(query.sql.contains("FROM catalog_stats WHERE kind=? AND source=? AND showAdult=?"))
+        assertFalse(query.sql.contains(hidden[1]))
+        // Guard bindings precede the total and then the unchanged reference count.
+        val guardArgs = listOf("provider", "provider", "MOVIE") + hidden + listOf("MOVIE", "provider") + hidden + hidden
+        assertEquals(guardArgs + listOf("MOVIE", "provider", 0L) + arguments(browseCountQuery(filter)), arguments(query))
+        val category = checkNotNull(preparedBrowseCountQuery(filter.copy(category = "Films")))
+        assertTrue(category.sql.contains("FROM category_counts WHERE kind=? AND source=? AND category=? AND category NOT IN (?, ?)"))
+        assertFalse(category.sql.contains("isAdult=1"))
+    }
+
+    @Test fun onlySemanticallySupportedPreparedCountsAreConsidered() {
+        val base = CatalogFilter(kind = "MOVIE", minRating = 0.0)
+        for (filter in listOf(base.copy(derived = false), base.copy(kind = ""), base.copy(kind = "LIVE"),
+            base.copy(kind = "EPISODE"), base.copy(query = "needle"), base.copy(year = "2024"),
+            base.copy(genre = "Drama"), base.copy(language = "tr"), base.copy(minRating = -1.0),
+            base.copy(minRating = 7.0), base.copy(shelf = "favorite"), base.copy(shelf = "list"),
+            base.copy(shelf = "resume"), base.copy(shelf = "popular"))) {
+            assertNull(filter.toString(), preparedBrowseCountQuery(filter))
+        }
+    }
+
     @Test fun pendingGridsUseOriginalTitleIndexesAndKeepVersionAndShelfPolicy() {
         for (source in listOf("", "provider")) for (category in listOf("", "Films")) {
             val filter = CatalogFilter(source = source, kind = "MOVIE", category = category,

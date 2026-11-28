@@ -217,8 +217,16 @@ interface LibraryDao {
     @RawQuery(observedEntities = [Item::class, Member::class, VersionBackfillState::class])
     fun memberCatalogRows(query: SupportSQLiteQuery): Flow<List<Item>>
 
-    @RawQuery(observedEntities = [Item::class, Mark::class, VersionBackfillState::class])
+    @RawQuery(observedEntities = [Item::class, VersionBackfillState::class])
     fun catalogCount(query: SupportSQLiteQuery): Flow<Int>
+
+    @RawQuery(observedEntities = [Item::class, Mark::class, VersionBackfillState::class])
+    fun markedCatalogCount(query: SupportSQLiteQuery): Flow<Int>
+
+    // Item/state invalidations also refresh the semantic guards and the legacy fallback.
+    @RawQuery(observedEntities = [Item::class, VersionBackfillState::class, CategoryCount::class, CatalogStat::class,
+        Source::class, CatalogDerivedState::class])
+    fun preparedCatalogCount(query: SupportSQLiteQuery): Flow<Int>
 
     @RawQuery(observedEntities = [Item::class, Mark::class, VersionBackfillState::class])
     fun catalogKinds(query: SupportSQLiteQuery): Flow<List<String>>
@@ -358,9 +366,12 @@ interface LibraryDao {
         else fallbackCategoryCounts(CatalogFilter(source = source, hidden = hidden))
     }
 
-    fun shelfCount(source: String, kind: String, shelf: String, hidden: List<String> = emptyList()): Flow<Int> =
-        catalogCount(shelfCountQuery(CatalogFilter(source = source, kind = kind,
-            shelf = shelf.takeIf { it in listOf("favorite", "list") }.orEmpty(), hidden = hidden)))
+    fun shelfCount(source: String, kind: String, shelf: String, hidden: List<String> = emptyList()): Flow<Int> {
+        val marked = shelf in listOf("favorite", "list")
+        val sql = shelfCountQuery(CatalogFilter(source = source, kind = kind,
+            shelf = shelf.takeIf { marked }.orEmpty(), hidden = hidden))
+        return if (marked) markedCatalogCount(sql) else catalogCount(sql)
+    }
 
     @Upsert suspend fun collection(member: Member)
 
@@ -564,8 +575,14 @@ interface LibraryDao {
     fun browseTotal(source: String, kind: String, category: String, query: String, shelf: String,
         year: String = "", genre: String = "", language: String = "", minRating: Double = 0.0,
         hidden: List<String> = emptyList()): Flow<Int> = withCatalog(source) { ready ->
-        catalogCount(browseCountQuery(CatalogFilter(source, kind, category, query, shelf, year, genre,
-            language, minRating, hidden, derived = ready)))
+        val filter = CatalogFilter(source, kind, category, query, shelf, year, genre,
+            language, minRating, hidden, derived = ready)
+        val prepared = preparedBrowseCountQuery(filter)
+        when {
+            prepared != null -> preparedCatalogCount(prepared)
+            shelf in listOf("favorite", "list", "resume") -> markedCatalogCount(browseCountQuery(filter))
+            else -> catalogCount(browseCountQuery(filter))
+        }
     }
 
     fun browseKinds(source: String, kind: String, category: String, query: String, shelf: String,
