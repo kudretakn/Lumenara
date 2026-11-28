@@ -18,6 +18,14 @@ class MigrationTest {
     fun oldCatalogSurvivesSchemaUpgrade() = verifyUpgrade(1)
 
     @Test
+    fun everyIntermediateAutoMigrationPreservesUserState() {
+        for (version in 2..6) verifyUpgrade(version)
+    }
+
+    @Test
+    fun currentSchemaReopensWithoutChangingUserState() = verifyUpgrade(13)
+
+    @Test
     fun versionSevenUnrefreshedVersionsAreGroupedWithoutLosingStreamsOrMarks() = verifyUpgrade(7)
 
     @Test
@@ -85,6 +93,7 @@ class MigrationTest {
                         versionRank=CASE WHEN id='dub' THEN 0 ELSE 1 END WHERE kind='MOVIE'""")
                 }
                 if (from == 12) db.execSQL("INSERT INTO version_backfill_state VALUES (1,'done','',0,0)")
+                if (from == 13) db.execSQL("INSERT INTO version_backfill_state VALUES (1,'normalize','',0,0)")
                 if (from >= 7) {
                     db.execSQL("INSERT INTO feeds VALUES ('guide','local','opaque')")
                     db.execSQL("INSERT INTO programmes VALUES ('guide','1',100,200,'Program','Description','program')")
@@ -143,6 +152,13 @@ class MigrationTest {
                     assertEquals(listOf("start"), columns)
                 }
                 assertEquals(13, db.openHelper.readableDatabase.version)
+                db.openHelper.readableDatabase.query("PRAGMA foreign_key_check").use { cursor ->
+                    assertTrue("Migration from $from left a foreign key violation", !cursor.moveToFirst())
+                }
+                db.openHelper.readableDatabase.query("PRAGMA integrity_check").use { cursor ->
+                    assertTrue(cursor.moveToFirst())
+                    assertEquals("ok", cursor.getString(0))
+                }
                 db.openHelper.readableDatabase.query("SELECT COUNT(*) FROM restore_pending").use { cursor ->
                     assertTrue(cursor.moveToFirst())
                     assertEquals(0, cursor.getInt(0))
@@ -154,6 +170,23 @@ class MigrationTest {
                 }
             } finally {
                 db.close()
+            }
+            // Validate disk persistence independently of the Room instance that migrated/backfilled.
+            val reopened = Room.databaseBuilder(context, LibraryDb::class.java, name).build()
+            try {
+                runBlocking {
+                    assertEquals(dev.lumenara.data.Mark("item", true, false, 250, 1000, 1), reopened.library().mark("item"))
+                    assertEquals(dev.lumenara.data.Mark("sub", true, true, 100, 1000, 1), reopened.library().mark("sub"))
+                    assertEquals("Test", reopened.library().source("local")?.name)
+                    assertTrue(reopened.library().item("dub") != null)
+                    assertTrue(reopened.library().item("sub") != null)
+                }
+                reopened.openHelper.readableDatabase.query("SELECT COUNT(*) FROM items").use { cursor ->
+                    assertTrue(cursor.moveToFirst())
+                    assertEquals(3, cursor.getInt(0))
+                }
+            } finally {
+                reopened.close()
             }
         } finally {
             context.deleteDatabase(name)
