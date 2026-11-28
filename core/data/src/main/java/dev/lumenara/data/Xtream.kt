@@ -209,9 +209,7 @@ internal class Xtream(private val spec: SourceSpec, private val calls: ImportCal
     fun episodes(info: String, seriesTitle: String): List<Listing> =
         Transport.read(info, spec.allowHttp, calls) { input, _ ->
             val seriesId = info.toHttpUrl().queryParameter("series_id").orEmpty()
-            val seasons =
-                JSONObject(input.reader().readText()).optJSONObject("episodes")
-                    ?: return@read emptyList()
+            val seasons = wp03EpisodeSeasons(JSONObject(input.reader().readText()))
             buildList {
                 for (season in seasons.keys().asSequence().sortedBy { it.toIntOrNull() ?: 0 }) {
                     val episodes = seasons.optJSONArray(season) ?: continue
