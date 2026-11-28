@@ -21,7 +21,8 @@ internal data class BackupSource(val id: String, val name: String, val spec: Sou
 internal data class BackupFeed(val id: String, val source: String, val address: String)
 // Only identities needed for user state are exported, never catalog metadata.
 internal data class BackupItem(val id: String, val source: String, val address: String, val parentAddress: String,
-    val providerId: String = "", val tvgName: String = "", val tvgGroup: String = "")
+    val providerId: String = "", val tvgName: String = "", val tvgGroup: String = "",
+    val kind: String = "", val parentProviderId: String = "")
 internal data class BackupData(
     val settings: List<BackupSetting>,
     val sources: List<BackupSource>,
@@ -111,12 +112,13 @@ internal object BackupCodec {
         values.forEach { put(encode(it)) }
     }
 
-    private fun encode(data: BackupData) = JSONObject().put("version", VERSION)
+    internal fun encode(data: BackupData) = JSONObject().put("version", VERSION)
         .put("settings", rows(data.settings.filter { isBackupSetting(it.name) }) { JSONObject().put("name", it.name).put("type", it.type).put("value", it.value) })
         .put("sources", rows(data.sources) { JSONObject().put("id", it.id).put("name", it.name).put("spec", JSONObject(it.spec.encode())) })
         .put("feeds", rows(data.feeds) { JSONObject().put("id", it.id).put("source", it.source).put("address", it.address) })
         .put("items", rows(data.items) { JSONObject().put("id", it.id).put("source", it.source).put("address", it.address).put("parent", it.parentAddress)
-            .put("providerId", it.providerId).put("tvgName", it.tvgName).put("tvgGroup", it.tvgGroup) })
+            .put("providerId", it.providerId).put("tvgName", it.tvgName).put("tvgGroup", it.tvgGroup)
+            .put("kind", it.kind).put("parentProviderId", it.parentProviderId) })
         .put("marks", rows(data.marks) { JSONObject().put("id", it.id).put("favorite", it.favorite).put("listed", it.listed)
             .put("position", it.position).put("duration", it.duration).put("updated", it.updated) })
         .put("mappings", rows(data.mappings) { JSONObject().put("item", it.item).put("feed", it.feed).put("channel", it.channel) })
@@ -129,7 +131,7 @@ internal object BackupCodec {
         return (0 until rows.length()).map { decode(rows.getJSONObject(it)) }
     }
 
-    private fun decode(json: JSONObject): BackupData {
+    internal fun decode(json: JSONObject): BackupData {
         require(json.get("version") is Int || json.get("version") is Long)
         require(json.getLong("version") == VERSION.toLong()) { "Bu yedek sürümü desteklenmiyor." }
         // org.json getters coerce strings/numbers on Android; enforce the wire schema first.
@@ -146,7 +148,7 @@ internal object BackupCodec {
         table("feeds") { strings(it, "id", "source", "address") }
         table("items") {
             strings(it, "id", "source", "address", "parent")
-            for (field in listOf("providerId", "tvgName", "tvgGroup")) if (it.has(field)) strings(it, field)
+            for (field in listOf("providerId", "tvgName", "tvgGroup", "kind", "parentProviderId")) if (it.has(field)) strings(it, field)
         }
         table("marks") {
             strings(it, "id")
@@ -161,7 +163,8 @@ internal object BackupCodec {
             read(json, "sources") { BackupSource(it.getString("id"), it.getString("name"), SourceSpec.decode(it.getJSONObject("spec").toString())) },
             read(json, "feeds") { BackupFeed(it.getString("id"), it.getString("source"), it.getString("address")) },
             read(json, "items") { BackupItem(it.getString("id"), it.getString("source"), it.getString("address"), it.getString("parent"),
-                it.optString("providerId"), it.optString("tvgName"), it.optString("tvgGroup")) },
+                it.optString("providerId"), it.optString("tvgName"), it.optString("tvgGroup"),
+                it.optString("kind"), it.optString("parentProviderId")) },
             read(json, "marks") { Mark(it.getString("id"), it.getBoolean("favorite"), it.getBoolean("listed"),
                 it.getLong("position"), it.getLong("duration"), it.getLong("updated")) },
             read(json, "mappings") { Mapping(it.getString("item"), it.getString("feed"), it.getString("channel")) },
@@ -196,6 +199,7 @@ internal object BackupCodec {
         require(!setting.name.startsWith("secret_") || setting.type == "string")
         require(setting.name != "show_adult" || setting.type == "boolean")
         require(setting.name != "recent_live" || setting.type == "string")
+        if (setting.name == wp12PendingRestoreSetting) decodeWp12PendingRestores(setting.value)
         when (setting.type) {
             "string" -> Unit
             "boolean" -> setting.value.toBooleanStrict()
@@ -217,8 +221,7 @@ internal class BackupStore(
     private val preferences: Preferences,
     private val metadata: Metadata,
     private val restoreTransaction: RestoreTransaction,
-    private val refresh: suspend (Source, SourceSpec) -> Unit,
-    private val expand: suspend (Item) -> List<Item>,
+    private val prepare: suspend (Source, SourceSpec, List<BackupItem>) -> Wp12PreparedCatalog,
     private val refreshGuides: suspend (Source) -> Unit,
 ) {
     suspend fun snapshot(): BackupData = db.withTransaction {
@@ -236,7 +239,8 @@ internal class BackupStore(
         val items = ids.mapNotNull { library.item(it) }.map { item ->
             BackupItem(item.id, item.source, vault.decrypt(item.encryptedUrl),
                 library.item(item.parent)?.let { vault.decrypt(it.encryptedUrl) }.orEmpty(),
-                item.providerId, item.tvgName, item.tvgGroup)
+                item.providerId, item.tvgName, item.tvgGroup, item.kind,
+                library.item(item.parent)?.providerId.orEmpty())
         }
         val validItems = items.map { it.id }.toSet()
         val validSettings = settings.map {
@@ -258,54 +262,58 @@ internal class BackupStore(
         val feedIds = HashMap<String, String>()
         var skipped = 0
         var guideFailures = 0
-        // Every source/catalog/mark/feed/mapping write shares the coordinator's Room transaction.
-        restoreTransaction.run {
-            val existing = library.snapshot().toMutableList()
-            val usedTargets = HashSet<String>()
-            for (saved in data.sources) {
-                val candidates = existing.filter {
-                    val spec = SourceSpec.decode(vault.decrypt(it.endpoint))
-                    it.id !in usedTargets && spec.address == saved.spec.address && spec.user == saved.spec.user
+        val prepared = ArrayList<Wp12PreparedCatalog>()
+        try {
+            restoreTransaction.prepareAndRun(prepare = {
+                val existing = library.snapshot().map { it to SourceSpec.decode(vault.decrypt(it.endpoint)) }.toMutableList()
+                val usedTargets = HashSet<String>()
+                for (saved in data.sources) {
+                    val match = wp12RestoreSource(saved, existing, usedTargets)
+                    val id = match?.id ?: saved.id.takeIf { old -> existing.none { it.first.id == old } } ?: UUID.randomUUID().toString()
+                    usedTargets.add(id)
+                    val source = Source(id, saved.name, vault.encrypt(saved.spec.encode()), saved.spec.allowHttp, 0, 0)
+                    sourceIds[saved.id] = id
+                    val items = data.items.filter { it.source == saved.id }
+                    val catalog = prepare(source, saved.spec, items)
+                    prepared += catalog
+                    itemIds += wp12MatchRestoreItems(items, id, saved.spec, catalog.rows)
+                    existing.removeAll { it.first.id == id }
+                    existing.add(source to saved.spec)
                 }
-                val match = candidates.firstOrNull { it.id == saved.id } ?: candidates.firstOrNull()
-                val id = match?.id ?: saved.id.takeIf { old -> existing.none { it.id == old } } ?: UUID.randomUUID().toString()
-                usedTargets.add(id)
-                val source = Source(id, saved.name, vault.encrypt(saved.spec.encode()), saved.spec.allowHttp, 0, 0)
-                sourceIds[saved.id] = id
-                refresh(source, saved.spec)
-                existing.removeAll { it.id == id }
-                existing.add(source)
-            }
-            val parents = data.items.filter { it.parentAddress.isNotEmpty() }
-                .map { contentKey(sourceIds.getValue(it.source), it.parentAddress) }.distinct()
-            for (id in parents) library.item(id)?.let { expand(it) }
-            for (saved in data.items) {
-                val id = contentKey(sourceIds.getValue(saved.source), saved.address)
-                val restored = library.item(id)
-                if (restored != null) {
-                    itemIds[saved.id] = id
-                    library.save(listOf(restored.copy(providerId = restored.providerId.ifEmpty { saved.providerId },
-                        tvgName = restored.tvgName.ifEmpty { saved.tvgName }, tvgGroup = restored.tvgGroup.ifEmpty { saved.tvgGroup })))
-                } else skipped++
-            }
-            for (saved in data.feeds) {
-                val source = sourceIds.getValue(saved.source)
-                val id = contentKey(source, saved.address)
-                feedIds[saved.id] = id
-                db.guide().put(Feed(id, source, vault.encrypt(saved.address)))
-            }
-            for (saved in data.marks) itemIds[saved.id]?.let { library.save(saved.copy(id = it)) }
-            for (saved in data.redirects) itemIds[saved.newId]?.let { target ->
-                if (!library.exists(saved.oldId)) {
-                    library.redirectTarget(saved.oldId, target)
-                    library.redirect(ItemRedirect(saved.oldId, target))
+                skipped = data.items.count { it.id !in itemIds }
+                // No networking or episode expansion below this boundary. Preparation failures
+                // have not written Room, DataStore or the durable undo journal.
+            }, commit = {
+                for (catalog in prepared) catalog.commit()
+                for (saved in data.feeds) {
+                    val source = sourceIds.getValue(saved.source)
+                    val id = contentKey(source, saved.address)
+                    feedIds[saved.id] = id
+                    db.guide().put(Feed(id, source, vault.encrypt(saved.address)))
                 }
-            }
-            for (saved in data.mappings) itemIds[saved.item]?.let {
-                db.guide().map(saved.copy(item = it, feed = feedIds.getValue(saved.feed)))
-            }
-            preferences.restoreSettings(data.settings, sourceIds, itemIds)
-            metadata.configure(data.tmdbToken)
+                for (saved in data.items) itemIds[saved.id]?.let { id ->
+                    library.item(id)?.let { restored ->
+                        val enriched = restored.copy(providerId = restored.providerId.ifEmpty { saved.providerId },
+                            tvgName = restored.tvgName.ifEmpty { saved.tvgName }, tvgGroup = restored.tvgGroup.ifEmpty { saved.tvgGroup })
+                        if (enriched != restored) library.save(listOf(enriched))
+                    }
+                }
+                for (saved in data.marks) itemIds[saved.id]?.let { library.save(saved.copy(id = it)) }
+                for (saved in data.redirects) itemIds[saved.newId]?.let { target ->
+                    if (!library.exists(saved.oldId)) {
+                        library.redirectTarget(saved.oldId, target)
+                        library.redirect(ItemRedirect(saved.oldId, target))
+                    }
+                }
+                for (saved in data.mappings) itemIds[saved.item]?.let {
+                    db.guide().map(saved.copy(item = it, feed = feedIds.getValue(saved.feed)))
+                }
+                preferences.restoreSettings(data.settings, sourceIds, itemIds)
+                metadata.configure(data.tmdbToken)
+                preferences.saveWp12PendingRestore(data, sourceIds, data.items.map { it.id }.toSet() - itemIds.keys)
+            })
+        } finally {
+            prepared.asReversed().forEach { it.close() }
         }
         // Programme listings are a rebuildable cache, excluded from the backup. Refresh them
         // after the restore commits; guide failures are reported separately from restore failure.
@@ -316,4 +324,37 @@ internal class BackupStore(
         }
         return BackupRestoreResult(skipped, guideFailures)
     }
+
+    /** Called only by the normal import commit, under its existing settings undo journal. */
+    suspend fun retryPending(source: String, spec: SourceSpec, incoming: List<CarryRow>) {
+        val pending = preferences.wp12PendingRestores()
+        val mappedItems = db.guide().backupMappings().map { it.item }.toMutableSet()
+        var changed = false
+        val remaining = pending.mapNotNull { entry ->
+            val ids = linkedMapOf<String, String>()
+            for (saved in entry.data.sources) {
+                if (entry.sources[saved.id] != source || saved.spec.address != spec.address || saved.spec.user != spec.user) continue
+                ids += wp12MatchRestoreItems(entry.data.items.filter { it.source == saved.id }, source, spec, incoming)
+                    .filterKeys { it in entry.ids }
+            }
+            if (ids.isEmpty()) return@mapNotNull entry
+            changed = true
+            val library = db.library()
+            for (saved in entry.data.marks) ids[saved.id]?.let { library.save(mergeCarryMark(saved, library.mark(it), it)) }
+            val feeds = entry.data.feeds.associateBy { it.id }
+            for (saved in entry.data.mappings) ids[saved.item]?.let { item ->
+                val feed = feeds.getValue(saved.feed)
+                val targetFeed = contentKey(source, feed.address)
+                db.guide().put(Feed(targetFeed, source, vault.encrypt(feed.address)))
+                if (mappedItems.add(item)) db.guide().map(saved.copy(item = item, feed = targetFeed))
+            }
+            for (saved in entry.data.redirects) ids[saved.newId]?.let { target ->
+                if (!library.exists(saved.oldId) && saved.oldId != target) library.redirect(saved.copy(newId = target))
+            }
+            preferences.restoreWp12ItemSettings(entry.data.settings, entry.sources, ids)
+            entry.copy(ids = entry.ids - ids.keys).takeIf { it.ids.isNotEmpty() }
+        }
+        if (changed) preferences.saveWp12PendingRestores(remaining)
+    }
+
 }

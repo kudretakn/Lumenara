@@ -37,6 +37,7 @@ class RestoreTransactionTest {
         var failCommit = false
         var killBeforeCommit = false
         var unavailable = false
+        var inTransaction = false
         fun insert(value: String) {
             sources.add(value)
             if (failInsert) throw IOException("DAO insert failed midway")
@@ -45,6 +46,7 @@ class RestoreTransactionTest {
             val oldSources = sources.toList()
             val oldJournal = journal
             try {
+                inTransaction = true
                 val result = block()
                 if (killBeforeCommit) {
                     unavailable = true
@@ -57,7 +59,7 @@ class RestoreTransactionTest {
                 sources.addAll(oldSources)
                 journal = oldJournal
                 throw failure
-            }
+            } finally { inTransaction = false }
         }
     }
 
@@ -219,4 +221,80 @@ class RestoreTransactionTest {
         RestoreTransaction(f).recover()
         assertTrue(f.preferences.showAdult.first())
     }
+
+    @Test fun preparationFinishesBeforeUndoSnapshotAndRoomCommitWithNoCommitNetworkCalls() = runTest {
+        val f = Fixture().also { it.initialize() }
+        var networkCalls = 0
+        var networkCallsInsideCommit = 0
+        suspend fun fetch(): String {
+            networkCalls++
+            if (f.dao.inTransaction) networkCallsInsideCommit++
+            assertNull(f.dao.journal)
+            f.assertOldState()
+            return "prepared catalog"
+        }
+        RestoreTransaction(f).prepareAndRun(prepare = { listOf(fetch(), fetch()) }, commit = { catalogs ->
+            assertEquals(2, networkCalls)
+            assertTrue(f.dao.inTransaction)
+            assertNotNull(f.dao.journal)
+            catalogs.forEach { f.dao.insert(it) }
+            f.preferences.setShowAdult(true)
+        })
+        assertEquals(0, networkCallsInsideCommit)
+        assertNull(f.dao.journal)
+        assertTrue(f.preferences.showAdult.first())
+    }
+
+    @Test fun failedOrCancelledPreparationPublishesNothingAndCreatesNoUndoJournal() = runTest {
+        for (failure in listOf(IOException("download failed"), CancellationException("cancel prepare"))) {
+            val f = Fixture().also { it.initialize() }
+            val edits = f.store.edits
+            val result = runCatching {
+                RestoreTransaction(f).prepareAndRun<Unit, Unit>(prepare = { throw failure }, commit = {
+                    fail("Commit must never start")
+                })
+            }
+            assertSame(failure, result.exceptionOrNull())
+            assertEquals(edits, f.store.edits)
+            f.assertOldState()
+        }
+    }
+
+
+    @Test fun pendingRestoreQueueRollsBackWithRoomAtFailureCancellationAndProcessDeath() = runTest {
+        val source = "saved-source"
+        val address = "https://provider.invalid/stream"
+        val id = dev.lumenara.catalog.contentKey(source, address)
+        val pending = BackupData(listOf(BackupSetting("recent_live", "string", id)),
+            listOf(BackupSource(source, "Saved", SourceSpec("https://provider.invalid/list", false))),
+            emptyList(), listOf(BackupItem(id, source, address, "")),
+            listOf(Mark(id, favorite = true)), emptyList())
+        for (boundary in listOf("commit-failure", "cancellation", "process-death")) {
+            val f = Fixture().also { it.initialize() }
+            f.preferences.setSecret("wp12_pending_restore", "[]")
+            f.preferences.setSecret("orphan_history", "device-local pool")
+            val oldQueue = f.preferences.text(wp12PendingRestoreSetting).first()
+            val oldPool = f.preferences.text(orphanHistorySetting).first()
+            f.dao.failCommit = boundary == "commit-failure"
+            f.dao.killBeforeCommit = boundary == "process-death"
+            assertTrue(runCatching {
+                RestoreTransaction(f).run {
+                    f.dao.insert("new source")
+                    f.preferences.setShowAdult(true)
+                    f.preferences.saveWp12PendingRestore(pending, mapOf(source to "target"), setOf(id))
+                    if (boundary == "cancellation") throw CancellationException("cancel after pending state")
+                }
+            }.isFailure)
+            if (boundary == "process-death") {
+                assertNotNull(f.dao.journal)
+                f.dao.unavailable = false
+                RestoreTransaction(f).recover()
+            }
+            f.assertOldState()
+            assertEquals(oldQueue, f.preferences.text(wp12PendingRestoreSetting).first())
+            assertEquals(oldPool, f.preferences.text(orphanHistorySetting).first())
+            assertTrue(f.preferences.wp12PendingRestores().isEmpty())
+        }
+    }
+
 }

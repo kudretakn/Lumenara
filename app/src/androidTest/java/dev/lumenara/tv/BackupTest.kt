@@ -127,7 +127,7 @@ class BackupTest {
                 val preview = repo.previewBackup(bytes, "parola-123".toCharArray())
                 sources.forEach { repo.remove(it.id) }
                 prefs.setShowAdult(false)
-                // The first source is written successfully, then the second refresh fails.
+                // The first source is prepared successfully, then the second download fails before any restore commit.
                 server.enqueue(MockResponse().setBody(list))
                 server.enqueue(MockResponse().setResponseCode(503))
                 assertTrue(runCatching { repo.restoreBackup(preview) }.isFailure)

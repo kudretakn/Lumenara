@@ -445,7 +445,7 @@ class Repository private constructor(private val context: Context) {
 
     private val backups by lazy {
         BackupStore(db, vault, preferences, metadata, restoreTransaction,
-            { source, spec -> import(source, spec, updatePreferences = false) }, { expandUnlocked(it, force = true) }) { source ->
+            { source, spec, items -> prepareRestoreCatalog(source, spec, items) }) { source ->
             for (feed in guide.feeds(source.id)) syncGuide(source, feed)
         }
     }
@@ -667,7 +667,13 @@ class Repository private constructor(private val context: Context) {
         val token = maxOf(System.currentTimeMillis(), source.refreshed + 1)
         val key = "source_${source.id}"
         val identity = contentKey("catalog", spec.encode())
-        val previous = if (source.refreshed > 0 && !force &&
+        // Pending restore episodes may not exist in Room yet. Reparse even an unchanged
+        // top-level catalog so their parents can be prepared and their state retried.
+        val pendingRestore = updatePreferences && preferences.wp12PendingRestores().any { pending ->
+            pending.data.sources.any { saved -> pending.sources[saved.id] == source.id &&
+                saved.spec.address == spec.address && saved.spec.user == spec.user }
+        }
+        val previous = if (source.refreshed > 0 && !force && !pendingRestore &&
             preferences.text("catalog_identity_${source.id}").first() == identity) preferences.fetchState(key) else FetchState()
         val job = currentCoroutineContext()
         val xtream = if (spec.user.isNotEmpty()) Xtream(spec, job[ImportCalls]) else null
@@ -713,17 +719,40 @@ class Repository private constructor(private val context: Context) {
     private suspend fun importChanged(source: Source, spec: SourceSpec, token: Long,
         xtream: Xtream?, snapshot: Xtream.Snapshot?, downloaded: Download?, carryPreferences: Boolean,
         progress: ImportProgress? = null) {
-        val staged = CatalogStage(context.cacheDir, source.id, token)
-        val job = currentCoroutineContext()
-        val carryStart = android.os.SystemClock.elapsedRealtime()
-        // Backup imports must never read or consume device-local recovery state.
-        val retainedOrphans = if (carryPreferences) preferences.orphanSnapshots(System.currentTimeMillis()) else emptyList()
-        val recovering = retainedOrphans.filter { it.provider == orphanProvider(spec) }
-        val previousRows = carryRows(source.id, spec.user.isNotEmpty())
-        val old = previousRows + recovering.flatMap { it.rows }
-        val incoming = ArrayList<CarryRow>()
-        val series = ArrayList<Item>()
+        prepareImportChanged(source, spec, token, xtream, snapshot, downloaded, carryPreferences, progress).use { prepared ->
+            if (carryPreferences && prepared.needsJournal) restoreTransaction.run { prepared.commit() }
+            else db.withTransaction { prepared.commit() }
+            val matches = prepared.matches
+            android.util.Log.i("LumenaraPerf", "history_carry_over matched=${matches.ids.size} ambiguous=${matches.ambiguous} unmatched=${matches.unmatched}")
+        }
+    }
+
+    private suspend fun prepareImportChanged(source: Source, spec: SourceSpec, token: Long,
+        xtream: Xtream?, snapshot: Xtream.Snapshot?, downloaded: Download?, carryPreferences: Boolean,
+        progress: ImportProgress? = null, restoreItems: List<BackupItem> = emptyList()): Wp12PreparedCatalog {
+        // Each prepared source owns its stage until the single restore commit finishes.
+        val stageDirectory = wp12StageDirectory(context.cacheDir)
+        val staged = CatalogStage(stageDirectory, source.id, token)
         try {
+            val job = currentCoroutineContext()
+            val carryStart = android.os.SystemClock.elapsedRealtime()
+            // Backup imports must never read or consume device-local recovery state.
+            val retainedOrphans = if (carryPreferences) preferences.orphanSnapshots(System.currentTimeMillis()) else emptyList()
+            val recovering = retainedOrphans.filter { it.provider == orphanProvider(spec) }
+            val pendingRestores = if (carryPreferences) preferences.wp12PendingRestores().filter { pending ->
+                pending.data.sources.any { saved -> pending.sources[saved.id] == source.id &&
+                    saved.spec.address == spec.address && saved.spec.user == spec.user }
+            } else emptyList()
+            val pendingItems = pendingRestores.flatMap { pending -> pending.data.sources.filter { saved ->
+                pending.sources[saved.id] == source.id && saved.spec.address == spec.address && saved.spec.user == spec.user
+            }.map { saved -> pending.data.items.filter { it.source == saved.id &&
+                (it.id in pending.ids || it.parentAddress.isEmpty()) } } }
+            val previousRows = carryRows(source.id, spec.user.isNotEmpty())
+            val old = previousRows + recovering.flatMap { it.rows }
+            val incoming = ArrayList<CarryRow>()
+            val series = ArrayList<Item>()
+            val preparedEpisodeParents = HashSet<String>()
+            val restoreEpisodeDurations = HashMap<String, Long>()
             progress?.report("İçerikler hazırlanıyor…")
             staged.write { append ->
                 fun stage(row: Item) {
@@ -775,17 +804,23 @@ class Repository private constructor(private val context: Context) {
                         recovering.flatMap { orphan -> matchCarryOver(orphan.rows.filter { it.kind == "SERIES" },
                             targets, categoryFallback = true).ids.entries }.associate { it.key to it.value }
                     val parents = series.associateBy { it.id }
-                    for (to in matches.filterKeys { it in expanded }.values.toSet()) {
+                    val restoreParents = wp12RestoreParentIds(restoreItems, source.id, spec, incoming) +
+                        pendingItems.flatMap { wp12RestoreParentIds(it, source.id, spec, incoming) }
+                    for (to in matches.filterKeys { it in expanded }.values.toSet() + restoreParents) {
                         val parent = parents.getValue(to)
-                        xtream.episodes(vault.decrypt(parent.encryptedUrl), parent.title).distinctBy { it.url }.forEach {
+                        val episodes = xtream.episodes(vault.decrypt(parent.encryptedUrl), parent.title).distinctBy { it.url }
+                        preparedEpisodeParents += parent.id
+                        episodes.forEach {
                             job.ensureActive()
-                            stage(item(source.id, token, it).copy(parent = parent.id))
+                            val episode = item(source.id, token, it).copy(parent = parent.id)
+                            if (to in restoreParents && it.durationMs > 0) restoreEpisodeDurations[episode.id] = it.durationMs
+                            stage(episode)
                         }
                     }
                 }
             }
             val incomingIds = incoming.map { it.id }.toSet()
-            val refreshedParents = incoming.filter { it.kind == "EPISODE" }.map { it.parent }.toSet()
+            val refreshedParents = preparedEpisodeParents + incoming.filter { it.kind == "EPISODE" }.map { it.parent }
             val existingMatches = matchCarryOver(previousRows.filterNot {
                 it.kind == "EPISODE" && it.parent in incomingIds && it.parent !in refreshedParents
             }, incoming)
@@ -825,7 +860,17 @@ class Repository private constructor(private val context: Context) {
                 val excluded = context.getSharedPreferences("watch_next_state", Context.MODE_PRIVATE)
                     .getStringSet("excluded", emptySet()).orEmpty().toSet()
                 val orphanReferences = recovering.flatMap { it.pendingIds() }.toSet()
+                // Explicitly prepared parents can keep the same URL. Preserve their unresolved
+                // local history and ambiguity peers before pruning stale episode locators.
+                val pendingEpisodes = if (preparedEpisodeParents.isEmpty()) null else orphanHistory(
+                    source.id, "", token, previousRows, emptyList(), emptyList(),
+                    library.carryProtectedIds(source.id).toSet() + preferenceReferences + excluded)
                 carryRoomState(db, matches.ids, preferenceReferences + excluded + orphanReferences)
+                // Preserve the duration seed previously supplied by forced restore expansion.
+                for ((id, duration) in restoreEpisodeDurations) {
+                    val mark = library.mark(id)
+                    if ((mark?.duration ?: 0) <= 0) library.save((mark ?: Mark(id)).copy(duration = duration))
+                }
                 for (orphan in recovering) {
                     for (mark in orphan.marks) {
                         val target = orphanMatches.ids[mark.id] ?: continue
@@ -845,15 +890,24 @@ class Repository private constructor(private val context: Context) {
                 // lazy episode parents, rather than guessing or cascading their removal.
                 val protected = (library.carryProtectedIds(source.id) + preferenceReferences)
                     .filter { it !in matches.ids && it !in incomingIds && it !in playlistEpisodes }.toMutableSet()
+                pendingEpisodes?.let { pending ->
+                    val parents = previousRows.associate { it.id to it.parent }
+                    protected += wp03UnresolvedEpisodeIds(pending, incomingIds, matches.ids.keys)
+                        .filter { parents[it] in preparedEpisodeParents }
+                }
                 old.filter { it.id in protected && it.parent.isNotBlank() }.forEach { protected += it.parent }
                 protected.removeAll(incomingIds)
                 protected.toList().chunked(900).forEach { library.retainCarryRows(it, token) }
                 if (spec.user.isEmpty()) library.prunePlaylist(source.id, token)
-                else library.prune(source.id, token)
+                else {
+                    for (parent in preparedEpisodeParents) library.pruneEpisodes(parent, token)
+                    library.prune(source.id, token)
+                }
                 library.orphans(source.id)
                 protected.toList().chunked(900).forEach { library.isolateCarryRows(it, token - 1) }
                 progress?.report("Katalog düzenleniyor…")
                 prepareCatalog(source.id, token)
+                if (carryPreferences && pendingRestores.isNotEmpty()) backups.retryPending(source.id, spec, incoming)
                 if (carryPreferences && matches.ids.isNotEmpty()) {
                     val current = library.carryRows(source.id)
                     val subtitleKeys = preferences.carryItems(matches.ids, carryPreferenceIdentities(old, current, matches.ids),
@@ -867,11 +921,32 @@ class Repository private constructor(private val context: Context) {
                 job.ensureActive()
                 library.save(source.copy(refreshed = token, count = library.count(source.id)))
             }
-            if (carryPreferences && (matches.ids.isNotEmpty() || recovering.isNotEmpty())) restoreTransaction.run { commit() }
-            else db.withTransaction { commit() }
-            android.util.Log.i("LumenaraPerf", "history_carry_over matched=${matches.ids.size} ambiguous=${matches.ambiguous} unmatched=${matches.unmatched}")
-        } finally {
+            return Wp12PreparedCatalog(incoming, matches, matches.ids.isNotEmpty() || recovering.isNotEmpty() || pendingRestores.isNotEmpty(), commit) {
+                staged.close()
+                stageDirectory.deleteRecursively()
+            }
+        } catch (failure: Throwable) {
             staged.close()
+            stageDirectory.deleteRecursively()
+            throw failure
+        }
+    }
+
+    private suspend fun prepareRestoreCatalog(source: Source, spec: SourceSpec,
+        items: List<BackupItem>): Wp12PreparedCatalog {
+        val job = currentCoroutineContext()
+        val xtream = if (spec.user.isNotEmpty()) Xtream(spec, job[ImportCalls]) else null
+        var downloaded: Download? = null
+        var snapshot: Xtream.Snapshot? = null
+        try {
+            if (xtream != null) snapshot = xtream.prepare(context.cacheDir, FetchState(), checkActive = { job.ensureActive() })
+            else if (!spec.address.startsWith("content://")) downloaded = Transport.download(
+                spec.address, spec.allowHttp, context.cacheDir, checkActive = { job.ensureActive() }, calls = job[ImportCalls])
+            return prepareImportChanged(source, spec, maxOf(System.currentTimeMillis(), source.refreshed + 1),
+                xtream, snapshot, downloaded, carryPreferences = false, restoreItems = items)
+        } finally {
+            snapshot?.close()
+            downloaded?.close()
         }
     }
 
@@ -965,7 +1040,7 @@ class Repository private constructor(private val context: Context) {
             lock.withLock { expandUnlocked(series) }
         }
 
-    // Restore already owns the repository lock and must refresh episodes even with a warm cache.
+    // The caller owns the repository lock; forced expansion bypasses a warm episode cache.
     private suspend fun expandUnlocked(series: Item, force: Boolean = false): List<Item> {
         val source = library.source(series.source) ?: return emptyList()
         val spec = SourceSpec.decode(vault.decrypt(source.endpoint))
@@ -1014,8 +1089,6 @@ class Repository private constructor(private val context: Context) {
                 wp03UnresolvedEpisodeIds(pending, incomingIds, matches.ids.keys)
                     .chunked(900).forEach { library.retainCarryRows(it, token) }
                 library.pruneEpisodes(series.id, token)
-                // Forced expansion runs inside backup restore's existing journal; that path
-                // restores its own settings and must not create a nested recovery transaction.
                 if (!force && matches.ids.isNotEmpty()) {
                     val subtitleKeys = preferences.carryItems(matches.ids,
                         carryPreferenceIdentities(oldRows, incoming + parent, matches.ids))
