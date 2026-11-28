@@ -1,0 +1,466 @@
+{
+  "pass": {
+    "inventory": {
+      "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+      "exit_code": 0
+    },
+    "attempts": [
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+        "exit_code": 0
+      }
+    ],
+    "success": true,
+    "allowed_skips": {}
+  },
+  "pass_then_crash": {
+    "inventory": {
+      "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+      "exit_code": 0
+    },
+    "attempts": [
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\nINSTRUMENTATION_FAILED: Process crashed.\n",
+        "exit_code": 1
+      }
+    ],
+    "success": false,
+    "allowed_skips": {}
+  },
+  "zero_results": {
+    "inventory": {
+      "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+      "exit_code": 0
+    },
+    "attempts": [
+      {
+        "text": "OK (0 tests)\nINSTRUMENTATION_CODE: -1\n",
+        "exit_code": 0
+      }
+    ],
+    "success": false,
+    "allowed_skips": {}
+  },
+  "missing_finish": {
+    "inventory": {
+      "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+      "exit_code": 0
+    },
+    "attempts": [
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\n",
+        "exit_code": 0
+      }
+    ],
+    "success": false,
+    "allowed_skips": {}
+  },
+  "missing_inventory": {
+    "inventory": {
+      "text": "",
+      "exit_code": 0
+    },
+    "attempts": [
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+        "exit_code": 0
+      }
+    ],
+    "success": false,
+    "allowed_skips": {}
+  },
+  "incomplete_inventory": {
+    "inventory": {
+      "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+      "exit_code": 0
+    },
+    "attempts": [
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+        "exit_code": 0
+      }
+    ],
+    "success": false,
+    "allowed_skips": {}
+  },
+  "inventory_crash": {
+    "inventory": {
+      "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\nINSTRUMENTATION_FAILED: Process crashed\n",
+      "exit_code": 0
+    },
+    "attempts": [
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+        "exit_code": 0
+      }
+    ],
+    "success": false,
+    "allowed_skips": {}
+  },
+  "timeout": {
+    "inventory": {
+      "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+      "exit_code": 0
+    },
+    "attempts": [
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+        "exit_code": 124
+      }
+    ],
+    "success": false,
+    "allowed_skips": {}
+  },
+  "runner_error": {
+    "inventory": {
+      "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+      "exit_code": 0
+    },
+    "attempts": [
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\nINSTRUMENTATION_RESULT: shortMsg=Process crashed.\n",
+        "exit_code": 0
+      }
+    ],
+    "success": false,
+    "allowed_skips": {}
+  },
+  "unknown_runner_status": {
+    "inventory": {
+      "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+      "exit_code": 0
+    },
+    "attempts": [
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: -5\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+        "exit_code": 0
+      }
+    ],
+    "success": false,
+    "allowed_skips": {}
+  },
+  "error_status": {
+    "inventory": {
+      "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+      "exit_code": 0
+    },
+    "attempts": [
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: -1\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nFAILURES!!!\nINSTRUMENTATION_CODE: -1\n",
+        "exit_code": 0
+      },
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: -1\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nFAILURES!!!\nINSTRUMENTATION_CODE: -1\n",
+        "exit_code": 0
+      }
+    ],
+    "success": false,
+    "allowed_skips": {}
+  },
+  "unexpected_skip": {
+    "inventory": {
+      "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+      "exit_code": 0
+    },
+    "attempts": [
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: -3\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+        "exit_code": 0
+      }
+    ],
+    "success": false,
+    "allowed_skips": {}
+  },
+  "unexpected_assumption": {
+    "inventory": {
+      "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+      "exit_code": 0
+    },
+    "attempts": [
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: -4\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+        "exit_code": 0
+      }
+    ],
+    "success": false,
+    "allowed_skips": {}
+  },
+  "allowed_skip": {
+    "inventory": {
+      "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=two\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=two\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (2 tests)\nINSTRUMENTATION_CODE: -1\n",
+      "exit_code": 0
+    },
+    "attempts": [
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=two\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=two\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: -4\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (2 tests)\nINSTRUMENTATION_CODE: -1\n",
+        "exit_code": 0
+      }
+    ],
+    "success": true,
+    "allowed_skips": {
+      "dev.lumenara.tv.Wp01FixtureTest#two": "Fixture-only platform capability exemption"
+    }
+  },
+  "only_retried": {
+    "inventory": {
+      "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+      "exit_code": 0
+    },
+    "attempts": [
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: -2\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nFAILURES!!!\nINSTRUMENTATION_CODE: -1\n",
+        "exit_code": 0
+      },
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+        "exit_code": 0
+      }
+    ],
+    "success": true,
+    "allowed_skips": {}
+  },
+  "retry_pass_then_crash": {
+    "inventory": {
+      "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+      "exit_code": 0
+    },
+    "attempts": [
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: -2\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nFAILURES!!!\nINSTRUMENTATION_CODE: -1\n",
+        "exit_code": 0
+      },
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\nINSTRUMENTATION_FAILED: Process crashed.\n",
+        "exit_code": 1
+      }
+    ],
+    "success": false,
+    "allowed_skips": {}
+  },
+  "retry_missing_finish": {
+    "inventory": {
+      "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+      "exit_code": 0
+    },
+    "attempts": [
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: -2\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nFAILURES!!!\nINSTRUMENTATION_CODE: -1\n",
+        "exit_code": 0
+      },
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\n",
+        "exit_code": 0
+      }
+    ],
+    "success": false,
+    "allowed_skips": {}
+  },
+  "retry_timeout": {
+    "inventory": {
+      "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+      "exit_code": 0
+    },
+    "attempts": [
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: -2\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nFAILURES!!!\nINSTRUMENTATION_CODE: -1\n",
+        "exit_code": 0
+      },
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+        "exit_code": 124
+      }
+    ],
+    "success": false,
+    "allowed_skips": {}
+  },
+  "missing_result": {
+    "inventory": {
+      "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=two\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=two\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (2 tests)\nINSTRUMENTATION_CODE: -1\n",
+      "exit_code": 0
+    },
+    "attempts": [
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+        "exit_code": 0
+      }
+    ],
+    "success": false,
+    "allowed_skips": {}
+  },
+  "no_numtests": {
+    "inventory": {
+      "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+      "exit_code": 0
+    },
+    "attempts": [
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+        "exit_code": 0
+      }
+    ],
+    "success": false,
+    "allowed_skips": {}
+  },
+  "duplicate_result": {
+    "inventory": {
+      "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+      "exit_code": 0
+    },
+    "attempts": [
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (2 tests)\nINSTRUMENTATION_CODE: -1\n",
+        "exit_code": 0
+      }
+    ],
+    "success": false,
+    "allowed_skips": {}
+  },
+  "nonzero_exit": {
+    "inventory": {
+      "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+      "exit_code": 0
+    },
+    "attempts": [
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+        "exit_code": 9
+      }
+    ],
+    "success": false,
+    "allowed_skips": {}
+  },
+  "all_skipped": {
+    "inventory": {
+      "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+      "exit_code": 0
+    },
+    "attempts": [
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: -3\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+        "exit_code": 0
+      }
+    ],
+    "success": false,
+    "allowed_skips": {
+      "dev.lumenara.tv.Wp01FixtureTest#one": "Fixture-only"
+    }
+  },
+  "hung_process": {
+    "inventory": {
+      "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+      "exit_code": 0
+    },
+    "attempts": [
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+        "exit_code": 0,
+        "sleep": 30
+      }
+    ],
+    "success": false,
+    "allowed_skips": {}
+  },
+  "pass_and_unexpected_skip": {
+    "inventory": {
+      "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=two\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=two\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (2 tests)\nINSTRUMENTATION_CODE: -1\n",
+      "exit_code": 0
+    },
+    "attempts": [
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=two\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=two\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: -3\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+        "exit_code": 0
+      }
+    ],
+    "success": false,
+    "allowed_skips": {}
+  },
+  "failure_summary_without_failure": {
+    "inventory": {
+      "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+      "exit_code": 0
+    },
+    "attempts": [
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nFAILURES!!!\nINSTRUMENTATION_CODE: -1\n",
+        "exit_code": 0
+      }
+    ],
+    "success": false,
+    "allowed_skips": {}
+  },
+  "retry_allowed_skip_cannot_erase_failure": {
+    "inventory": {
+      "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=two\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=two\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (2 tests)\nINSTRUMENTATION_CODE: -1\n",
+      "exit_code": 0
+    },
+    "attempts": [
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=two\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=two\nINSTRUMENTATION_STATUS: numtests=2\nINSTRUMENTATION_STATUS_CODE: -2\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nFAILURES!!!\nINSTRUMENTATION_CODE: -1\n",
+        "exit_code": 0
+      },
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=two\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=two\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: -4\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+        "exit_code": 0
+      }
+    ],
+    "success": false,
+    "allowed_skips": {
+      "dev.lumenara.tv.Wp01FixtureTest#two": "A skip must never replace an initial failure"
+    }
+  },
+  "artifact_infrastructure_error": {
+    "inventory": {
+      "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+      "exit_code": 0
+    },
+    "attempts": [
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+        "exit_code": 0
+      }
+    ],
+    "success": false,
+    "allowed_skips": {},
+    "artifact_failure": {
+      "text": "error: device disconnected",
+      "exit_code": 1
+    }
+  },
+  "artifact_timeout_after_pass": {
+    "inventory": {
+      "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+      "exit_code": 0
+    },
+    "attempts": [
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+        "exit_code": 0
+      }
+    ],
+    "success": false,
+    "allowed_skips": {},
+    "artifact_failure": {
+      "sleep": 30,
+      "exit_code": 0
+    }
+  },
+  "artifact_missing_optional_directory": {
+    "inventory": {
+      "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+      "exit_code": 0
+    },
+    "attempts": [
+      {
+        "text": "INSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS: class=dev.lumenara.tv.Wp01FixtureTest\nINSTRUMENTATION_STATUS: test=one\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_RESULT: stream=\nTime: 0.01\nOK (1 tests)\nINSTRUMENTATION_CODE: -1\n",
+        "exit_code": 0
+      }
+    ],
+    "success": true,
+    "allowed_skips": {},
+    "artifact_failure": {
+      "command": "pull",
+      "text": "adb: error: No such file or directory",
+      "exit_code": 1
+    }
+  }
+}

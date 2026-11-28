@@ -10,15 +10,14 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 env:
-  # SHA-256 of the personal release certificate (see CHANGELOG 0.1.0). Every release must match
-  # it, otherwise Android refuses to update the installed app.
-  EXPECTED_CERT_SHA256: 2a4804f05adc3206055fd91777c6cc7c370ee1b3a23c9822eda3156aac9a80eb
+  # The unchanged personal certificate pin lives in scripts/test-results/Wp01ReleaseGate.py.
   RELEASES_REPO: kudretakn/Lumenara-releases
 
 jobs:
@@ -27,6 +26,22 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify release provenance before accessing signing secrets
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/tags/v* ]]
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          python3 scripts/test-results/Wp01ReleaseGate.py ci --sha "$GITHUB_SHA" --repository "$GITHUB_REPOSITORY"
+
+      - name: Verify WP01 gate fixtures
+        env:
+          WP01_PWSH: pwsh
+        run: python3 -m unittest discover -s scripts/test-results -p 'Wp01*Test.py' -v
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -92,10 +107,8 @@ jobs:
             --out "$out" app/build/outputs/apk/release/app-release-unsigned.apk
           certs="$("$tools/apksigner" verify --verbose --print-certs "$out")"
           echo "$certs" | grep -E 'Verified using v2 scheme|Verified using v3 scheme|certificate SHA-256'
-          actual="$(echo "$certs" | sed -n 's/.*certificate SHA-256 digest: \([0-9a-f]*\).*/\1/p' | head -1)"
-          if [ "$actual" != "$EXPECTED_CERT_SHA256" ]; then
-            echo "Release certificate $actual does not match the personal certificate $EXPECTED_CERT_SHA256"; exit 1
-          fi
+          printf '%s\n' "$certs" > "$RUNNER_TEMP/Wp01-certificate.txt"
+          python3 scripts/test-results/Wp01ReleaseGate.py certificate "$RUNNER_TEMP/Wp01-certificate.txt"
           sha256sum "$out" | tee dist/SHA256SUMS.txt
 
       - name: Release notes from CHANGELOG
@@ -116,7 +129,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.LUMENARA_RELEASES_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
+          SOURCE_GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+          # Recheck immediately before publication: a cancelled/failed rerun blocks release.
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          GH_TOKEN="$SOURCE_GH_TOKEN" python3 scripts/test-results/Wp01ReleaseGate.py ci --sha "$GITHUB_SHA" --repository "$GITHUB_REPOSITORY"
           gh release create "v$VERSION" "dist/Lumenara-$VERSION.apk" \
             --repo "$RELEASES_REPO" --title "Lumenara $VERSION" --notes-file dist/notes.md --latest
 
