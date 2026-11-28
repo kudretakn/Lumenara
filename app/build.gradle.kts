@@ -31,6 +31,7 @@ android {
             signingConfig = signingConfigs.getByName("debug")
             isDebuggable = false
             matchingFallbacks += "release"
+            testProguardFiles("proguard-test-rules.pro")
             // Same optimizer/rules as release; mapping is under build/outputs/mapping/qa.
         }
     }
