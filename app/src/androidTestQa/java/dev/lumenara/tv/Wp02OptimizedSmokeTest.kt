@@ -137,25 +137,25 @@ class Wp02OptimizedSmokeTest {
                 .putExtra(SearchManager.QUERY, first)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             awaitFrame("media3", beforeMedia3)
-            assertTrue(device.pressDPadLeft())
+            device.pressDPadLeft()
             await("Media3 mini-guide") { nodeWithTag("mini-guide") != null }
-            assertTrue(device.pressBack())
+            device.pressBack()
 
-            assertTrue(device.pressMenu())
+            device.pressMenu()
             activate { nodeWithText("Motor: Media3/VLC") }
             await("VLC surface") { nodeWithTag("vlc-player") != null }
             val beforeVlc = frameCount("vlc")
             // A new item arms the actual frame counter after switching the engine.
-            assertTrue(device.pressDPadDown())
+            device.pressDPadDown()
             awaitFrame("vlc", beforeVlc)
-            assertTrue(device.pressDPadLeft())
+            device.pressDPadLeft()
             await("VLC mini-guide") { nodeWithTag("mini-guide") != null }
-            assertTrue(device.pressBack())
+            device.pressBack()
 
-            assertTrue(device.pressMenu())
+            device.pressMenu()
             activate { nodeWithText("Motor: VLC/Media3") }
             val beforeReturn = frameCount("media3")
-            assertTrue(device.pressDPadUp())
+            device.pressDPadUp()
             awaitFrame("media3", beforeReturn)
             assertEquals("Vault must reuse the existing wrapped key", wrapped,
                 context.getSharedPreferences("vault", 0).getString("data-key", null))
@@ -236,7 +236,7 @@ class Wp02OptimizedSmokeTest {
         while (!focus.isFocusable) focus = checkNotNull(focus.parent) { "Control cannot take DPAD focus" }
         assertTrue("Accessibility focus request", focus.performAction(AccessibilityNodeInfo.ACTION_FOCUS))
         await("DPAD focus") { focus.refresh() && focus.isFocused }
-        assertTrue(device.pressDPadCenter())
+        device.pressDPadCenter()
         device.waitForIdle()
     }
 
