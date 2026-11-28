@@ -208,39 +208,31 @@ internal class Xtream(private val spec: SourceSpec, private val calls: ImportCal
         }
     }
 
-    fun episodes(info: String, seriesTitle: String): List<Listing> =
-        Transport.read(info, spec.allowHttp, calls) { input, _ ->
-            val seriesId = info.toHttpUrl().queryParameter("series_id").orEmpty()
-            val seasons = wp03EpisodeSeasons(JSONObject(input.reader().readText()))
-            buildList {
-                for (season in seasons.keys().asSequence().sortedBy { it.toIntOrNull() ?: 0 }) {
-                    val episodes = seasons.optJSONArray(season) ?: continue
-                    for (i in 0 until episodes.length()) {
-                        val ep = episodes.optJSONObject(i) ?: continue
-                        val id = ep.optString("id").takeIf { it.isNotBlank() } ?: continue
-                        val info = ep.optJSONObject("info")
-                        add(
-                            Listing(
-                                "$seriesTitle · S${ep.optInt("season", season.toIntOrNull() ?: 1)}E${ep.optInt("episode_num", i + 1)} · ${ep.optString("title")}",
-                                stream("series", id, ep.optString("container_extension", "mp4"))
-                                    .toString(),
-                                "Sezon ${ep.optInt("season", season.toIntOrNull() ?: 1)}",
-                                "",
-                                Kind.EPISODE,
-                                info?.optString("movie_image").orEmpty(),
-                                info?.optString("plot").orEmpty(),
-                                info?.optString("releasedate").orEmpty().take(4),
-                                durationMs = (info?.optLong("duration_secs", 0)?.takeIf { it > 0 }
-                                    ?: info?.optString("duration")?.split(':')?.mapNotNull { it.toLongOrNull() }
-                                        ?.takeIf { it.size == 3 }?.let { it[0] * 3600 + it[1] * 60 + it[2] }
-                                    ?: 0) * 1000,
-                                introStartMs = info?.optLong("intro_start_ms", -1) ?: -1,
-                                introEndMs = info?.optLong("intro_end_ms", -1) ?: -1,
-                                providerId = "$seriesId:$id",
-                            )
-                        )
-                    }
-                }
-            }.sortedWith(compareBy({ episodeName(it.title).season }, { episodeName(it.title).episode }, { it.url }))
+    /** Compatibility collector for callers needing a list; importer uses the streaming overload. */
+    fun episodes(info: String, seriesTitle: String): List<Listing> = buildList {
+        readEpisodes(info, seriesTitle) { add(it) }
+    }.sortedWith(compareBy({ episodeName(it.title).season }, { episodeName(it.title).episode }, { it.url }))
+
+    fun readEpisodes(address: String, seriesTitle: String, emit: (Listing) -> Unit) {
+        Transport.read(address, spec.allowHttp, calls) { input, _ ->
+            val seriesId = address.toHttpUrl().queryParameter("series_id").orEmpty()
+            Wp22EpisodeJson(input.bufferedReader()).read episode@{ season, index, ep ->
+                val id = ep.optString("id").takeIf { it.isNotBlank() } ?: return@episode
+                val info = ep.optJSONObject("info")
+                emit(Listing(
+                    "$seriesTitle · S${ep.optInt("season", season.toIntOrNull() ?: 1)}E${ep.optInt("episode_num", index + 1)} · ${ep.optString("title")}",
+                    stream("series", id, ep.optString("container_extension", "mp4")).toString(),
+                    "Sezon ${ep.optInt("season", season.toIntOrNull() ?: 1)}", "", Kind.EPISODE,
+                    info?.optString("movie_image").orEmpty(), info?.optString("plot").orEmpty(),
+                    info?.optString("releasedate").orEmpty().take(4),
+                    durationMs = (info?.optLong("duration_secs", 0)?.takeIf { it > 0 }
+                        ?: info?.optString("duration")?.split(':')?.mapNotNull { it.toLongOrNull() }
+                            ?.takeIf { it.size == 3 }?.let { it[0] * 3600 + it[1] * 60 + it[2] }
+                        ?: 0) * 1000,
+                    introStartMs = info?.optLong("intro_start_ms", -1) ?: -1,
+                    introEndMs = info?.optLong("intro_end_ms", -1) ?: -1,
+                    providerId = "$seriesId:$id"))
+            }
         }
+    }
 }

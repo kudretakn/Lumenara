@@ -73,14 +73,14 @@ class Wp13GuideMigrationTest {
                 old.version = 13
             }
             val db = Room.databaseBuilder(context, LibraryDb::class.java, name)
-                .addMigrations(LibraryDb.MIGRATION_13_14, LibraryDb.MIGRATION_14_15).build()
+                .addMigrations(LibraryDb.MIGRATION_13_14, LibraryDb.MIGRATION_14_15, LibraryDb.MIGRATION_15_16).build()
             try {
                 val start = SystemClock.elapsedRealtimeNanos()
                 val upgraded = db.openHelper.writableDatabase
                 val openMs = (SystemClock.elapsedRealtimeNanos() - start) / 1_000_000.0
-                Log.i("LumenaraBenchmark", "wp=13 api=${Build.VERSION.SDK_INT} from=13 to=15 items=39682 " +
+                Log.i("LumenaraBenchmark", "wp=13 api=${Build.VERSION.SDK_INT} from=13 to=16 items=39682 " +
                     "names=31935 programmes=42580 firstUpgradeOpenMs=$openMs")
-                assertEquals(15, upgraded.version)
+                assertEquals(16, upgraded.version)
                 for ((table, count) in listOf("items" to 39_682, "epgNames" to 31_935, "programmes" to 42_580,
                     "sources" to 1, "feeds" to 1, "marks" to 1, "mappings" to 1, "collections" to 1)) {
                     upgraded.query("SELECT COUNT(*) FROM $table").use { cursor ->

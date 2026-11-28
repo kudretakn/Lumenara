@@ -43,7 +43,7 @@ data class Source(
     indices = [Index("source", "kind", "category", "title"),
         Index("kind", "category", "title"),
         Index("kind", "isRepresentative", "title"), Index("kind", "title"),
-        Index("parent"), Index("versionKey"), Index("source", "kind", "sortKey", "id"),
+        Index("parent"), Index("parent", "episodeSeason", "episodeNumber", "id"), Index("versionKey"), Index("source", "kind", "sortKey", "id"),
         Index("kind", "sortKey", "id"), Index("source", "channelNumber"), Index("source", "safeChannelNumber"), Index("source", "id"),
         Index("source", "kind", "category", "sortKey", "id"), Index("kind", "category", "sortKey", "id")],
 )
@@ -85,6 +85,11 @@ data class Item(
     @ColumnInfo(defaultValue = "0") val isAdult: Boolean = isAdultCategory(category),
     @ColumnInfo(defaultValue = "0") val channelNumber: Int = 0,
     @ColumnInfo(defaultValue = "0") val safeChannelNumber: Int = 0,
+    @ColumnInfo(defaultValue = "0") val episodeSeason: Int = 0,
+    @ColumnInfo(defaultValue = "0") val episodeNumber: Int = 0,
+    @ColumnInfo(defaultValue = "''") val episodeSeries: String = "",
+    @ColumnInfo(defaultValue = "''") val episodeTitle: String = "",
+    @ColumnInfo(defaultValue = "0") val episodeVersion: Int = 0,
 )
 
 @Entity(
@@ -147,7 +152,7 @@ data class VersionCandidate(
 }
 
 @Dao
-interface LibraryDao : Wp19SearchDao {
+interface LibraryDao : Wp19SearchDao, Wp22Dao, Wp22SeriesDao {
     @Query("""SELECT NOT EXISTS(SELECT 1 FROM sources s
         LEFT JOIN catalog_derived_state d ON d.source=s.id
         WHERE (:source='' OR s.id=:source) AND (d.source IS NULL OR d.phase!='done'))""")
@@ -417,14 +422,14 @@ interface LibraryDao : Wp19SearchDao {
     @Upsert suspend fun wp19SaveItems(items: List<Item>)
 
     @Transaction suspend fun save(items: List<Item>) {
-        wp19SaveItems(items)
+        wp19SaveItems(items.map { it.wp22ProjectEpisode() })
         items.forEach { wp19Index(it.id, it.search) }
     }
 
     @Upsert fun wp19WriteItems(items: List<Item>)
 
     @Transaction fun writeBatch(items: List<Item>) {
-        wp19WriteItems(items)
+        wp19WriteItems(items.map { it.wp22ProjectEpisode() })
         items.forEach { wp19Index(it.id, it.search) }
     }
 
@@ -435,6 +440,7 @@ interface LibraryDao : Wp19SearchDao {
     suspend fun wp19AssignTmdb(rows: List<TmdbAssignment>)
 
     @Transaction suspend fun assignTmdb(rows: List<TmdbAssignment>) {
+        rows.forEach { wp22Dirty(it.id) }
         wp19AssignTmdb(rows)
         rows.forEach { row -> wp19SearchText(row.id)?.let { wp19Index(row.id, it) } }
     }
@@ -443,7 +449,7 @@ interface LibraryDao : Wp19SearchDao {
     suspend fun versionSeeds(ids: List<String>): List<Item>
 
     // CatalogStage.read has a synchronous callback, already inside the IO import transaction.
-    @Query("SELECT * FROM items WHERE id IN (:ids) AND kind IN ('MOVIE','SERIES')")
+    @Query("SELECT * FROM items WHERE id IN (:ids)")
     fun importedVersionSeeds(ids: List<String>): List<Item>
 
     @RawQuery
@@ -487,12 +493,19 @@ interface LibraryDao : Wp19SearchDao {
     @Query("SELECT * FROM marks WHERE id=:id") fun observeMark(id: String): Flow<Mark?>
 
     @Query("""SELECT * FROM items WHERE parent=:id AND category NOT IN (:hidden)
-        AND NOT EXISTS(SELECT 1 FROM items s WHERE s.id=:id AND s.category IN (:hidden)) ORDER BY items.rowid""")
+        AND NOT EXISTS(SELECT 1 FROM items s WHERE s.id=:id AND s.category IN (:hidden)) ORDER BY episodeSeason,episodeNumber,id""")
     fun episodes(id: String, hidden: List<String> = emptyList()): Flow<List<Item>>
 
     @Query("""SELECT * FROM items WHERE parent=:id AND category NOT IN (:hidden)
-        AND NOT EXISTS(SELECT 1 FROM items s WHERE s.id=:id AND s.category IN (:hidden))""")
+        AND NOT EXISTS(SELECT 1 FROM items s WHERE s.id=:id AND s.category IN (:hidden)) ORDER BY episodeSeason,episodeNumber,id""")
     suspend fun episodeSnapshot(id: String, hidden: List<String> = emptyList()): List<Item>
+
+    @Query("SELECT COALESCE(MAX(generation),0) FROM items WHERE parent=:id")
+    suspend fun wp22EpisodeGeneration(id: String): Long
+    @Query("""SELECT id,source,title,category,kind,tvgId,year,parent,providerId,tvgName,tvgGroup,
+        versionKey,'' AS urlHash,CASE WHEN providerId='' THEN encryptedUrl ELSE '' END AS legacyUrl
+        FROM items WHERE parent=:id""")
+    suspend fun wp22EpisodeCarry(id: String): List<CarryRow>
 
     @Query("SELECT marks.* FROM marks JOIN items USING(id) WHERE items.parent=:id")
     fun episodeMarks(id: String): Flow<List<Mark>>
@@ -687,8 +700,12 @@ data class ItemRedirect(@PrimaryKey val oldId: String, val newId: String)
             Wp19SearchDocument::class,
             Wp19SearchGram::class,
             Wp19SearchState::class,
+            Wp22CatalogState::class,
+            Wp22Input::class,
+            Wp22Dirty::class,
+            Wp22ProjectionState::class,
         ],
-    version = 15,
+    version = 16,
     exportSchema = true,
     autoMigrations =
         [
@@ -706,6 +723,15 @@ abstract class LibraryDb : RoomDatabase() {
     abstract fun derived(): CatalogDerivedDao
 
     companion object {
+        val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                StartupPerf.measure("migration_15_16") {
+                    wp22CreateTables(db)
+                    wp22CreateProjection(db)
+                }
+            }
+        }
+
         val MIGRATION_14_15 = object : Migration(14, 15) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 StartupPerf.measure("migration_14_15") { wp19CreateSearchTables(db) }
@@ -807,7 +833,7 @@ abstract class LibraryDb : RoomDatabase() {
         }
 
         private val migrations: Array<Migration> = arrayOf(MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
-            MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15)
+            MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16)
 
         fun build(context: android.content.Context): LibraryDb =
             androidx.room.Room.databaseBuilder(context.applicationContext, LibraryDb::class.java, "lumenara.db")
