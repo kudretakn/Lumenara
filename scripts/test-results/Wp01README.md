@@ -52,6 +52,53 @@ Test APK installation includes `-t` as well as `-r -g`; API28's storage grant is
 retained. API36 keeps the original TV profile/RAM/animation settings, and API28
 runs the same smoke on the x86/2GB TV image with no skipped verifications.
 
+## API36 debug shards and test timeouts
+
+Android CI runs three API36 debug jobs, with separate emulators, 1,800-second
+budgets (including the 120-second artifact reserve), and artifacts named
+`android-tv-debug-api36-s0`, `-s1`, and `-s2`. API28 debug and both QA smoke jobs
+keep their existing filters, budgets, and execution policy.
+
+```sh
+./scripts/ci-device-tests.sh apks screens --num-shards 3 --shard-index 0 --test-timeout 180
+```
+
+Each shard first discovers the entire APK's suite in log-only mode. The
+`balanced-classes-v1` algorithm groups tests by class, orders classes by decreasing
+test count (class name breaks ties), and assigns each class to the smallest shard
+(shard index breaks ties). This keeps classes together, balances test counts, and
+automatically includes new tests without a maintained allowlist. The same inventory
+always produces the same partition regardless of discovery order.
+
+`--test-timeout` opts into one instrumentation invocation per test. The Python
+runner enforces a hard wall-clock limit around the whole invocation, including
+startup, setup, native code and teardown. A hung invocation is killed and recorded
+as `TIMEOUT`; the app and test packages are force-stopped before the next test runs.
+This also covers hangs that a JUnit method timeout cannot interrupt. Nothing clears
+app data or reinstalls APKs between tests. Each normal failure or timeout gets at
+most one retry after the shard's first pass. Normal failures can become visible
+`RETRIED` passes; a timeout stays `TIMEOUT`/red even after a clean retry. Crashes and
+protocol errors likewise remain red while later tests continue. Every invocation,
+cleanup, retry and artifact command shares the original shard deadline. The option
+defaults to disabled; `--single-run` rejects isolation and sharding so QA keeps its
+persistent-state lifecycle.
+
+`all-tests.txt` and `full_inventory` in `Wp01-results.json` retain full discovery;
+`shard-tests.txt` and `inventory` contain only this shard's expected tests. The JSON
+also records shard count/index/algorithm, per-test timeout, every attempt and command.
+The required `device` job downloads every API36 shard artifact into separate
+directories and invokes `Wp10DeviceGate.py --shard-reports device-shards --num-shards 3`.
+It requires all existing build/device dependencies to pass, exactly one successful
+report per shard index, identical valid full inventories, and each shard's inventory
+and actual final results to equal its recomputed partition. It rejects overlaps and
+requires their union to equal the full inventory. Missing artifacts, omitted tests,
+inconsistent discovery, failing reports and unreviewed skips fail closed.
+
+To increase parallelism, update `DEBUG_API36_SHARDS` and the API36 matrix rows in
+`android.yml` together, with indices `0..N-1` and unique `-sINDEX` artifact suffixes.
+The fixture tests check their agreement, and the aggregate gate rejects missing or
+duplicate indices at runtime. No changes to test lists or release gates are needed.
+
 ## Protocol and policy
 
 Inventory is discovered **before** execution using the same runner/filter in
@@ -89,7 +136,8 @@ artifact commands also share the remaining deadline. Tune
 `--artifact-reserve` / `-ArtifactReserveSeconds` together. The 30-minute default
 leaves headroom in the existing 55-minute CI job for emulator boot (up to 15
 minutes), setup and artifact upload. WP10 must budget any matrix/subruns at job
-level; multiple invocations do not share a deadline.
+level; separate launcher invocations do not share a deadline. API36 debug gives
+each parallel shard this budget; all per-test invocations inside a shard share it.
 
 Outputs include raw discovery/attempt logs, `all-tests.txt`, `summary.txt`, and
 version 1 `Wp01-results.json` (inventory, attempts, final statuses, gate errors,
