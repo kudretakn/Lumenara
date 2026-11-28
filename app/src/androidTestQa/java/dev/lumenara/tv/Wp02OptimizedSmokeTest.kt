@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.database.sqlite.SQLiteDatabase
 import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Bundle
 import android.os.Process
@@ -19,13 +20,18 @@ import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
 import androidx.test.uiautomator.UiDevice
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
 import okio.Buffer
 import org.junit.Assert.*
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TestWatcher
+import org.junit.runner.Description
 import org.junit.runner.RunWith
 
 /**
@@ -38,6 +44,19 @@ class Wp02OptimizedSmokeTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val context = instrumentation.targetContext
     private val device = UiDevice.getInstance(instrumentation)
+
+    @get:Rule
+    val failureEvidence = object : TestWatcher() {
+        override fun failed(error: Throwable, description: Description) {
+            // The runner pulls external files even when instrumentation fails.
+            runCatching {
+                val directory = java.io.File(context.getExternalFilesDir(null), "wp02-failure")
+                check(directory.mkdirs() || directory.isDirectory)
+                device.dumpWindowHierarchy(java.io.File(directory, "window.xml"))
+                device.takeScreenshot(java.io.File(directory, "screen.png"))
+            }.onFailure { android.util.Log.w("Wp02Smoke", "Failure evidence unavailable", it) }
+        }
+    }
 
     @Test
     fun optimizedAppImportsEncryptedCatalogSchedulesWorkerAndSwitchesBothEngines() {
@@ -73,12 +92,12 @@ class Wp02OptimizedSmokeTest {
             launch()
             await("setup or Hub") { nodeWithTag("setup-screen") != null || nodeWithTag("hub") != null }
             if (nodeWithTag("setup-screen") == null) openSources()
-            activate { nodeWithTag("setup-add-m3u") }
+            activate("add M3U") { nodeWithTag("setup-add-m3u") }
             setText("setup-name", name)
             setText("setup-address", server.url("/list?wp02-token=fixture").toString())
-            activate { nodeWithTag("setup-advanced") }
-            activate { nodeWithTag("setup-http-compat") }
-            activate { nodeWithTag("setup-submit") }
+            activate("advanced setup") { nodeWithTag("setup-advanced") }
+            activate("HTTP compatibility") { nodeWithTag("setup-http-compat") }
+            activate("submit source") { nodeWithTag("setup-submit") }
             await("populated Hub") { nodeWithTag("hub") != null }
 
             // Real Room-generated implementation and Vault write path, through the real UI.
@@ -110,24 +129,46 @@ class Wp02OptimizedSmokeTest {
             }
             assertEquals("Fixture must be stale by the app's elapsed-time rule", "0",
                 scalar("SELECT refreshed FROM sources WHERE id = ?", sourceId))
+            // Loopback imports do not prove that Android considers the emulator connected.
+            // Keep the real CONNECTED constraint; wait for the boot-time network to validate.
+            await("validated network for CONNECTED worker", 90_000,
+                onTimeout = { workerDiagnostics(sourceId, "<not scheduled>", null) }) {
+                val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                val capabilities = manager.getNetworkCapabilities(manager.activeNetwork)
+                capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true &&
+                    capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            }
+            val workDatabase = java.io.File(context.noBackupFilesDir, "androidx.work.workdb")
+            val previousDeferredIds = if (workDatabase.exists()) {
+                SQLiteDatabase.openDatabase(workDatabase.path, null, SQLiteDatabase.OPEN_READONLY).use { database ->
+                    database.rawQuery("""SELECT work_spec_id FROM WorkName
+                        WHERE name = 'deferred-refresh'""", null).use { cursor ->
+                        buildList { while (cursor.moveToNext()) add(cursor.getString(0)) }
+                    }
+                }
+            } else emptyList()
+            // APPEND_OR_REPLACE leaves a new follow-up BLOCKED with last_enqueue_time=-1
+            // when earlier work exists. A before/after ID comparison proves new work in
+            // both ENQUEUED and BLOCKED states without accepting an old follow-up.
+            val excludedDeferredIds = previousDeferredIds + ""
+            val excludedPlaceholders = excludedDeferredIds.joinToString { "?" }
             val scheduledAfter = System.currentTimeMillis().toString()
             var lastWorkQueryError: Throwable? = null
             val diagnostics = { workerDiagnostics(sourceId, scheduledAfter, lastWorkQueryError) }
             launch()
             await("recreated Hub", onTimeout = diagnostics) { nodeWithTag("hub") != null }
-            await("successful worker and deferred follow-up", 45_000, onTimeout = diagnostics) {
+            await("successful worker and deferred follow-up", 90_000, onTimeout = diagnostics) {
                 // WorkManager 2.11.1 opens its database in no_backup, not databases/.
-                val database = java.io.File(context.noBackupFilesDir, "androidx.work.workdb")
-                database.exists() && runCatching { readScalar(database.path,
+                workDatabase.exists() && runCatching { readScalar(workDatabase.path,
                     """SELECT w.id FROM WorkSpec w JOIN WorkName n ON n.work_spec_id = w.id
                         WHERE n.name = 'startup-refresh' AND w.worker_class_name = ?
                         AND w.state = 2 AND w.last_enqueue_time >= CAST(? AS INTEGER)
                         AND EXISTS (SELECT 1 FROM WorkSpec d JOIN WorkName dn ON dn.work_spec_id = d.id
                             WHERE dn.name = 'deferred-refresh' AND d.worker_class_name = ?
                             AND d.state IN (0, 4) AND d.initial_delay > 0
-                            AND d.last_enqueue_time >= CAST(? AS INTEGER)) LIMIT 1""",
+                            AND d.id NOT IN ($excludedPlaceholders)) LIMIT 1""",
                     "dev.lumenara.data.RefreshWorker", scheduledAfter,
-                    "dev.lumenara.data.RefreshWorker", scheduledAfter) }
+                    "dev.lumenara.data.RefreshWorker", *excludedDeferredIds.toTypedArray()) }
                     .onFailure { lastWorkQueryError = it }.getOrNull() != null
             }
 
@@ -140,21 +181,27 @@ class Wp02OptimizedSmokeTest {
             awaitFrame("media3", beforeMedia3)
             device.pressDPadLeft()
             await("Media3 mini-guide") { nodeWithTag("mini-guide") != null }
-            device.pressBack()
+            closeGuide("Media3")
 
-            InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_MENU)
-            activate { nodeWithText("Motor: Media3/VLC") }
+            openPlayerOptions()
+            activate("switch Media3 to VLC") { optionWithText("Motor: Media3/VLC") }
             await("VLC surface") { nodeWithTag("vlc-player") != null }
+            await("VLC options dismissed") { nodeWithTag("player-options") == null }
+            settleUi()
             val beforeVlc = frameCount("vlc")
             // A new item arms the actual frame counter after switching the engine.
             device.pressDPadDown()
             awaitFrame("vlc", beforeVlc)
             device.pressDPadLeft()
             await("VLC mini-guide") { nodeWithTag("mini-guide") != null }
-            device.pressBack()
+            closeGuide("VLC")
 
-            InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_MENU)
-            activate { nodeWithText("Motor: VLC/Media3") }
+            openPlayerOptions()
+            activate("switch VLC to Media3") { optionWithText("Motor: VLC/Media3") }
+            await("Media3 surface return") {
+                nodeWithTag("vlc-player") == null && nodeWithTag("player-options") == null
+            }
+            settleUi()
             val beforeReturn = frameCount("media3")
             device.pressDPadUp()
             awaitFrame("media3", beforeReturn)
@@ -166,8 +213,8 @@ class Wp02OptimizedSmokeTest {
             // runs on a disposable CI emulator, so cleanup is not part of the acceptance.
             runCatching {
                 openSources()
-                activate { sourceButton(sourceId, "Sil") }
-                activate { sourceButton(sourceId, "Silmeyi onayla") }
+                activate("delete fixture") { sourceButton(sourceId, "Sil") }
+                activate("confirm fixture deletion") { sourceButton(sourceId, "Silmeyi onayla") }
                 await("fixture removal") { scalar("SELECT id FROM sources WHERE id = ?", sourceId) == null }
             }.onFailure { android.util.Log.w("Wp02Smoke", "Fixture cleanup skipped", it) }
         }
@@ -206,9 +253,9 @@ class Wp02OptimizedSmokeTest {
         // The voice-search player has no Hub behind it; Back may leave the app.
         if (nodeWithTag("hub") == null) launch()
         await("Hub return") { nodeWithTag("hub") != null }
-        activate { nodeWithTag("hub-Ayarlar") }
-        activate { nodeWithTag("settings-group-Kaynaklar") }
-        activate { nodeWithText("IPTV Kaynakları") }
+        activate("Hub settings") { nodeWithTag("hub-Ayarlar") }
+        activate("source settings") { nodeWithTag("settings-group-Kaynaklar") }
+        activate("IPTV sources") { nodeWithText("IPTV Kaynakları") }
         await("source setup") { nodeWithTag("setup-screen") != null }
     }
 
@@ -228,30 +275,75 @@ class Wp02OptimizedSmokeTest {
         }))
     }
 
-    private fun activate(target: () -> AccessibilityNodeInfo?) {
-        // Scroll lazy content with DPAD until its accessibility node is composed.
-        var found = target()
-        repeat(50) {
-            if (found == null) {
-                device.pressDPadDown()
-                device.waitForIdle()
-                found = target()
+    private fun closeGuide(engine: String) {
+        device.pressBack()
+        await("$engine mini-guide dismissed") { nodeWithTag("mini-guide") == null }
+        settleUi() // Let the player's frame-delayed focus restoration finish before MENU.
+    }
+
+    private fun openPlayerOptions() {
+        instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_MENU)
+        await("player options") { nodeWithTag("player-options") != null }
+        settleUi() // The panel requests its initial focus after its first frame.
+    }
+
+    private fun optionWithText(text: String) = find(nodeWithTag("player-options")) {
+        it.isVisibleToUser && it.text?.toString() == text
+    }
+
+    private fun focusable(target: () -> AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+        var node = target() ?: return null
+        // Text can be accessibility-focusable without owning the button's DPAD action.
+        while (!node.isFocusable || !node.isClickable) node = node.parent ?: return null
+        return node.takeIf { it.isEnabled && it.isVisibleToUser }
+    }
+
+    private fun activate(label: String, target: () -> AccessibilityNodeInfo?) {
+        settleUi()
+        // API28's waitForIdle can return immediately with an old accessibility tree.
+        // Pace real DPAD scrolling so lazy composition can catch up; never select a
+        // prefetched/offscreen row or keep a node from before a recomposition.
+        var scrolls = 0
+        await("visible control: $label", 45_000) {
+            if (focusable(target) != null) true else {
+                if (scrolls++ < 50) {
+                    device.pressDPadDown()
+                    settleUi()
+                    SystemClock.sleep(250)
+                }
+                false
             }
         }
-        var focus = checkNotNull(found) { "Expected QA control is absent" }
-        while (!focus.isFocusable) focus = checkNotNull(focus.parent) { "Control cannot take DPAD focus" }
-        assertTrue("Accessibility focus request", focus.performAction(AccessibilityNodeInfo.ACTION_FOCUS))
-        await("DPAD focus") { focus.refresh() && focus.isFocused }
+        var focusedPolls = 0
+        await("stable DPAD focus: $label") {
+            val current = focusable(target)
+            if (current?.isFocused == true) focusedPolls++ else {
+                focusedPolls = 0
+                current?.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+            }
+            focusedPolls >= 3
+        }
         device.pressDPadCenter()
-        device.waitForIdle()
+        settleUi()
+    }
+
+    private fun settleUi() {
+        instrumentation.waitForIdleSync()
+        val drawn = CountDownLatch(1)
+        instrumentation.runOnMainSync {
+            android.view.Choreographer.getInstance().postFrameCallback {
+                android.view.Choreographer.getInstance().postFrameCallback { drawn.countDown() }
+            }
+        }
+        assertTrue("UI must draw after remote input", drawn.await(10, TimeUnit.SECONDS))
     }
 
     private fun nodeWithTag(tag: String) = find(instrumentation.uiAutomation.rootInActiveWindow) {
-        it.viewIdResourceName == tag
+        it.isVisibleToUser && it.viewIdResourceName == tag
     }
 
     private fun nodeWithText(text: String) = find(instrumentation.uiAutomation.rootInActiveWindow) {
-        it.text?.toString() == text
+        it.isVisibleToUser && it.text?.toString() == text
     }
 
     private fun find(root: AccessibilityNodeInfo?, predicate: (AccessibilityNodeInfo) -> Boolean): AccessibilityNodeInfo? {
@@ -317,14 +409,14 @@ class Wp02OptimizedSmokeTest {
     ).lineSequence().count { it.contains("zap_first_frame ") && it.contains("engine=$engine") }
 
     private fun awaitFrame(engine: String, before: Int) =
-        await("$engine decoded frame", 30_000) { frameCount(engine) > before }
+        await("$engine decoded frame", 60_000) { frameCount(engine) > before }
 
-    private fun await(label: String, timeout: Long = 15_000, onTimeout: () -> String = { "" }, ready: () -> Boolean) {
+    private fun await(label: String, timeout: Long = 30_000, onTimeout: () -> String = { "" }, ready: () -> Boolean) {
         val deadline = SystemClock.uptimeMillis() + timeout
         while (SystemClock.uptimeMillis() < deadline) {
             if (ready()) return
             SystemClock.sleep(100)
         }
-        fail("Timed out waiting for $label\n${onTimeout()}")
+        fail("Timed out waiting for $label (active package=${device.currentPackageName})\n${onTimeout()}")
     }
 }

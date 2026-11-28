@@ -96,13 +96,18 @@ jobs:
             app/build/outputs/mapping/release/
             app/build/reports/wp10/
           if-no-files-found: error
+      - name: Stage the exact optimized app and test APK pair
+        run: |
+          mkdir -p qa-apks
+          cp app/build/outputs/apk/qa/app-qa.apk qa-apks/
+          cp app/build/outputs/apk/androidTest/qa/app-qa-androidTest.apk qa-apks/
+          cd qa-apks
+          sha256sum app-qa.apk app-qa-androidTest.apk > qa-apks.sha256
       - name: Upload prebuilt QA APKs
         uses: actions/upload-artifact@v4
         with:
           name: qa-apk
-          path: |
-            app/build/outputs/apk/qa/*.apk
-            app/build/outputs/apk/androidTest/qa/*.apk
+          path: qa-apks/
           if-no-files-found: error
 
   debug-device:
@@ -194,6 +199,7 @@ jobs:
     name: qa-smoke (API${{ matrix.api }})
     runs-on: ubuntu-latest
     needs: optimized-build
+    # Two boot attempts (30m), one 15m gate budget, setup and artifact upload.
     timeout-minutes: 50
     strategy:
       fail-fast: false
@@ -212,11 +218,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: qa-apk
-          path: apks-raw
-      - name: Collect APKs
+          path: apks
+      - name: Verify the prebuilt QA pair
         run: |
-          mkdir -p apks
-          find apks-raw -name '*.apk' -exec cp {} apks/ \;
+          cd apks
+          sha256sum --check qa-apks.sha256
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -236,6 +242,9 @@ jobs:
           emulator-boot-timeout: 900
           disable-animations: true
           emulator-options: '-no-window -no-snapshot -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none'
+          # Same API36 TV profile, RAM, rendering and animations as the old
+          # connectedQaAndroidTest job. API28 adds x86/2GB without excluding checks.
+          # No test retry/reinstall/clear-data cycle: this smoke owns persistent work.
           script: ./scripts/qa-smoke.sh apks screens
       - name: Retry once if the emulator never ran the tests
         id: retry

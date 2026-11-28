@@ -37,6 +37,21 @@ Bash supports `--class ClassName[#method]`; PowerShell uses `-Class`.
 Use `--adb` / `-Adb` and `WP01_PYTHON` / `-Python` to select tools explicitly.
 PowerShell's optional debug build precedes the shared device-test deadline.
 
+`scripts/qa-smoke.sh apks screens/qa` supplies the actual optimized QA IDs and
+`--single-run`: log-only discovery followed by exactly one execution. It retains
+the strict inventory/completion/crash/skip gate, with no continuation or test retry.
+This matches the old `connectedQaAndroidTest` smoke lifecycle on a fresh emulator.
+Restarting instrumentation retains Room/Vault and the WorkManager database, including
+deferred jobs and URLs pointing at the previous test's now-closed fixture server.
+There is no reinstall or data clear between discovery and execution, or during the
+test's Activity recreation/Vault key reuse checks. The default debug retry policy
+is unchanged. The QA budget is 900 seconds including the 120-second artifact reserve.
+The workflow checks a SHA-256 manifest for the exact pair built together; the
+launcher archives its input APK hashes and the shared runner records command argv.
+Test APK installation includes `-t` as well as `-r -g`; API28's storage grant is
+retained. API36 keeps the original TV profile/RAM/animation settings, and API28
+runs the same smoke on the x86/2GB TV image with no skipped verifications.
+
 ## Protocol and policy
 
 Inventory is discovered **before** execution using the same runner/filter in
