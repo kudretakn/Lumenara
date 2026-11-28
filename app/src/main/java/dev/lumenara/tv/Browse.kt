@@ -1,6 +1,9 @@
 package dev.lumenara.tv
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.BringIntoViewSpec
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
@@ -29,6 +32,7 @@ import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.*
+import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.*
 import dev.lumenara.data.*
@@ -48,14 +52,14 @@ internal fun Poster(model: LibraryModel, item: Item, modifier: Modifier,
 
 /** Hub shelves keep their text stationary while the 16:9 image receives focus. */
 @Composable
-private fun HubShelfTile(
-    item: Item,
+internal fun HubShelfTile(
+    card: Wp17PosterCard,
     click: () -> Unit,
     focus: () -> Unit,
     modifier: Modifier = Modifier,
     content: @Composable BoxScope.() -> Unit,
 ) {
-    var restoreFocus by rememberSaveable(item.id) { mutableStateOf(false) }
+    var restoreFocus by rememberSaveable(card.id) { mutableStateOf(false) }
     val requester = remember { FocusRequester() }
     LaunchedEffect(Unit) {
         if (restoreFocus) {
@@ -68,7 +72,7 @@ private fun HubShelfTile(
         onClick = { restoreFocus = true; click() },
         modifier = modifier.fillMaxWidth().aspectRatio(16f / 9f)
             .focusRequester(requester)
-            .semantics { contentDescription = item.title }
+            .semantics { contentDescription = card.title }
             .onFocusChanged { if (it.isFocused) focus() },
         content = content,
     )
@@ -120,11 +124,17 @@ private fun HubChannelShelf(
                 model.awaitFirstDraw()
                 Wp05HubImage(model.repo.poster(item))
             }
+            val latestPlay by rememberUpdatedState(play)
+            val latestRows by rememberUpdatedState(rows)
+            val latestFocus by rememberUpdatedState(focus)
+            val click = remember(item) { { latestPlay(item, latestRows) } }
+            val onFocus = remember { { latestFocus() } }
+            val artwork: @Composable BoxScope.() -> Unit = remember(model, item, logo) {
+                { HubArtwork(model, item, logo, channel = true) }
+            }
             Column(Modifier.width(150.dp), verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
-                HubShelfTile(item, { play(item, rows) }, focus,
-                    Modifier.testTag("live-channel-${item.id}")) {
-                    HubArtwork(model, item, logo, channel = true)
-                }
+                HubShelfTile(Wp17PosterCard.from(item), click, onFocus,
+                    Modifier.testTag("live-channel-${item.id}"), artwork)
                 Text(item.title, Modifier.testTag("hub-title-${item.id}"),
                     style = LumenType.label, color = LumenColors.textPrimary,
                     minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -171,14 +181,21 @@ private fun HubResumeShelf(model: LibraryModel, rows: List<Item>, open: (Item) -
             }
             val caption = listOfNotNull(episode?.let { "S${it.season} · B${it.episode}" }, remaining)
                 .joinToString(" · ").ifBlank { "İzlemeye devam et" }
-            Column(Modifier.width(180.dp), verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
-                HubShelfTile(item, { open(item) }, focus) {
+            val latestOpen by rememberUpdatedState(open)
+            val latestFocus by rememberUpdatedState(focus)
+            val click = remember(item) { { latestOpen(item) } }
+            val onFocus = remember { { latestFocus() } }
+            val artwork: @Composable BoxScope.() -> Unit = remember(model, item, backdrop, mark) {
+                {
                     HubArtwork(model, item, backdrop)
                     if ((mark?.duration ?: 0) > 0) ProgressLine(
                         (mark?.position ?: 0).toFloat() / checkNotNull(mark).duration,
                         Modifier.align(Alignment.BottomStart),
                     )
                 }
+            }
+            Column(Modifier.width(180.dp), verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
+                HubShelfTile(Wp17PosterCard.from(item), click, onFocus, content = artwork)
                 Text(item.title, Modifier.testTag("hub-title-${item.id}"),
                     style = LumenType.label, color = LumenColors.textPrimary,
                     minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -267,7 +284,7 @@ internal fun Home(
     source: String,
     open: (Item) -> Unit,
     play: (Item, List<Item>) -> Unit,
-    lastCard: String = "Canlı TV",
+    lastCard: String = LibraryRoute.Live.id,
     sourceSelector: @Composable () -> Unit = {},
     navigate: (String) -> Unit,
 ) {
@@ -282,18 +299,20 @@ internal fun Home(
         }
     }
     LaunchedEffect(model, source) { model.selectHubSource(source) }
-    val recentState by model.hubRecent.collectAsStateWithLifecycle()
-    val resumeState by model.hubResume.collectAsStateWithLifecycle()
-    val recentResult = recentState?.takeIf { it.source == source }?.rows
-    val resumeResult = resumeState?.takeIf { it.source == source }?.rows
+    val recentState by model.hubRecentUi.collectAsStateWithLifecycle()
+    val resumeState by model.hubResumeUi.collectAsStateWithLifecycle()
+    val recentResult = recentState.readyOrNull()?.takeIf { it.source == source }?.rows
+    val resumeResult = resumeState.readyOrNull()?.takeIf { it.source == source }?.rows
     val recent = recentResult.orEmpty()
     val resume = resumeResult.orEmpty()
     val rowsReady = recentResult != null && resumeResult != null
     var shellDrawn by remember(source) { mutableStateOf(false) }
     var rowsDrawn by remember(source) { mutableStateOf(false) }
-    val totals by model.hubTotals.collectAsStateWithLifecycle()
-    val scopedTotals = totals?.takeIf { it.first == source }?.second
+    val totals by model.hubTotalsUi.collectAsStateWithLifecycle()
+    val scopedTotals = totals.readyOrNull()?.takeIf { it.first == source }?.second
     val counts = listOf("LIVE", "MOVIE", "SERIES").map { scopedTotals?.getOrDefault(it, 0) }
+    val hubError = recentState is ScreenUiState.Error || resumeState is ScreenUiState.Error || totals is ScreenUiState.Error
+    LaunchedEffect(hubError) { if (hubError) model.onFirstDraw() }
     // Capture whether shelves were part of this composition, before draw mutates the state.
     val shelvesComposed = shellDrawn
     val shellReported = remember { booleanArrayOf(false) }
@@ -303,23 +322,36 @@ internal fun Home(
     var focused by rememberSaveable { mutableStateOf(lastCard) }
     val entry = remember { FocusRequester() }
     val list = rememberLazyListState()
-    val cards = listOf("Canlı TV", "Filmler", "Diziler", "Listem", "Ara", "Ayarlar")
-    val target = if (focused in cards) focused else lastCard
+    val cards = LibraryRoute.hub
+    val focusedRoute = LibraryRoute.fromSaved(focused)
+    val target = focusedRoute.takeIf { it in cards }
+        ?: LibraryRoute.fromSaved(lastCard).takeIf { it in cards } ?: LibraryRoute.Live
     val returnShelf = remember { focused.takeIf { it == "recent" || it == "resume" } }
     var restored by remember { mutableStateOf(false) }
-    LaunchedEffect(recentResult, resumeResult, shelvesComposed) {
+    LaunchedEffect(recentResult, resumeResult, shelvesComposed, hubError) {
+        // A warm snapshot can restore the tile before the resumed query removes its shelf.
+        val lostShelf = when (focused) {
+            "recent" -> recentState is ScreenUiState.Error || recentResult?.isEmpty() == true
+            "resume" -> resumeState is ScreenUiState.Error || resumeResult?.isEmpty() == true
+            else -> false
+        }
+        if (restored && lostShelf) {
+            focused = target.id
+            list.scrollToItem(0)
+            withFrameNanos { }
+            entry.requestFocus()
+        }
         if (!restored) {
             if (returnShelf != null && !shelvesComposed) return@LaunchedEffect
-            if (returnShelf != null && (recentResult == null || resumeResult == null)) return@LaunchedEffect
+            if (returnShelf != null && !hubError && (recentResult == null || resumeResult == null)) return@LaunchedEffect
             when {
                 returnShelf == "recent" && recent.isNotEmpty() -> list.scrollToItem(3)
                 returnShelf == "resume" && resume.isNotEmpty() -> list.scrollToItem(if (recent.isEmpty()) 3 else 4)
-                returnShelf == null -> {
+                else -> {
                     if (list.firstVisibleItemIndex != 0) list.scrollToItem(0)
                     withFrameNanos { }
                     entry.requestFocus()
                 }
-                else -> return@LaunchedEffect
             }
             restored = true
         }
@@ -360,7 +392,8 @@ internal fun Home(
                     horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     repeat(3) { column ->
                         val index = row * 3 + column
-                        val name = cards[index]
+                        val route = cards[index]
+                        val name = stringResource(route.labelRes)
                         val caption = if (index < 3 && counts[index] != null) {
                             val number = java.text.NumberFormat.getIntegerInstance(java.util.Locale.forLanguageTag("tr"))
                                 .format(counts[index] ?: 0)
@@ -368,30 +401,30 @@ internal fun Home(
                         } else ""
                         // Measure the grid slot independently of the card's focus transform.
                         Box(Modifier.weight(1f).height(if (row == 0) 100.dp else 40.dp)
-                            .testTag("hub-slot-$name")) {
+                            .testTag("hub-slot-${route.legacyName}")) {
                             HubNavigationCard(model, name, caption,
                                 listOf(LumenIcon.Tv, LumenIcon.Film, LumenIcon.Series, LumenIcon.Bookmark, LumenIcon.Search, LumenIcon.Settings)[index],
                                 Modifier.fillMaxSize()
-                                    .testTag("hub-$name").semantics {
+                                    .testTag("hub-${route.legacyName}").semantics {
                                         contentDescription = name
-                                        if (name == "Ayarlar" && update != null) stateDescription = "Güncelleme hazır"
-                                    }.then(if (name == target) Modifier.focusRequester(entry) else Modifier)
-                                    .onFocusChanged { if (it.isFocused) focused = name },
-                                update = name == "Ayarlar" && update != null,
+                                        if (route == LibraryRoute.Settings && update != null) stateDescription = "Güncelleme hazır"
+                                    }.then(if (route == target) Modifier.focusRequester(entry) else Modifier)
+                                    .onFocusChanged { if (it.isFocused) focused = route.id },
+                                update = route == LibraryRoute.Settings && update != null,
                                 compact = row == 1,
-                                loading = index < 3 && counts[index] == null,
+                                loading = index < 3 && counts[index] == null && totals !is ScreenUiState.Error,
                                 artworkItem = when (index) {
                                     0 -> recent.firstOrNull()
                                     1 -> resume.firstOrNull { it.kind == "MOVIE" }
                                     2 -> resume.firstOrNull { it.kind == "SERIES" }
                                     else -> null
                                 },
-                            ) { navigate(name) }
+                            ) { navigate(route.id) }
                         }
                     }
                 }
             }
-            if (recentResult == null) item {
+            if (recentResult == null && recentState !is ScreenUiState.Error) item {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     repeat(4) {
                         Box(Modifier.width(150.dp).aspectRatio(16f / 9f)
@@ -399,7 +432,7 @@ internal fun Home(
                     }
                 }
             }
-            if (resumeResult == null) item {
+            if (resumeResult == null && resumeState !is ScreenUiState.Error) item {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     repeat(4) {
                         Box(Modifier.width(180.dp).aspectRatio(16f / 9f)
@@ -415,6 +448,7 @@ internal fun Home(
                     HubResumeShelf(model, resume, open, { focused = "resume" })
                 }
             }
+            if (hubError) item { Wp17ScreenError(model::retryHub, requestFocus = false) }
             if (counts.all { it == 0 }) item {
                 Text("İçerik eklemek için Ayarlar bölümünden IPTV Kaynakları’nı açın.",
                     style = LumenType.body, color = LumenColors.textSecondary)
@@ -433,40 +467,50 @@ internal fun Browse(
     returnToChannel: String? = null,
     onChannelFocusRestored: () -> Unit = {},
 ) {
-    val kind =
-        when (section) {
-            "Canlı TV" -> "LIVE"
-            "Filmler" -> "MOVIE"
-            "Diziler" -> "SERIES"
-            else -> ""
-        }
+    val route = LibraryRoute.fromSaved(section)
+    val title = stringResource(route.labelRes)
+    val kind = route.kind
     if (kind == "LIVE") {
         LiveScreen(model, source, open, play, returnToChannel, onChannelFocusRestored)
         return
     }
-    if (section == "Ara") {
+    if (route == LibraryRoute.Search) {
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Text("Ara", fontSize = 28.sp)
+            Text(title, fontSize = 28.sp)
             Box(Modifier.weight(1f)) { SearchScreen(model, source, open, play) }
         }
         return
     }
-    var selectedCategory by rememberSaveable(source, section) { mutableStateOf<String?>(null) }
-    var categoryTitle by rememberSaveable(source, section) { mutableStateOf("") }
+    var selectedCategory by rememberSaveable(source, route.id) { mutableStateOf<String?>(null) }
+    var categoryTitle by rememberSaveable(source, route.id) { mutableStateOf("") }
     val category = selectedCategory?.removePrefix("provider:").takeIf {
         selectedCategory?.startsWith("provider:") == true
     }.orEmpty()
-    val shelf = if (section == "Listem") selectedCategory.orEmpty() else ""
-    val groups by remember(kind, source) { model.repo.categoryCounts(kind, source) }
-        .collectAsLoadingState()
-    val favoriteCount by remember(source) { model.repo.shelfCount(source, "", "favorite") }
-        .collectAsLoadingState()
-    val listedCount by remember(source) { model.repo.shelfCount(source, "", "list") }
-        .collectAsLoadingState()
+    val shelf = if (route == LibraryRoute.Watchlist) selectedCategory.orEmpty() else ""
+    var retry by remember(source, route.id) { mutableIntStateOf(0) }
+    val groupsState by remember(model, kind, source, retry) {
+        model.repo.categoryCounts(kind, source).wp17ScreenStates("categories")
+    }.collectAsStateWithLifecycle(ScreenUiState.Loading)
+    val favoriteState by remember(model, source, retry) {
+        model.repo.shelfCount(source, "", "favorite").wp17ScreenStates("favorites")
+    }.collectAsStateWithLifecycle(ScreenUiState.Loading)
+    val listedState by remember(model, source, retry) {
+        model.repo.shelfCount(source, "", "list").wp17ScreenStates("watchlist")
+    }.collectAsStateWithLifecycle(ScreenUiState.Loading)
+    val groups = groupsState.readyOrNull()
+    val favoriteCount = favoriteState.readyOrNull()
+    val listedCount = listedState.readyOrNull()
     val cardPages = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
     BackHandler(selectedCategory != null) { selectedCategory = null }
     if (selectedCategory == null) {
-        val entries = if (section == "Listem") {
+        val failed = if (route == LibraryRoute.Watchlist)
+            favoriteState is ScreenUiState.Error || listedState is ScreenUiState.Error
+        else groupsState is ScreenUiState.Error
+        if (failed) {
+            Wp17ScreenError(retry = { retry++ })
+            return
+        }
+        val entries = if (route == LibraryRoute.Watchlist) {
             if (favoriteCount == null || listedCount == null) null
             else listOf(CategoryEntry("favorite", "Favoriler", favoriteCount ?: 0),
                 CategoryEntry("list", "İzleme listem", listedCount ?: 0))
@@ -475,18 +519,19 @@ internal fun Browse(
                 .filter { entry -> entry.count > 0 } + providerCategories(it)
         }
         cardPages.SaveableStateProvider("categories") {
-            CategoryGrid(section, entries) { selectedCategory = it.id; categoryTitle = it.name }
+            CategoryGrid(title, entries) { selectedCategory = it.id; categoryTitle = it.name }
         }
         return
     }
     cardPages.SaveableStateProvider("content-$selectedCategory") {
-        PosterGridContent(model, section, source, kind, category, shelf, categoryTitle, open, play)
+        PosterGridContent(model, title, source, kind, category, shelf, categoryTitle, open, play)
     }
 }
 
 private const val POSTER_GRID_COLUMNS = 8
 private const val POSTER_PAGE_SIZE = POSTER_GRID_COLUMNS * 10
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun PosterGridContent(model: LibraryModel, section: String, source: String, kind: String,
     category: String, shelf: String, categoryTitle: String, open: (Item) -> Unit,
@@ -513,6 +558,11 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
     val restoreId = remember(source, kind, category, shelf, year, genre, language, rating) {
         lastPoster.value.takeIf { restoreOnce[0] }.also { restoreOnce[0] = false }
     }
+    var returnTarget by rememberSaveable(source, kind, category, shelf, year, genre, language, rating,
+        stateSaver = Wp17GridReturn.Saver) { mutableStateOf<Wp17GridReturn?>(null) }
+    val returnViewport = remember(source, kind, category, shelf, year, genre, language, rating) {
+        returnTarget?.takeIf { it.itemId == restoreId }
+    }
     val paged = rememberCatalogPages(model, source, kind, category, shelf = shelf,
         year = year, genre = genre, language = language, minRating = rating.toDouble(),
         pageSize = POSTER_PAGE_SIZE, columns = POSTER_GRID_COLUMNS, returnId = restoreId)
@@ -525,6 +575,17 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
     val posterWidth = with(density) { if (gridWidth == 0) 0 else ((gridWidth - (POSTER_GRID_COLUMNS - 1) * Spacing.cardGap.roundToPx()) / POSTER_GRID_COLUMNS).coerceAtLeast(1) }
     val posterHeight = (posterWidth * 1.5f).toInt()
     val grid = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
+    val keepReturnViewport = remember(source, kind, category, shelf, year, genre, language, rating) {
+        mutableStateOf(restoreId != null)
+    }
+    val platformScroll = LocalBringIntoViewSpec.current
+    val returnScroll = remember(platformScroll, keepReturnViewport) {
+        object : BringIntoViewSpec by platformScroll {
+            override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float =
+                if (keepReturnViewport.value) 0f
+                else platformScroll.calculateScrollDistance(offset, size, containerSize)
+        }
+    }
     val gridFocus = rememberGridFocus(grid, span = { if (paged.isLiveSlot(it)) 2 else 1 }, column = paged::columnOf)
     val posterFocus = remember { FocusRequester() }
     var positioned by remember(paged) { mutableStateOf(false) }
@@ -532,7 +593,15 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
     val posterTarget = paged.anchor ?: 0
     LaunchedEffect(paged, loading, posterTarget) {
         if (!positioned && !loading && paged[posterTarget] != null) {
-            grid.scrollToItem(posterTarget)
+            // Loading placeholders can clamp LazyGridState before the anchor page arrives.
+            // Restore the explicit viewport only after the real slots have been laid out.
+            snapshotFlow { grid.layoutInfo }.first { it.totalItemsCount > posterTarget }
+            if (returnViewport != null) {
+                val (first, offset) = returnViewport.viewport(checkNotNull(paged[posterTarget]).id, posterTarget)
+                grid.scrollToItem(first, offset)
+            } else if (grid.layoutInfo.visibleItemsInfo.none { it.index == posterTarget }) {
+                grid.scrollToItem(posterTarget)
+            }
             positioned = true
         }
     }
@@ -571,47 +640,58 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
                     }
                 }
             }
-            androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
-                columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(POSTER_GRID_COLUMNS),
-                state = grid,
-                modifier = Modifier.weight(1f).onSizeChanged { gridWidth = it.width }.testTag("poster-grid").reportScrollPosition(grid).then(gridFocus.modifier)
-                    .semantics { pagingWindow = pagingDescription(paged) }.focusRestorer().focusGroup()
-                    .categoryFirstDraw(!loading && (count == 0 || positioned && paged[posterTarget] != null)),
-                // TV safe area plus the title/year below the focusable poster.
-                contentPadding = PaddingValues(top = 8.dp, bottom = 64.dp),
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                verticalArrangement = Arrangement.spacedBy(18.dp),
-            ) {
-                if (loading) loadingCards(224.dp)
-                if (!loading && count == 0) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
-                    Column {
-                        Text("Eşleşen içerik yok.", color = LumenColors.textSecondary)
-                        if (kind.isEmpty()) {
-                            val back = androidx.activity.compose.LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
-                            Button(onClick = { back?.onBackPressed() }, modifier = Modifier.focusRequester(emptyFocus)) { Text("Geri") }
+            CompositionLocalProvider(LocalBringIntoViewSpec provides returnScroll) {
+                androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+                    columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(POSTER_GRID_COLUMNS),
+                    state = grid,
+                    modifier = Modifier.weight(1f).onSizeChanged { gridWidth = it.width }.testTag("poster-grid").reportScrollPosition(grid).then(gridFocus.modifier)
+                        .semantics { pagingWindow = pagingDescription(paged) }.focusRestorer().focusGroup()
+                        .categoryFirstDraw(!loading && (count == 0 || positioned && paged[posterTarget] != null)),
+                    // TV safe area plus the title/year below the focusable poster.
+                    contentPadding = PaddingValues(top = 8.dp, bottom = 64.dp),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(18.dp),
+                ) {
+                    if (loading) loadingCards(224.dp)
+                    if (!loading && count == 0) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                        Column {
+                            Text("Eşleşen içerik yok.", color = LumenColors.textSecondary)
+                            if (kind.isEmpty()) {
+                                val back = androidx.activity.compose.LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
+                                Button(onClick = { back?.onBackPressed() }, modifier = Modifier.focusRequester(emptyFocus)) { Text("Geri") }
+                            }
                         }
                     }
-                }
-                items(count, key = { it }, contentType = { if (paged.isLiveSlot(it)) "live" else "poster" }, span = { index ->
-                    // The skinny type index remains valid after a page's Item rows are evicted.
-                    androidx.compose.foundation.lazy.grid.GridItemSpan(if (paged.isLiveSlot(index)) 2 else 1)
-                }) { index ->
-                    val entry = paged[index]
-                    if (entry != null && index == posterTarget && positioned && requestPending && !advanced) LaunchedEffect(Unit) {
-                        withFrameNanos { }
-                        posterFocus.requestFocus()
-                        requestPending = false
+                    items(count, key = { it }, contentType = { if (paged.isLiveSlot(it)) "live" else "poster" }, span = { index ->
+                        // The skinny type index remains valid after a page's Item rows are evicted.
+                        androidx.compose.foundation.lazy.grid.GridItemSpan(if (paged.isLiveSlot(index)) 2 else 1)
+                    }) { index ->
+                        val entry = paged[index]
+                        if (entry != null && index == posterTarget && positioned && requestPending && !advanced) LaunchedEffect(Unit) {
+                            withFrameNanos { }
+                            posterFocus.requestFocus()
+                            requestPending = false
+                        }
+                        val cardModifier = Modifier.fillMaxWidth()
+                            .then(gridFocus.item(index))
+                            .then(if (index == posterTarget) Modifier.focusRequester(posterFocus) else Modifier)
+                            .onFocusChanged {
+                                if (it.hasFocus) {
+                                    paged.focused(index)
+                                    if (!requestPending) keepReturnViewport.value = false
+                                }
+                            }
+                        fun saveViewport(item: Item) {
+                            returnTarget = Wp17GridReturn(item.id, index, grid.firstVisibleItemIndex, grid.firstVisibleItemScrollOffset)
+                        }
+                        val showDetails: (Item) -> Unit = { saveViewport(it); open(it) }
+                        if (paged.isLiveSlot(index)) ChannelCard(model, entry, now,
+                            { entry?.let { saveViewport(it); play(it, paged.loaded().filter { it.kind == "LIVE" }) } }, { lastPoster.value = it.id },
+                            modifier = cardModifier.testTag("poster-slot-$index"), operations = { entry?.let(showDetails) })
+                        else GridPoster(model, entry, showDetails, { lastPoster.value = it.id },
+                            modifier = cardModifier.testTag("poster-slot-$index"),
+                            artworkHttp = entry?.source in httpSources, artworkWidth = posterWidth, artworkHeight = posterHeight)
                     }
-                    val cardModifier = Modifier.fillMaxWidth()
-                        .then(gridFocus.item(index))
-                        .then(if (index == posterTarget) Modifier.focusRequester(posterFocus) else Modifier)
-                        .onFocusChanged { if (it.hasFocus) paged.focused(index) }
-                    if (paged.isLiveSlot(index)) ChannelCard(model, entry, now,
-                        { entry?.let { play(it, paged.loaded().filter { it.kind == "LIVE" }) } }, { lastPoster.value = it.id },
-                        modifier = cardModifier.testTag("poster-slot-$index"), operations = { entry?.let(open) })
-                    else GridPoster(model, entry, open, { lastPoster.value = it.id },
-                        modifier = cardModifier.testTag("poster-slot-$index"),
-                        artworkHttp = entry?.source in httpSources, artworkWidth = posterWidth, artworkHeight = posterHeight)
                 }
             }
         }
@@ -640,25 +720,45 @@ private fun PosterGridContent(model: LibraryModel, section: String, source: Stri
     }
 }
 
-/** Grid captions reserve their space so a focus change never moves the next row. */
+/** Resolve item actions/artwork outside the scalar card presentation boundary. */
 @Composable
 private fun GridPoster(model: LibraryModel, item: Item?, open: (Item) -> Unit,
     focus: (Item) -> Unit, modifier: Modifier, artworkHttp: Boolean,
     artworkWidth: Int, artworkHeight: Int) {
-    var focused by remember { mutableStateOf(false) }
-    val observeFocus = rememberCardFocus(item, focus)
-    Column(modifier) {
-        FocusCard(onClick = { item?.let { focus(it); open(it) } }, modifier = Modifier.fillMaxWidth()
-            .semantics { contentDescription = item?.title ?: "Yükleniyor" }
-            .onFocusChanged { focused = it.isFocused; observeFocus(it.isFocused) }) {
+    val card = item?.let { Wp17PosterCard.from(it) }
+    val currentItem by rememberUpdatedState(item)
+    val currentOpen by rememberUpdatedState(open)
+    val observeFocus by rememberUpdatedState(rememberCardFocus(item, focus))
+    val currentFocus by rememberUpdatedState(focus)
+    val click = remember { { currentItem?.let { currentFocus(it); currentOpen(it) }; Unit } }
+    val focused = remember { { value: Boolean -> observeFocus(value) } }
+    // remember compares keys structurally: equal Room emissions keep this renderer identity.
+    val artwork: @Composable () -> Unit = remember(model, item, artworkHttp, artworkWidth, artworkHeight) {
+        {
             if (item == null) LoadingCard(Modifier.fillMaxWidth().aspectRatio(2f / 3f))
             else Poster(model, item, Modifier.fillMaxWidth().aspectRatio(2f / 3f),
                 allowHttp = artworkHttp, width = artworkWidth, height = artworkHeight)
         }
+    }
+    Wp17PosterTile(card, click, focused, modifier, artwork)
+}
+
+/** Grid captions reserve their space so a focus change never moves the next row. */
+@Composable
+internal fun Wp17PosterTile(card: Wp17PosterCard?, click: () -> Unit,
+    focus: (Boolean) -> Unit, modifier: Modifier = Modifier, artwork: @Composable () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val loading = stringResource(R.string.screen_loading)
+    Column(modifier) {
+        FocusCard(onClick = click, modifier = Modifier.fillMaxWidth()
+            .semantics { contentDescription = card?.title ?: loading }
+            .onFocusChanged { focused = it.isFocused; focus(it.isFocused) }) {
+            artwork()
+        }
         Column(Modifier.padding(top = Spacing.unit).alpha(if (focused) 1f else 0f)) {
-            Text(item?.let { it.cleanTitle.ifEmpty { it.title } }.orEmpty(), style = LumenType.cardTitle, color = LumenColors.textPrimary,
+            Text(card?.caption.orEmpty(), style = LumenType.cardTitle, color = LumenColors.textPrimary,
                 minLines = 1, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(item?.year.orEmpty(), style = LumenType.meta, minLines = 1, maxLines = 1)
+            Text(card?.year.orEmpty(), style = LumenType.meta, minLines = 1, maxLines = 1)
         }
     }
 }
