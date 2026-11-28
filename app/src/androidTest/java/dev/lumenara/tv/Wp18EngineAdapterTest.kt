@@ -6,6 +6,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
@@ -37,9 +38,13 @@ class Wp18EngineAdapterTest {
         val video = instrumentation.context.assets.open("lumenara-test.ts").use { it.readBytes() }
         val mp4 = instrumentation.context.assets.open("audio-subtitle-test.mp4").use { it.readBytes() }
         val audio = tone()
-        val failure = AtomicReference<Throwable?>()
+        val failure = AtomicReference<AssertionError?>()
+        val currentStep = AtomicReference(AdapterStep("setup", "create adapters"))
+        fun recordFailure(error: Throwable) {
+            failure.compareAndSet(null, currentStep.get().failure(error))
+        }
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate +
-            CoroutineExceptionHandler { _, error -> failure.set(error) })
+            CoroutineExceptionHandler { _, error -> recordFailure(error) })
         lateinit var vlcView: VLCVideoLayout
         lateinit var exoView: PlayerView
         lateinit var vlc: VlcEngine
@@ -72,6 +77,12 @@ class Wp18EngineAdapterTest {
                 }
             }
             server.start()
+            // url() can reverse-resolve the host. Keep every call on the instrumentation
+            // thread: API 36 rejects that DNS lookup on Main before an adapter even opens.
+            val tsUrl = server.url("/stream.ts").toString()
+            val hlsUrl = server.url("/stream.m3u8").toString()
+            val toneUrl = server.url("/tone.wav").toString()
+            val mp4Url = server.url("/audio.mp4").toString()
             screen.runOnUiThread {
                 vlc = VlcEngine(screen.activity, PlaybackNetwork { Transport.client(it) })
                 exo = Media3Engine(screen.activity)
@@ -86,35 +97,75 @@ class Wp18EngineAdapterTest {
                     })
                 }
             }
-            fun await(condition: () -> Boolean) {
-                screen.waitUntil(15_000) {
-                    failure.get()?.let { throw AssertionError("Adapter failed", it) }
-                    onMain(condition)
+            fun onUi(engine: String, step: String, action: () -> Unit) {
+                val context = AdapterStep(engine, step)
+                currentStep.set(context)
+                try { screen.runOnUiThread(action) }
+                catch (error: Throwable) { throw context.failure(error) }
+            }
+            fun await(engine: String, step: String, checkFailure: Boolean = true, condition: () -> Boolean) {
+                try {
+                    screen.waitUntil(15_000) {
+                        if (checkFailure) failure.get()?.let { throw it }
+                        onMain(condition)
+                    }
+                } catch (error: Throwable) {
+                    if (checkFailure) failure.get()?.let { throw it }
+                    val output = runCatching {
+                        onMain {
+                            val media = native?.media
+                            try {
+                                val stats = media?.stats
+                                val videoCounters = media3?.videoDecoderCounters?.apply { ensureUpdated() }
+                                val audioCounters = media3?.audioDecoderCounters?.apply { ensureUpdated() }
+                                "VLC displayedPictures=${stats?.displayedPictures}, playedAbuffers=${stats?.playedAbuffers}; " +
+                                    "Media3 state=${media3?.playbackState}, position=${media3?.currentPosition}, " +
+                                    "videoBuffers=${videoCounters?.renderedOutputBufferCount}, " +
+                                    "audioBuffers=${audioCounters?.renderedOutputBufferCount}, audioAdvancing=$audioAdvancing"
+                            } finally { media?.release() }
+                        }
+                    }.getOrElse { "Output snapshot failed: $it" }
+                    throw AdapterStep(engine, step).failure(error, output)
                 }
             }
-            fun startVlc() {
-                screen.runOnUiThread {
+            fun startVlc(journey: String) {
+                onUi("VLC", "$journey: open TS input") {
                     exoView.visibility = View.GONE
                     vlcView.visibility = View.VISIBLE
                     attempt = scope.launch {
                         vlc.withPlayer {
                             try {
-                                val p = open(server.url("/stream.ts").toString(), true, 0, true)
+                                val p = open(tsUrl, true, 0, true)
                                 native = p
+                                p.setEventListener { event ->
+                                    if (event.type == MediaPlayer.Event.EncounteredError) {
+                                        recordFailure(IllegalStateException("libVLC EncounteredError: $tsUrl"))
+                                    }
+                                }
+                                currentStep.set(AdapterStep("VLC", "$journey: attach/reuse surface"))
                                 if (attachedPlayer == null) {
                                     p.attachViews(vlcView, null, true, false)
                                     attachedPlayer = p
                                 } else assertSame("Live input changes reuse the native player and surface", attachedPlayer, p)
+                                currentStep.set(AdapterStep("VLC", "$journey: play TS"))
                                 play()
+                                currentStep.set(AdapterStep("VLC", "$journey: displayed frames and played audio buffers"))
                                 awaitCancellation()
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (error: Throwable) {
+                                // Capture the failing operation before finally changes the step to stop.
+                                recordFailure(error)
                             } finally {
+                                native?.setEventListener(null)
                                 native = null
+                                currentStep.set(AdapterStep("VLC", "$journey: stop and close input"))
                                 stop()
                             }
                         }
                     }
                 }
-                await {
+                await("VLC", "$journey: displayed frames and played audio buffers") {
                     val media = native?.media
                     try {
                         val stats = media?.stats
@@ -123,10 +174,10 @@ class Wp18EngineAdapterTest {
                 }
             }
             try {
-                startVlc()
-                screen.runOnUiThread { attempt?.cancel() }
-                await { attempt?.isCompleted == true }
-                screen.runOnUiThread {
+                startVlc("initial TS")
+                onUi("VLC", "cancel initial TS") { attempt?.cancel() }
+                await("VLC", "stop and close initial TS") { attempt?.isCompleted == true }
+                onUi("Media3", "acquire, attach surface and prepare HLS") {
                     vlcView.visibility = View.GONE
                     exoView.visibility = View.VISIBLE
                     media3 = exo.acquire(true, true, false, "Dengeli", null, null)
@@ -136,50 +187,69 @@ class Wp18EngineAdapterTest {
                             audioAdvancing = true
                         }
                     })
+                    media3?.addListener(object : Player.Listener {
+                        override fun onPlayerError(error: PlaybackException) {
+                            recordFailure(error)
+                        }
+                    })
                     exoView.player = media3
-                    exo.install(MediaItem.fromUri(server.url("/stream.m3u8").toString()), 0)
+                    exo.install(MediaItem.fromUri(hlsUrl), 0)
                     exo.prepare(true)
                 }
-                await {
+                await("Media3", "HLS rendered video buffers") {
                     media3?.videoDecoderCounters?.let { it.ensureUpdated(); it.renderedOutputBufferCount > 0 } == true
                 }
                 // Existing HLS/MP4 fixtures are video-only. A bounded PCM tone exercises AudioTrack.
-                screen.runOnUiThread {
-                    exo.install(MediaItem.fromUri(server.url("/tone.wav").toString()), 0)
+                onUi("Media3", "prepare PCM tone and advance AudioTrack") {
+                    exo.install(MediaItem.fromUri(toneUrl), 0)
                     exo.prepare(true)
                 }
-                await {
+                await("Media3", "PCM rendered audio buffers and AudioTrack advancing") {
                     audioAdvancing && media3?.audioDecoderCounters?.let {
                         it.ensureUpdated(); it.renderedOutputBufferCount > 0
                     } == true
                 }
-                screen.runOnUiThread {
-                    exo.install(MediaItem.fromUri(server.url("/audio.mp4").toString()), 0)
+                onUi("Media3", "prepare MP4 paused and seek to 5000 ms") {
+                    exo.install(MediaItem.fromUri(mp4Url), 0)
                     exo.prepare(false)
                     exo.seekTo(5_000)
                 }
-                await { media3?.currentPosition == 5_000L && media3?.playWhenReady == false &&
-                    media3?.playbackState == Player.STATE_READY }
-                screen.runOnUiThread { exoView.player = null; exo.releaseNow(); media3 = null }
-                startVlc()
+                await("Media3", "MP4 ready, paused at 5000 ms") {
+                    media3?.currentPosition == 5_000L && media3?.playWhenReady == false &&
+                        media3?.playbackState == Player.STATE_READY
+                }
+                onUi("Media3", "detach surface and release") { exoView.player = null; exo.releaseNow(); media3 = null }
+                startVlc("return TS")
             } finally {
                 screen.runOnUiThread {
                     attempt?.cancel()
                     scope.launch {
                         try {
                             attempt?.join()
+                            currentStep.set(AdapterStep("VLC", "release"))
                             vlc.release()
+                            currentStep.set(AdapterStep("Media3", "release"))
                             exoView.player = null
                             exo.release()
                         } finally { released = true }
                     }
                 }
-                screen.waitUntil(15_000) { onMain { released } }
+                // A stored playback error must not short-circuit native cleanup.
+                await("VLC/Media3", "release adapters", checkFailure = false) { released }
                 screen.runOnUiThread { screen.activity.setContent { } }
                 scope.cancel()
             }
         }
-        failure.get()?.let { throw AssertionError("Adapter failed", it) }
+        failure.get()?.let { throw it }
+    }
+
+    private data class AdapterStep(val engine: String, val step: String) {
+        fun failure(error: Throwable, output: String? = null): AssertionError {
+            val detail = if (error is PlaybackException) "${error.errorCodeName}: " else ""
+            val observed = output?.let { "; observed: $it" }.orEmpty()
+            return AssertionError("engine=$engine; step=$step; " +
+                "adapter error=$detail${error.javaClass.name}: ${error.message}$observed", error)
+        }
     }
 
     private fun tone(): ByteArray {
