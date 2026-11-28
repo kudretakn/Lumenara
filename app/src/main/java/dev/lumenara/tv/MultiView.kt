@@ -23,6 +23,7 @@ internal fun MultiView(
     available: List<Item>,
     full: (Item) -> Unit,
     back: () -> Unit,
+    awaitPreviousInput: suspend () -> Unit = {},
 ) {
     var channels by remember(initial) { mutableStateOf(initial) }
     var focus by remember { mutableIntStateOf(0) }
@@ -96,6 +97,21 @@ internal fun MultiView(
                                 Modifier.weight(1f).fillMaxWidth(),
                                 preview = true,
                                 multi = true,
+                                awaitPreviousInput = awaitPreviousInput,
+                                decoderFailure = {
+                                    if (channels.size > 1 && channels.any { it.id == channel.id }) {
+                                        val limit = dev.lumenara.player.decoderWindowFailed(channels.size)
+                                        channels = channels.filterNot { it.id == channel.id }.take(limit)
+                                        focus = focus.coerceAtMost(channels.lastIndex)
+                                    }
+                                },
+                                videoFormat = { load ->
+                                    val limit = dev.lumenara.player.wp18DecoderWindow(channels.size, load)
+                                    if (channels.size > limit) {
+                                        channels = channels.take(limit)
+                                        focus = focus.coerceAtMost(channels.lastIndex)
+                                    }
+                                },
                                 ready = { p ->
                                     if (p == null) active.remove(index)
                                     else {

@@ -96,6 +96,7 @@ dependencies {
     implementation(project(":core:designsystem"))
     implementation(project(":core:catalog"))
     implementation(project(":core:data"))
+    implementation(project(":core:player-api"))
     implementation(project(":core:player"))
     implementation(project(":core:player-vlc"))
     implementation("androidx.work:work-runtime-ktx:2.11.1")

@@ -18,32 +18,34 @@ import kotlinx.coroutines.flow.first
 
 /** Retry jobs belong to the mounted stream, and never survive a channel/engine change. */
 @Stable
-internal class LiveRetry(private val scope: CoroutineScope, private val preview: Boolean) {
-    var count by mutableIntStateOf(0)
+internal class LiveRetry(private val scope: CoroutineScope, private val preview: Boolean,
+    private val ownership: PlaybackOwnership? = null) {
+    var count by mutableIntStateOf(ownership?.item?.retryCount ?: 0)
         private set
     var reconnecting by mutableStateOf(false)
         private set
-    var generation by mutableIntStateOf(0)
+    var generation by mutableIntStateOf(ownership?.item?.retryGeneration ?: 0)
         private set
     private var pending: Job? = null
     fun failed(): Boolean {
         if (pending?.isActive == true) return true
         val wait = liveRetryDelay(count, preview) ?: run { reconnecting = false; return false }
         count++
+        ownership?.item?.retryCount = count
         reconnecting = true
-        pending = scope.launch { delay(wait); generation++ }
+        pending = scope.launch { delay(wait); generation++; ownership?.item?.retryGeneration = generation }
         return true
     }
     fun stop() { pending?.cancel(); pending = null; reconnecting = false }
-    fun playing() { stop(); count = 0 }
-    fun manual() { playing(); generation++ }
+    fun playing() { stop(); count = 0; ownership?.item?.retryCount = 0 }
+    fun manual() { playing(); generation++; ownership?.item?.retryGeneration = generation }
     fun dispose() { pending?.cancel() }
 }
 
 @Composable
-internal fun rememberLiveRetry(id: String, preview: Boolean = false): LiveRetry {
+internal fun rememberLiveRetry(id: String, preview: Boolean = false, ownership: PlaybackOwnership? = null): LiveRetry {
     val scope = rememberCoroutineScope()
-    val retry = remember(id, preview) { LiveRetry(scope, preview) }
+    val retry = remember(id, preview, ownership) { LiveRetry(scope, preview, ownership) }
     DisposableEffect(retry) { onDispose { retry.dispose() } }
     return retry
 }

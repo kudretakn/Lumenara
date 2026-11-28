@@ -5,7 +5,7 @@ import android.os.*
 import android.os.storage.StorageManager
 import android.system.ErrnoException
 import android.system.OsConstants
-import dev.lumenara.data.Transport
+import dev.lumenara.player.api.PlaybackNetwork
 import java.io.Closeable
 import java.io.DataInputStream
 import java.io.IOException
@@ -50,7 +50,8 @@ private constructor(
 
     companion object {
         /** Cancel a superseded channel's HTTP handshake immediately, before it owns an input. */
-        suspend fun openCancellable(context: Context, url: String, allowHttp: Boolean): VlcInput {
+        suspend fun openCancellable(context: Context, url: String, allowHttp: Boolean,
+            network: PlaybackNetwork = Wp18VlcNetwork): VlcInput {
             var acquired: VlcInput? = null
             try {
                 return coroutineScope {
@@ -59,7 +60,7 @@ private constructor(
                         continuation.invokeOnCancellation { calls.cancel() }
                         launch(Dispatchers.IO) {
                             try {
-                                val input = open(context, url, allowHttp, calls)
+                                val input = open(context, url, allowHttp, calls, network)
                                 continuation.resume(input) { _, abandoned, _ -> abandoned.close() }
                             } catch (e: Exception) {
                                 continuation.resumeWithException(e)
@@ -74,10 +75,12 @@ private constructor(
             }
         }
 
-        fun open(context: Context, url: String, allowHttp: Boolean): VlcInput =
-            open(context, url, allowHttp, Wp09CallGate { it: Call -> it.cancel() })
+        fun open(context: Context, url: String, allowHttp: Boolean,
+            network: PlaybackNetwork = Wp18VlcNetwork): VlcInput =
+            open(context, url, allowHttp, Wp09CallGate { it: Call -> it.cancel() }, network)
 
-        private fun open(context: Context, url: String, allowHttp: Boolean, calls: Wp09CallGate<Call>): VlcInput {
+        private fun open(context: Context, url: String, allowHttp: Boolean, calls: Wp09CallGate<Call>,
+            network: PlaybackNetwork): VlcInput {
             val ext = url.toHttpUrl().pathSegments.last().substringAfterLast('.').lowercase()
             var demux =
                 when (ext) {
@@ -92,7 +95,7 @@ private constructor(
                     else -> null
                 }
             val request = Request.Builder().url(url).header("Accept-Encoding", "identity").build()
-            val client = Transport.client(allowHttp)
+            val client = network.client(allowHttp)
             fun execute(request: Request): Response = calls.create { client.newCall(request) }.execute()
             fun rejectManifest(response: Response) {
                 val type = response.header("Content-Type").orEmpty().substringBefore(';').trim().lowercase()
