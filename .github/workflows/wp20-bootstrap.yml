@@ -1,0 +1,33 @@
+# TEMPORARY (WP20 bootstrap on the x86 CI host). Removed before merge.
+name: WP20 bootstrap
+on:
+  pull_request:
+    paths: ['.github/workflows/wp20-bootstrap.yml']
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - uses: android-actions/setup-android@v3
+        with: { packages: platform-tools }
+      - name: Bootstrap locks and verification metadata
+        run: |
+          set -x
+          W="--write-locks --write-verification-metadata sha256"
+          ./gradlew -Pwp20.bootstrapDependencies=true --no-configuration-cache $W wp20ResolveAndLockAll
+          ./gradlew -Pwp20.bootstrapDependencies=true -Pwp02.testBuildType=qa --no-configuration-cache $W wp20ResolveAndLockAll
+          ./gradlew $W test lintDebug :app:assembleDebug :app:assembleDebugAndroidTest
+          ./gradlew -Pwp02.testBuildType=qa $W :app:assembleQa :app:assembleQaAndroidTest :app:assembleRelease
+          ./gradlew -Pwp20.bootstrapDependencies=true $W :baselineprofile:assembleNonMinifiedRelease :baselineprofile:assembleBenchmarkRelease
+          git status --short
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wp20-bootstrap
+          path: |
+            gradle/verification-metadata.xml
+            gradle/wp20-locks/
+            settings-gradle.lockfile
