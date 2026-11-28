@@ -17,6 +17,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.*
+import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
@@ -32,38 +33,103 @@ import androidx.compose.ui.semantics.text
 import androidx.compose.ui.text.AnnotatedString
 import kotlinx.coroutines.*
 
+private data class Wp17SettingOption(val id: String, val label: Int)
+private data class Wp17SettingsGroup(val id: String, val label: Int, val legacyName: String)
+
+private val wp17SettingsGroups = listOf(
+    Wp17SettingsGroup("sources", R.string.settings_group_sources, "Kaynaklar"),
+    Wp17SettingsGroup("player", R.string.settings_group_player, "Oynatıcı"),
+    Wp17SettingsGroup("subtitles", R.string.settings_group_subtitles, "Altyazı"),
+    Wp17SettingsGroup("adult", R.string.settings_group_adult, "İçerik (+18)"),
+    Wp17SettingsGroup("storage", R.string.settings_group_storage, "Depolama"),
+    Wp17SettingsGroup("updates", R.string.settings_group_updates, "Güncellemeler"),
+    Wp17SettingsGroup("about", R.string.settings_group_about, "Hakkında"),
+)
+
+private val wp17FrameRateOptions = listOf(
+    Wp17SettingOption("off", R.string.choice_off),
+    Wp17SettingOption("vod_only", R.string.choice_frame_rate_vod),
+    Wp17SettingOption("always", R.string.choice_frame_rate_always),
+)
+private val wp17WatchNextOptions = listOf(
+    Wp17SettingOption("on", R.string.choice_on),
+    Wp17SettingOption("off", R.string.choice_off),
+)
+private val wp17EngineOptions = listOf(
+    Wp17SettingOption("media3", R.string.choice_media3),
+    Wp17SettingOption("vlc", R.string.choice_vlc),
+)
+private val wp17FallbackOptions = listOf(
+    Wp17SettingOption("on", R.string.choice_on),
+    Wp17SettingOption("off", R.string.choice_off),
+)
+private val wp17BufferOptions = listOf(
+    Wp17SettingOption("balanced", R.string.choice_buffer_balanced),
+    Wp17SettingOption("fast", R.string.choice_buffer_fast),
+    Wp17SettingOption("steady", R.string.choice_buffer_steady),
+)
+private val wp17AudioOptions = listOf(
+    Wp17SettingOption("auto_tr", R.string.choice_auto_tr),
+    Wp17SettingOption("tr", R.string.choice_tr),
+    Wp17SettingOption("en", R.string.choice_en),
+    Wp17SettingOption("de", R.string.choice_de),
+    Wp17SettingOption("fr", R.string.choice_fr),
+)
+private val wp17SubOptions = listOf(
+    Wp17SettingOption("auto_tr", R.string.choice_auto_tr),
+    Wp17SettingOption("off", R.string.choice_off),
+    Wp17SettingOption("tr", R.string.choice_tr),
+    Wp17SettingOption("en", R.string.choice_en),
+    Wp17SettingOption("de", R.string.choice_de),
+    Wp17SettingOption("fr", R.string.choice_fr),
+)
+private val wp17SizeOptions = listOf(
+    Wp17SettingOption("medium", R.string.choice_size_medium),
+    Wp17SettingOption("large", R.string.choice_size_large),
+    Wp17SettingOption("small", R.string.choice_size_small),
+)
+private val wp17ColorOptions = listOf(
+    Wp17SettingOption("white", R.string.choice_color_white),
+    Wp17SettingOption("yellow", R.string.choice_color_yellow),
+)
+private val wp17DiagnosticsOptions = listOf(
+    Wp17SettingOption("off", R.string.choice_off),
+    Wp17SettingOption("on", R.string.choice_on),
+)
+
 @Composable
-private fun Choice(model: LibraryModel, key: String, label: String, options: List<String>, default: String = options.first()) {
-    val current by
-        remember(key) { model.prefs.text(key, default) }
-            .collectAsStateWithLifecycle(default)
+private fun Choice(model: LibraryModel, key: String, label: String,
+    options: List<Wp17SettingOption>, default: String = options.first().id) {
+    val current by remember(model.prefs, key, default) { model.prefs.choiceId(key, default) }
+        .collectAsStateWithLifecycle(default)
+    val display = options.firstOrNull { it.id == current }?.let { stringResource(it.label) } ?: current
     val scope = rememberCoroutineScope()
     ListRow(
-        modifier = Modifier.semantics { text = AnnotatedString("$label · $current") },
+        modifier = Modifier.semantics { text = AnnotatedString("$label · $display") },
         onClick = {
             scope.launch {
-                model.prefs.set(key, options[(options.indexOf(current) + 1) % options.size])
+                model.prefs.set(key, options[(options.indexOfFirst { it.id == current } + 1) % options.size].id)
             }
         }
     ) {
         Column(Modifier.weight(1f)) {
             Text(label, style = LumenType.cardTitle)
             val description = when (key) {
-                "frame_rate" -> "Ekran hızını içeriğe uyarla"
-                "watch_next" -> "Kaldığın yerden devam et"
-                "engine" -> "Yeni yayınlar için oynatıcı"
-                "fallback" -> "Desteklenmeyen yayınlarda geçiş yap"
-                "buffer" -> "Bağlantına uygun önbellek"
-                "audio" -> "Tercih edilen ses parçası"
-                "sub" -> "Tercih edilen altyazı"
-                "size" -> "Altyazı metninin boyutu"
-                "color" -> "Altyazı metninin rengi"
-                else -> ""
+                "frame_rate" -> R.string.setting_frame_rate_description
+                "watch_next" -> R.string.setting_watch_next_description
+                "engine" -> R.string.setting_engine_description
+                "fallback" -> R.string.setting_fallback_description
+                "buffer" -> R.string.setting_buffer_description
+                "audio" -> R.string.setting_audio_description
+                "sub" -> R.string.setting_sub_description
+                "size" -> R.string.setting_size_description
+                "color" -> R.string.setting_color_description
+                else -> null
             }
-            if (description.isNotEmpty()) Text(description, style = LumenType.meta)
+            if (description != null) Text(stringResource(description), style = LumenType.meta)
         }
-        Text(current, style = LumenType.meta, modifier = Modifier.widthIn(max = 160.dp))
-        if (options.toSet() == setOf("Açık", "Kapalı")) SettingsToggle(current == "Açık")
+        Text(display, style = LumenType.meta, modifier = Modifier.widthIn(max = 160.dp))
+        if (options.map { it.id }.toSet() == setOf("on", "off")) SettingsToggle(current == "on")
         LumenIcon(LumenIcon.ChevronRight, null, tint = LumenColors.textSecondary)
     }
 }
@@ -158,8 +224,10 @@ internal fun SettingsScreen(
                     }
                 }
         }
-    val groups = listOf("Kaynaklar", "Oynatıcı", "Altyazı", "İçerik (+18)", "Depolama", "Güncellemeler", "Hakkında")
-    var selectedGroup by rememberSaveable { mutableStateOf("Kaynaklar") }
+    var savedGroup by rememberSaveable { mutableStateOf("sources") }
+    val selectedGroup = wp17SettingsGroups.firstOrNull {
+        it.id == savedGroup || it.legacyName == savedGroup
+    }?.id ?: "sources"
     val list = rememberLazyListState()
     var lastEntry by rememberSaveable { mutableIntStateOf(0) }
     val returnEntry = remember(backupMode, selectedGroup) { lastEntry }
@@ -177,7 +245,7 @@ internal fun SettingsScreen(
         positioned = true
     }
     Column(Modifier.fillMaxSize()) {
-        Text("Ayarlar", style = LumenType.headline, color = LumenColors.textPrimary)
+        Text(stringResource(R.string.route_settings), style = LumenType.headline, color = LumenColors.textPrimary)
         Spacer(Modifier.height(Spacing.titleGap))
         if (busy) Row(horizontalArrangement = Arrangement.spacedBy(Spacing.cardGap), verticalAlignment = Alignment.CenterVertically) {
             Text(stage.ifEmpty { "İşlem sürüyor…" }, style = LumenType.meta)
@@ -186,19 +254,19 @@ internal fun SettingsScreen(
         }
         Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(Spacing.titleGap)) {
             Column(Modifier.width(280.dp), verticalArrangement = Arrangement.spacedBy(Spacing.iconText)) {
-                groups.forEach { group ->
+                wp17SettingsGroups.forEach { (group, labelRes, legacyName) ->
                     ListRow(onClick = {
                         if (selectedGroup != group) {
                             lastEntry = when (group) {
-                                "Oynatıcı", "Depolama" -> 1
-                                "Hakkında" -> 3
+                                "player", "storage" -> 1
+                                "about" -> 3
                                 else -> 0
                             }
-                            selectedGroup = group
+                            savedGroup = group
                         }
-                    }, selected = selectedGroup == group, modifier = Modifier.height(56.dp).testTag("settings-group-$group")) {
-                        Text(group, style = LumenType.cardTitle, modifier = Modifier.weight(1f))
-                        if (group == "Güncellemeler" && release != null)
+                    }, selected = selectedGroup == group, modifier = Modifier.height(56.dp).testTag("settings-group-$legacyName")) {
+                        Text(stringResource(labelRes), style = LumenType.cardTitle, modifier = Modifier.weight(1f))
+                        if (group == "updates" && release != null)
                             Box(Modifier.size(6.dp).background(LumenColors.accent, RoundedCornerShape(3.dp)))
                     }
                 }
@@ -211,7 +279,7 @@ internal fun SettingsScreen(
                     contentPadding = PaddingValues(bottom = 20.dp),
                 ) {
                     var entryIndex = 0
-                    var group = "Kaynaklar"
+                    var group = "sources"
                     fun LazyListScope.setting(content: @Composable () -> Unit) {
                         if (group != selectedGroup) return
                         val index = entryIndex++
@@ -231,19 +299,19 @@ internal fun SettingsScreen(
                         }
                     }
                     setting { Text("${sources.size} kaynak · ${sources.sumOf { it.count }} içerik", style = LumenType.meta) }
-                    group = "Oynatıcı"
+                    group = "player"
                     setting { Text("Oynatıcı", style = LumenType.title) }
-                    setting { Choice(model, "frame_rate", "Kare hızını eşle", dev.lumenara.catalog.frameRateOptions, dev.lumenara.catalog.FRAME_RATE_DEFAULT) }
-                    setting { Choice(model, "watch_next", "Android TV ana ekranında göster", listOf("Açık", "Kapalı")) }
-                    setting { Choice(model, "engine", "Varsayılan motor", listOf("Media3", "VLC")) }
-                    setting { Choice(model, "fallback", "Codec hatasında VLC", listOf("Açık", "Kapalı")) }
-                    setting { Choice(model, "buffer", "Media3 tamponu", listOf("Dengeli", "Hızlı", "Kararlı")) }
-                    setting { Choice(model, "audio", "Ses dili", listOf("Otomatik (Türkçe)", "tr", "en", "de", "fr")) }
-                    group = "Altyazı"
-                    setting { Choice(model, "sub", "Altyazı dili", listOf("Otomatik (Türkçe)", "Kapalı", "tr", "en", "de", "fr")) }
-                    setting { Choice(model, "size", "Altyazı boyutu", listOf("Orta", "Büyük", "Küçük")) }
-                    setting { Choice(model, "color", "Altyazı rengi", listOf("Beyaz", "Sarı")) }
-                    group = "İçerik (+18)"
+                    setting { Choice(model, "frame_rate", stringResource(R.string.setting_frame_rate), wp17FrameRateOptions, "vod_only") }
+                    setting { Choice(model, "watch_next", stringResource(R.string.setting_watch_next), wp17WatchNextOptions) }
+                    setting { Choice(model, "engine", stringResource(R.string.setting_engine), wp17EngineOptions) }
+                    setting { Choice(model, "fallback", stringResource(R.string.setting_fallback), wp17FallbackOptions) }
+                    setting { Choice(model, "buffer", stringResource(R.string.setting_buffer), wp17BufferOptions) }
+                    setting { Choice(model, "audio", stringResource(R.string.setting_audio), wp17AudioOptions) }
+                    group = "subtitles"
+                    setting { Choice(model, "sub", stringResource(R.string.setting_sub), wp17SubOptions) }
+                    setting { Choice(model, "size", stringResource(R.string.setting_size), wp17SizeOptions) }
+                    setting { Choice(model, "color", stringResource(R.string.setting_color), wp17ColorOptions) }
+                    group = "adult"
                     setting {
                         ListRow(onClick = { settingsScope.launch { model.prefs.setShowAdult(!showAdult) } },
                             modifier = Modifier.testTag("show-adult")) {
@@ -253,7 +321,7 @@ internal fun SettingsScreen(
                             SettingsToggle(showAdult)
                         }
                     }
-                    group = "Depolama"
+                    group = "storage"
                     setting {
                         Text("Depolama ve yenileme", style = LumenType.title)
                         Text("${sources.size} kaynak · ${sources.sumOf { it.count }} içerik", color = LumenColors.textSecondary)
@@ -308,9 +376,9 @@ internal fun SettingsScreen(
                             Text("Görsel önbelleğini temizle · ${disk/1048576} MB")
                         }
                     }
-                    group = "Altyazı"
+                    group = "subtitles"
                     setting { SubtitleKeys(model) }
-                    group = "İçerik (+18)"
+                    group = "adult"
                     setting {
                         Text("Film ve dizi bilgileri", style = LumenType.title)
                         if (model.repo.tmdbBuiltIn())
@@ -334,7 +402,7 @@ internal fun SettingsScreen(
                             )
                         }
                     }
-                    group = "Hakkında"
+                    group = "about"
                     setting { Text("Lumenara ${BuildConfig.VERSION_NAME}", style = LumenType.title) }
                     setting { Text("Türkçe", style = LumenType.meta) }
                     setting {
@@ -351,7 +419,7 @@ internal fun SettingsScreen(
                             color = LumenColors.textSecondary,
                         )
                     }
-                    group = "Güncellemeler"
+                    group = "updates"
                     setting {
                         Text("Uygulama güncellemeleri", style = LumenType.title)
                         Field("GitHub deposu · sahip/depo", github, { github = it })
@@ -416,14 +484,14 @@ internal fun SettingsScreen(
                         }
                     }
                     if (installation.message.isNotEmpty()) setting { Text(installation.message, color = LumenColors.accent) }
-                    group = "Hakkında"
+                    group = "about"
                     setting {
                         LumenButton(style = LumenButtonStyle.Secondary, onClick = { expert = !expert }) {
                             Text(if (expert) "Uzman modunu kapat" else "Uzman modu")
                         }
                     }
                     if (expert) {
-                        setting { Choice(model, "diagnostics", "Yerel olay kaydı", listOf("Kapalı", "Açık")) }
+                        setting { Choice(model, "diagnostics", stringResource(R.string.setting_diagnostics), wp17DiagnosticsOptions) }
                         setting {
                             LumenButton(style = LumenButtonStyle.Secondary,
                                 onClick = {

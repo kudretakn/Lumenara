@@ -56,15 +56,17 @@ internal fun LibraryScreen(model: LibraryModel = viewModel(), onFirstDraw: () ->
         model.awaitFirstDraw()
         onFirstDraw()
     }
-    var section by rememberSaveable {
-        mutableStateOf(if (initialSetup) "IPTV Kaynakları" else "Ana Sayfa")
+    var savedSection by rememberSaveable {
+        mutableStateOf(if (initialSetup) LibraryRoute.Sources.id else LibraryRoute.Home.id)
     }
-    var sourceParent by rememberSaveable { mutableStateOf("Ana Sayfa") }
+    val section = LibraryRoute.fromSaved(savedSection).id
+    var savedSourceParent by rememberSaveable { mutableStateOf(LibraryRoute.Home.id) }
+    val sourceParent = LibraryRoute.fromSaved(savedSourceParent).id
     var scope by rememberSaveable { mutableStateOf("") }
     LaunchedEffect(available) { if (available.none { it.id == scope }) scope = "" }
     var detail by remember { mutableStateOf<Item?>(null) }
     var playing by remember { mutableStateOf<Item?>(null) }
-    val showingHub = section == "Ana Sayfa" && detail == null && playing == null
+    val showingHub = section == LibraryRoute.Home.id && detail == null && playing == null
     val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
     DisposableEffect(model, lifecycle, showingHub) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, _ ->
@@ -123,7 +125,7 @@ internal fun LibraryScreen(model: LibraryModel = viewModel(), onFirstDraw: () ->
             try {
                 val channel = uniqueSearchChannel(model, search.query)
                 if (channel != null) {
-                    section = "Canlı TV"
+                    savedSection = LibraryRoute.Live.id
                     play(channel, LiveChannelGroup(listOf(channel), channel.source))
                     model.searchIntent.compareAndSet(pending, null)
                     return@LaunchedEffect
@@ -134,7 +136,7 @@ internal fun LibraryScreen(model: LibraryModel = viewModel(), onFirstDraw: () ->
                 // Fall back to the search screen if catalog lookup fails.
             }
         }
-        section = "Ara"
+        savedSection = LibraryRoute.Search.id
         model.searchPrefill.value = id to search.query
         model.searchIntent.compareAndSet(pending, null)
     }
@@ -142,7 +144,7 @@ internal fun LibraryScreen(model: LibraryModel = viewModel(), onFirstDraw: () ->
         if (request > 0) {
             playing = null
             detail = null
-            section = "Ara"
+            savedSection = LibraryRoute.Search.id
         }
     }
     var launchSerial by remember { mutableIntStateOf(0) }
@@ -173,7 +175,7 @@ internal fun LibraryScreen(model: LibraryModel = viewModel(), onFirstDraw: () ->
         key(if (item.kind == "LIVE") "live-player" else item.id,
             if (item.kind == "LIVE") null else item.encryptedUrl, launchSerial) {
             Playback(model, item, siblings, { Perf.mark("channel"); launchPosition = -1; playing = it }, {
-                if (section == "Canlı TV") returnToChannel = item.id
+                if (section == LibraryRoute.Live.id) returnToChannel = item.id
                 playing = null
                 launchPosition = -1
             }, { siblings = it }, initial = launchPosition, sleepTimer = sleepTimer,
@@ -182,17 +184,17 @@ internal fun LibraryScreen(model: LibraryModel = viewModel(), onFirstDraw: () ->
                     detail = null
                     playing = null
                     launchPosition = -1
-                    section = "Ana Sayfa"
+                    savedSection = LibraryRoute.Home.id
                 })
         }
         return
     }
     val settingsEntry = remember { FocusRequester() }
-    BackHandler(detail != null || section != "Ana Sayfa") {
+    BackHandler(detail != null || section != LibraryRoute.Home.id) {
         when {
             detail != null -> detail = null
-            section == "IPTV Kaynakları" -> section = sourceParent
-            else -> section = "Ana Sayfa"
+            section == LibraryRoute.Sources.id -> savedSection = sourceParent
+            else -> savedSection = LibraryRoute.Home.id
         }
     }
     detail?.let {
@@ -201,10 +203,10 @@ internal fun LibraryScreen(model: LibraryModel = viewModel(), onFirstDraw: () ->
         }
         return
     }
-    var hubCard by rememberSaveable { mutableStateOf("Canlı TV") }
+    var hubCard by rememberSaveable { mutableStateOf(LibraryRoute.Live.id) }
     val entry = remember { FocusRequester() }
     LaunchedEffect(section) {
-        if (section == "IPTV Kaynakları") {
+        if (section == LibraryRoute.Sources.id) {
             withFrameNanos { }
             entry.requestFocus()
         }
@@ -212,26 +214,27 @@ internal fun LibraryScreen(model: LibraryModel = viewModel(), onFirstDraw: () ->
     Box(Modifier.fillMaxSize().background(LumenColors.bg)) {
         Column(Modifier.fillMaxSize().padding(horizontal = Spacing.screenHorizontal, vertical = Spacing.screenVertical)) {
             pages.SaveableStateProvider(section) {
-                Column(Modifier.fillMaxSize().semantics { testTag = "section-$section" }
+                Column(Modifier.fillMaxSize().semantics { testTag = "section-${LibraryRoute.fromSaved(section).legacyName}" }
                     .focusRequester(entry).focusRestorer().focusGroup()) {
                     when (section) {
-                        "IPTV Kaynakları" -> {
+                        LibraryRoute.Sources.id -> {
                             LumenaraLogo(showName = true)
-                            Setup(model, available, openRestore = { section = "Yedek geri yükle" }) { section = "Ana Sayfa" }
+                            Setup(model, available, openRestore = { savedSection = LibraryRoute.Restore.id }) { savedSection = LibraryRoute.Home.id }
                         }
-                        "Yedek geri yükle" -> BackupScreen(model, restore = true,
+                        LibraryRoute.Restore.id -> BackupScreen(model, restore = true,
                             finishLabel = if (available.isEmpty()) "Kuruluma dön" else "Ana Sayfaya dön") {
-                            section = if (available.isEmpty()) "IPTV Kaynakları" else "Ana Sayfa"
+                            savedSection = if (available.isEmpty()) LibraryRoute.Sources.id else LibraryRoute.Home.id
                         }
-                        "Ayarlar" -> {
+                        LibraryRoute.Settings.id -> {
                             SettingsScreen(model, available, settingsEntry) {
-                                sourceParent = "Ayarlar"
-                                section = "IPTV Kaynakları"
+                                savedSourceParent = LibraryRoute.Settings.id
+                                savedSection = LibraryRoute.Sources.id
                             }
                         }
-                        "Ana Sayfa" -> {
+                        LibraryRoute.Home.id -> {
                             Home(model, scope, open, play, hubCard, sourceSelector = {
                                 if (available.size > 1) LazyRow(
+                                    modifier = Modifier.semantics { testTag = "hub-source-selector" },
                                     horizontalArrangement = Arrangement.spacedBy(Spacing.unit),
                                 ) {
                                     items(listOf("" to "Tümü") + available.map { it.id to it.name },
@@ -241,7 +244,7 @@ internal fun LibraryScreen(model: LibraryModel = viewModel(), onFirstDraw: () ->
                                 }
                             }) {
                                 hubCard = it
-                                section = it
+                                savedSection = it
                                 model.notice.value = ""
                             }
                         }
@@ -252,8 +255,8 @@ internal fun LibraryScreen(model: LibraryModel = viewModel(), onFirstDraw: () ->
             }
         }
         key(section) {
-            DoubleBackExit(section == "Ana Sayfa" ||
-                available.isEmpty() && section == "IPTV Kaynakları" && sourceParent == "Ana Sayfa")
+            DoubleBackExit(section == LibraryRoute.Home.id ||
+                available.isEmpty() && section == LibraryRoute.Sources.id && sourceParent == LibraryRoute.Home.id)
         }
     }
 }

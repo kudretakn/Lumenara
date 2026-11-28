@@ -60,28 +60,43 @@ constructor(private val repository: dagger.Lazy<Repository>, val prefs: Preferen
     private val hubScope = CoroutineScope(viewModelScope.coroutineContext + Dispatchers.IO)
     private val hubSource = MutableStateFlow("")
     fun selectHubSource(source: String) { hubSource.value = source }
+    private val hubRetry = MutableStateFlow(0)
+    fun retryHub() { hubRetry.value++ }
+    private val hubRequest = hubSource.combine(hubRetry) { source, _ -> source }
     // Start the bounded history reads with the launch snapshot. Starting collectAsState
     // inside Home queues their subscriptions behind its expensive first compose/measure.
     // The source travels with the result so changing scope never flashes the old shelf.
-    val hubRecent = hubSource.flatMapLatest { source -> flow {
+    // stateIn owns the initial Loading state. Keep the last same-source snapshot when
+    // visibility resumes; a new scope is masked by the source check in Home.
+    val hubRecentUi = hubRequest.flatMapLatest { source -> flow {
         Perf.mark("startup_hub_recent")
         emitAll(startup.awaitReady().recentLive(source).onEach {
             Perf.since("startup_hub_recent", "startup_hub_recent_ready")
         }.map { HubRows(source, it) })
-    } }.wp07WhileVisible(hubVisible).wp07StartupErrors().stateIn(hubScope, SharingStarted.Eagerly, null)
-    val hubResume = hubSource.flatMapLatest { source -> flow {
+    }.wp17ScreenStates("hub_recent").filterNot { it == ScreenUiState.Loading } }.wp07WhileVisible(hubVisible)
+        .stateIn(hubScope, SharingStarted.Eagerly, ScreenUiState.Loading)
+    val hubResumeUi = hubRequest.flatMapLatest { source -> flow {
         Perf.mark("startup_hub_resume")
         emitAll(startup.awaitReady().continueWatching(source).onEach {
             Perf.since("startup_hub_resume", "startup_hub_resume_ready")
         }.map { HubRows(source, it) })
-    } }.wp07WhileVisible(hubVisible).wp07StartupErrors().stateIn(hubScope, SharingStarted.Eagerly, null)
-    val hubTotals = hubSource.flatMapLatest { source -> flow {
+    }.wp17ScreenStates("hub_resume").filterNot { it == ScreenUiState.Loading } }.wp07WhileVisible(hubVisible)
+        .stateIn(hubScope, SharingStarted.Eagerly, ScreenUiState.Loading)
+    val hubTotalsUi = hubRequest.flatMapLatest { source -> flow {
         Perf.mark("startup_hub_counts")
         emitAll(startup.awaitReady().hubTotals(source).map { rows ->
             Perf.since("startup_hub_counts", "startup_hub_counts_ready")
             source to rows.associate { it.kind to it.count }
         })
-    } }.wp07WhileVisible(hubVisible).wp07StartupErrors().stateIn(hubScope, SharingStarted.Eagerly, null)
+    }.wp17ScreenStates("hub_totals").filterNot { it == ScreenUiState.Loading } }.wp07WhileVisible(hubVisible)
+        .stateIn(hubScope, SharingStarted.Eagerly, ScreenUiState.Loading)
+    // Compatibility snapshots for existing consumers; the UI observes explicit states above.
+    val hubRecent = hubRecentUi.map { it.readyOrNull() }
+        .stateIn(hubScope, SharingStarted.Eagerly, null)
+    val hubResume = hubResumeUi.map { it.readyOrNull() }
+        .stateIn(hubScope, SharingStarted.Eagerly, null)
+    val hubTotals = hubTotalsUi.map { it.readyOrNull() }
+        .stateIn(hubScope, SharingStarted.Eagerly, null)
     val filter = MutableStateFlow(Filter())
     val results =
         filter
@@ -179,10 +194,13 @@ constructor(private val repository: dagger.Lazy<Repository>, val prefs: Preferen
                 notice.value = "İşlem iptal edildi."
                 throw e
             } catch (e: SourceFailure) {
+                diagnostic(wp17FailureCode("job_source", e))
                 notice.value = e.message.orEmpty()
-            } catch (_: java.net.SocketTimeoutException) {
+            } catch (e: java.net.SocketTimeoutException) {
+                diagnostic(wp17FailureCode("job_timeout", e))
                 notice.value = "Bağlantı zaman aşımına uğradı. Yeniden deneyin."
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                diagnostic(wp17FailureCode("job", e))
                 notice.value =
                     "İşlem tamamlanamadı. Adresi, bağlantıyı ve kaynak izinlerini kontrol edin."
             } finally {

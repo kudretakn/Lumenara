@@ -1,17 +1,13 @@
 package dev.lumenara.tv
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -30,7 +26,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
 import dev.lumenara.data.Item
 import dev.lumenara.design.*
-import kotlinx.coroutines.flow.collect
 
 /** Collected only by composed channel cards/rows, never for the whole catalog. */
 @Composable
@@ -167,34 +162,6 @@ internal fun ChannelCard(
             if (current != null) ProgressLine(
                 (now - current.start).toFloat() / (current.end - current.start).coerceAtLeast(1),
                 Modifier.height(2.dp))
-        }
-    }
-}
-
-@Composable
-internal fun ChannelShelf(
-    model: LibraryModel,
-    title: String,
-    rows: List<Item>,
-    play: (Item, List<Item>) -> Unit,
-    focus: (Item) -> Unit,
-) {
-    if (rows.isEmpty()) return
-    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(Unit) {
-        wallClockTicks(30_000).collect { now = it }
-    }
-    Column(verticalArrangement = Arrangement.spacedBy(Spacing.cardGap)) {
-        Text(title.uppercase(java.util.Locale.forLanguageTag("tr")), style = LumenType.caption,
-            color = LumenColors.textSecondary)
-        LazyRow(
-            Modifier.testTag("channel-shelf-$title").focusRestorer().focusGroup(),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.cardGap),
-            contentPadding = PaddingValues(vertical = Spacing.unit),
-        ) {
-            items(rows, key = { it.id }) { item ->
-                ChannelCard(model, item, now, { play(item, rows) }, focus)
-            }
         }
     }
 }

@@ -86,11 +86,18 @@ class Preferences internal constructor(
         }
     }
 
+    /** Compatibility view for playback and older callers; storage uses fixed choice IDs. */
     fun text(key: String, fallback: String = "") =
-        data.map { it[stringPreferencesKey(key)] ?: fallback }
+        data.map { Wp17SettingIds.legacy(key, it[stringPreferencesKey(key)] ?: fallback) }
+            .distinctUntilChanged()
+
+    /** Settings UI reads IDs independently of translated labels. Unknown values survive. */
+    fun choiceId(key: String, fallback: String = "") =
+        data.map { Wp17SettingIds.id(key, it[stringPreferencesKey(key)] ?: fallback) }
+            .distinctUntilChanged()
 
     suspend fun set(key: String, value: String) {
-        store.edit { it[stringPreferencesKey(key)] = value }
+        store.edit { it[stringPreferencesKey(key)] = Wp17SettingIds.id(key, value) }
     }
 
     // Called under the durable restore journal, in the same commit as catalog state migration.
@@ -277,7 +284,7 @@ class Preferences internal constructor(
             // Missing keys represent defaults in the snapshot, including unset secrets.
             target.asMap().keys.filterNot { it.name.startsWith("update_") }.forEach { target.remove(it) }
             for ((name, type, value) in settings.filterNot { it.name.startsWith("update_") }) when (type) {
-                "string" -> target[stringPreferencesKey(name)] = value
+                "string" -> target[stringPreferencesKey(name)] = Wp17SettingIds.id(name, value)
                 "boolean" -> target[booleanPreferencesKey(name)] = value.toBooleanStrict()
                 "int" -> target[intPreferencesKey(name)] = value.toInt()
                 "long" -> target[longPreferencesKey(name)] = value.toLong()
@@ -323,4 +330,28 @@ class Preferences internal constructor(
             val provider = it[stringPreferencesKey("provider_$source")]?.toIntOrNull() ?: 4
             minOf(limit, provider.coerceIn(1, 4))
         }
+}
+
+/** Exact, key-scoped aliases: never normalize free text, secrets or per-item track choices. */
+internal object Wp17SettingIds {
+    private val toggle = mapOf("on" to "Açık", "off" to "Kapalı")
+    private val language = mapOf("auto_tr" to "Otomatik (Türkçe)",
+        "tr" to "tr", "en" to "en", "de" to "de", "fr" to "fr")
+    private val choices = mapOf(
+        "frame_rate" to mapOf("off" to "Kapalı", "vod_only" to "Yalnız film ve dizi", "always" to "Her zaman"),
+        "watch_next" to toggle,
+        "engine" to mapOf("media3" to "Media3", "vlc" to "VLC"),
+        "fallback" to toggle,
+        "buffer" to mapOf("balanced" to "Dengeli", "fast" to "Hızlı", "steady" to "Kararlı"),
+        "audio" to language,
+        "sub" to (language + ("off" to "Kapalı")),
+        "size" to mapOf("medium" to "Orta", "large" to "Büyük", "small" to "Küçük"),
+        "color" to mapOf("white" to "Beyaz", "yellow" to "Sarı"),
+        "diagnostics" to toggle,
+    )
+
+    fun id(key: String, value: String): String =
+        choices[key]?.entries?.firstOrNull { it.key == value || it.value == value }?.key ?: value
+
+    fun legacy(key: String, value: String): String = choices[key]?.get(value) ?: value
 }
