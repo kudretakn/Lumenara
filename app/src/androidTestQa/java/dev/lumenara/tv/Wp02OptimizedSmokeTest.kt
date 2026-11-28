@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Process
 import android.os.SystemClock
+import android.view.KeyEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -141,7 +142,7 @@ class Wp02OptimizedSmokeTest {
             await("Media3 mini-guide") { nodeWithTag("mini-guide") != null }
             device.pressBack()
 
-            device.pressMenu()
+            InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_MENU)
             activate { nodeWithText("Motor: Media3/VLC") }
             await("VLC surface") { nodeWithTag("vlc-player") != null }
             val beforeVlc = frameCount("vlc")
@@ -152,7 +153,7 @@ class Wp02OptimizedSmokeTest {
             await("VLC mini-guide") { nodeWithTag("mini-guide") != null }
             device.pressBack()
 
-            device.pressMenu()
+            InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_MENU)
             activate { nodeWithText("Motor: VLC/Media3") }
             val beforeReturn = frameCount("media3")
             device.pressDPadUp()
