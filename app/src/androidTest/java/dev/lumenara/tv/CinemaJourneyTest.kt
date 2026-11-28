@@ -2,6 +2,7 @@ package dev.lumenara.tv
 
 import android.graphics.BitmapFactory
 import android.graphics.drawable.BitmapDrawable
+import androidx.activity.compose.setContent
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -10,9 +11,11 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.UiDevice
 import coil.Coil
+import coil.EventListener
 import coil.ImageLoader
 import coil.decode.DataSource
 import coil.intercept.Interceptor
+import coil.request.ImageRequest
 import coil.request.SuccessResult
 import dev.lumenara.data.Feed
 import dev.lumenara.data.Mapping
@@ -56,9 +59,24 @@ class CinemaJourneyTest {
                 "Sessiz Liman",
             )
         val art = titles.indices.map { "tile${it % 7}" }
+        val detailsPhase = AtomicBoolean(false)
+        val detailsArtworkDelivered = AtomicBoolean(false)
         val previous = Coil.imageLoader(context)
         val loader =
             ImageLoader.Builder(context)
+                .eventListenerFactory(object : EventListener.Factory {
+                    override fun create(request: ImageRequest): EventListener {
+                        // Memory hits also deliver onSuccess. Only requests started by the
+                        // details composition count, not earlier grid/preview decodes.
+                        val fromDetails = detailsPhase.get()
+                        return object : EventListener {
+                            override fun onSuccess(request: ImageRequest, result: SuccessResult) {
+                                if (fromDetails && request.data.toString() == "https://cinema.invalid/${art[6]}.jpg")
+                                    detailsArtworkDelivered.set(true)
+                            }
+                        }
+                    }
+                })
                 .components {
                     add(
                         Interceptor { chain ->
@@ -111,12 +129,7 @@ class CinemaJourneyTest {
             }
         }
         fun searchShelf(tag: String) {
-            screen.waitUntil(30_000) {
-                runCatching {
-                    screen.onNodeWithTag("search-results").performScrollToNode(hasTestTag(tag))
-                    screen.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty()
-                }.getOrDefault(false)
-            }
+            screen.wp21ScrollTo("search-results", hasTestTag(tag))
         }
         fun waitAbsent(matcher: SemanticsMatcher) {
             screen.waitUntil(30_000) { screen.onAllNodes(matcher).fetchSemanticsNodes().isEmpty() }
@@ -139,8 +152,7 @@ class CinemaJourneyTest {
         fun capture(name: String) {
             // A real device screenshot includes GPU-composited image transitions and TV focus
             // rings.
-            val readyAt = android.os.SystemClock.uptimeMillis() + 1300
-            screen.waitUntil(30_000) { android.os.SystemClock.uptimeMillis() >= readyAt }
+            screen.wp21AwaitWindowFrames()
             val file = File(context.getExternalFilesDir(null), "$name.png")
             checkNotNull(file.parentFile).mkdirs()
             assertTrue("Ekran görüntüsü kaydedilmeli: $name", device.takeScreenshot(file))
@@ -271,8 +283,8 @@ class CinemaJourneyTest {
                 screen.back()
                 waitAbsent(hasContentDescription("Tam ekran oynatıcı"))
                 section("Ana Sayfa")
-                screen.onNodeWithTag("hub").performScrollToNode(hasTestTag("channel-shelf-Son kanal"))
                 val recentCard = describedIn("Test Haber", "channel-shelf-Son kanal")
+                screen.wp21ScrollTo("hub", recentCard)
                 waitFor(recentCard)
                 val recentId = runBlocking { preferences.recentLive.first().first() }
                 runBlocking {
@@ -303,19 +315,28 @@ class CinemaJourneyTest {
                     screen.onNode(hasText("Kadife Gece") and hasAnyAncestor(hasTestTag("poster-grid")))
                         .fetchSemanticsNode().boundsInRoot.bottom <= screen.onRoot().fetchSemanticsNode().boundsInRoot.bottom)
                 capture("cinema-focus")
+                detailsPhase.set(true)
                 screen.ok()
-                val detailsOpenedAt = android.os.SystemClock.uptimeMillis()
                 node("Listem").assertExists()
                 waitFor(hasTestTag("details-play") and isFocused())
                 screen.onNodeWithTag("details-play").assertIsFocused()
+                screen.wp21Await("details artwork delivery") { detailsArtworkDelivered.get() }
                 capture("cinema-details")
                 capture("screens/details")
                 // Native DPAD_CENTER must reach the window after artwork has settled too.
-                screen.waitUntil(30_000) { android.os.SystemClock.uptimeMillis() - detailsOpenedAt >= 4500 }
+                screen.wp21AwaitWindowFrames()
                 screen.onNodeWithTag("details-play").assertIsFocused()
+                screen.wp21Await("native activity window focus") {
+                    screen.runOnUiThread { screen.activity.hasWindowFocus() }
+                }
                 device.pressDPadCenter()
                 waitFor(hasContentDescription("Tam ekran oynatıcı"))
                 screen.waitUntil(30_000) { movieRequested.get() }
+                val requestedMovie = runBlocking {
+                    val source = repo.library.snapshot().single { it.name == "Test · Sinema" }
+                    repo.library.browse(source.id, "MOVIE", "", "", "", 20).first().single { it.title == "Kadife Gece" }
+                }
+                screen.wp21AwaitMedia3Ready(runBlocking { repo.address(requestedMovie) })
                 repeat(2) {
                     if (screen.onAllNodesWithContentDescription("Tam ekran oynatıcı")
                             .fetchSemanticsNodes().isNotEmpty()) screen.back()
@@ -412,6 +433,8 @@ class CinemaJourneyTest {
                 screen.onNodeWithTag("settings-list").performScrollToNode(hasText("Varsayılan motor · Media3"))
                 node("Varsayılan motor · Media3").assertExists()
             } finally {
+                screen.runOnUiThread { screen.activity.setContent { } }
+                screen.waitForIdle()
                 runBlocking {
                     preferences.set("recent_live", previousRecent)
                     preferences.set("engine", previousEngine)

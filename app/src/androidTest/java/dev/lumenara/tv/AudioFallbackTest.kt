@@ -13,7 +13,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.*
 import okio.Buffer
-import org.junit.Assume.assumeTrue
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 
@@ -23,7 +23,7 @@ class AudioFallbackTest {
     @get:Rule val screen = createAndroidComposeRule<MainActivity>()
 
     @Test fun undecodableAudioSwitchesToVlc() {
-        assumeTrue("Device has an MPEG-L2 decoder", MediaCodecUtil.getDecoderInfos("audio/mpeg-L2", false, false).isEmpty())
+        assertTrue("Fallback fixture requires an emulator without an MPEG-L2 decoder", MediaCodecUtil.getDecoderInfos("audio/mpeg-L2", false, false).isEmpty())
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         val repo = Repository.get(context)
@@ -55,7 +55,8 @@ class AudioFallbackTest {
                         LumenaraTheme { Playback(model, channel, listOf(channel), {}, {}, {}) }
                     }
                 }
-                screen.waitUntil(30_000) { screen.onAllNodesWithTag("vlc-player").fetchSemanticsNodes().isNotEmpty() }
+                screen.wp21AwaitNode(hasTestTag("vlc-player"))
+                screen.wp21AwaitLiveFrame(channel.id)
             } finally {
                 screen.runOnUiThread { screen.activity.setContent {} }
                 runBlocking {

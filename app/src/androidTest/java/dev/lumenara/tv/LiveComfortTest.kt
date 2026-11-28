@@ -36,7 +36,7 @@ class LiveComfortTest {
         } catch (e: ComposeTimeoutException) {
             throw AssertionError(
                 "Beklenen: $matcher, present=$present\n" + screen.onRoot().printToString() +
-                    "\ncurrentFocus=${screen.activity.currentFocus?.javaClass?.name}", e
+                    "\ncurrentFocus=${screen.runOnUiThread { screen.activity.currentFocus?.javaClass?.name }}", e
             )
         }
     }
@@ -105,18 +105,11 @@ class LiveComfortTest {
                 screen.waitUntil(30_000) { runBlocking { prefs.recentLive.first().firstOrNull() == channels[0].id } }
                 await(hasTestTag("live-reconnecting"), false)
                 assertTrue(requests.get() >= 3)
-                await(hasContentDescription("Tam ekran oynatıcı") and isFocused())
-                fun findVideo(view: android.view.View): androidx.media3.ui.PlayerView? {
-                    if (view is androidx.media3.ui.PlayerView) return view
-                    if (view is android.view.ViewGroup) for (index in 0 until view.childCount) {
-                        findVideo(view.getChildAt(index))?.let { return it }
-                    }
-                    return null
-                }
+                screen.wp21AwaitLiveFrame(channels[0].id)
                 var originalView: androidx.media3.ui.PlayerView? = null
                 var originalPlayer: androidx.media3.common.Player? = null
                 if (engine == "Media3") screen.runOnIdle {
-                    originalView = findVideo(screen.activity.window.decorView)
+                    originalView = wp21FindPlayerView(screen.activity.window.decorView)
                     originalPlayer = originalView?.player
                     assertNotNull(originalPlayer)
                 }
@@ -128,14 +121,16 @@ class LiveComfortTest {
                 await(hasTestTag("fullscreen-banner"))
                 screen.onNode(hasText("2") and hasAnyAncestor(hasTestTag("fullscreen-banner"))).assertExists()
                 screen.waitUntil(30_000) { runBlocking { prefs.recentLive.first().take(2) == listOf(channels[1].id, channels[0].id) } }
+                screen.wp21AwaitLiveFrame(channels[1].id)
                 if (engine == "Media3") screen.runOnIdle {
-                    val currentView = findVideo(screen.activity.window.decorView)
+                    val currentView = wp21FindPlayerView(screen.activity.window.decorView)
                     assertSame("Channel switches keep the video view", originalView, currentView)
                     assertSame("Channel switches reuse ExoPlayer", originalPlayer, currentView?.player)
                 }
                 shot("u1-channel-two-$engine")
                 screen.dpad(Key.Zero)
                 await(hasTestTag("u1-host") and SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, channels[0].id))
+                screen.wp21AwaitLiveFrame(channels[0].id)
                 screen.dpad(Key.Nine)
                 screen.ok()
                 await(hasText("Kanal yok"))
@@ -145,6 +140,8 @@ class LiveComfortTest {
                 screen.dpad(Key.LastChannel)
                 await(hasTestTag("u1-host") and SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, channels[1].id))
                 screen.waitUntil(30_000) { runBlocking { prefs.recentLive.first().firstOrNull() == channels[1].id } }
+
+                screen.wp21AwaitLiveFrame(channels[1].id)
 
                 // Hub starts on Canlı TV; recent channels still play directly from their shelf.
                 screen.runOnUiThread {
@@ -159,13 +156,13 @@ class LiveComfortTest {
                     }
                 }
                 await(hasTestTag("hub-Canlı TV") and isFocused())
-                screen.onNodeWithTag("hub").performScrollToNode(hasTestTag("channel-shelf-Son kanal"))
-                screen.onNode(hasContentDescription(channels[1].title) and
-                    hasAnyAncestor(hasTestTag("channel-shelf-Son kanal")))
-                    .performSemanticsAction(SemanticsActions.RequestFocus)
+                val recentCard = hasContentDescription(channels[1].title) and
+                    hasAnyAncestor(hasTestTag("channel-shelf-Son kanal"))
+                screen.wp21ScrollTo("hub", recentCard)
+                screen.wp21Focus(recentCard)
                 shot("u1-last-channel-$engine")
                 screen.ok()
-                await(hasContentDescription("Tam ekran oynatıcı") and isFocused())
+                screen.wp21AwaitLiveFrame(channels[1].id)
 
                 // The same input also works on the Live TV page, without depending on a filtered row index.
                 screen.runOnUiThread {
@@ -181,7 +178,7 @@ class LiveComfortTest {
                 }
                 screen.openCategory("Tüm kanallar")
                 await(hasTestTag("live-channel-${channels[0].id}"))
-                screen.onNodeWithTag("live-channel-${channels[0].id}").performSemanticsAction(SemanticsActions.RequestFocus)
+                screen.wp21Focus(hasTestTag("live-channel-${channels[0].id}"))
                 screen.dpad(Key.NumPad2)
                 await(hasText("2") and hasAnyAncestor(hasTestTag("live-number-entry")))
                 screen.ok()
