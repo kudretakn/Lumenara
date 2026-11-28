@@ -25,9 +25,10 @@ class MigrationTest {
     @Test
     fun currentSchemaReopensWithoutChangingUserState() {
         // Keep the recovery harness's existing method inventory while covering both
-        // the last published schema's index-only upgrade and the current reopen.
+        // the preceding upgrades and the current schema reopen.
         verifyUpgrade(13)
         verifyUpgrade(14)
+        verifyUpgrade(15)
     }
 
     @Test
@@ -111,9 +112,13 @@ class MigrationTest {
             val db = Room.databaseBuilder(context, LibraryDb::class.java, name)
                 .addMigrations(LibraryDb.MIGRATION_7_8, LibraryDb.MIGRATION_8_9, LibraryDb.MIGRATION_9_10,
                     LibraryDb.MIGRATION_10_11, LibraryDb.MIGRATION_11_12, LibraryDb.MIGRATION_12_13,
-                    LibraryDb.MIGRATION_13_14).build()
+                    LibraryDb.MIGRATION_13_14, LibraryDb.MIGRATION_14_15).build()
             try {
                 runBlocking {
+                    db.openHelper.readableDatabase.query("SELECT COUNT(*) FROM wp19_search_documents").use {
+                        assertTrue(it.moveToFirst())
+                        assertEquals("Opening schema $from must not fill the index", 0, it.getInt(0))
+                    }
                     assertEquals(250L, db.library().mark("item")?.position)
                     val old = db.library().item("dub")!!
                     assertEquals("", old.providerId)
@@ -164,7 +169,17 @@ class MigrationTest {
                     val columns = buildList { while (cursor.moveToNext()) add(cursor.getString(2)) }
                     assertEquals(listOf("feed", "name", "channel"), columns)
                 }
-                assertEquals(14, db.openHelper.readableDatabase.version)
+                assertEquals(15, db.openHelper.readableDatabase.version)
+                runBlocking {
+                    // Empty index after DDL: fallback must work before any background batch.
+                    assertTrue(!db.library().wp19SearchReady().first())
+                    val expected = db.library().browse("local", "", "", "fi", "", 20).first().map { it.id }
+                    assertTrue(expected.isNotEmpty())
+                    val search = dev.lumenara.data.Wp19SearchBackfill(db)
+                    while (search.runBatch(1)) { }
+                    assertTrue(db.library().wp19SearchReady().first())
+                    assertEquals(expected, db.library().browse("local", "", "", "fi", "", 20).first().map { it.id })
+                }
                 db.openHelper.readableDatabase.query("PRAGMA foreign_key_check").use { cursor ->
                     assertTrue("Migration from $from left a foreign key violation", !cursor.moveToFirst())
                 }
@@ -206,6 +221,7 @@ class MigrationTest {
                     assertEquals(dev.lumenara.data.Mark("item", true, false, 250, 1000, 1), reopened.library().mark("item"))
                     assertEquals(dev.lumenara.data.Mark("sub", true, true, 100, 1000, 1), reopened.library().mark("sub"))
                     assertEquals("Test", reopened.library().source("local")?.name)
+                    assertTrue(reopened.library().wp19SearchReady().first())
                     assertTrue(reopened.library().item("dub") != null)
                     assertTrue(reopened.library().item("sub") != null)
                 }

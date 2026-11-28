@@ -302,6 +302,9 @@ internal class CatalogImporter(
         derived.reset(source)
         while (derived.runBatch(source)) { job.ensureActive() }
         StartupPerf.elapsed("refresh_catalog_derived", derivedStart)
+        // New imports already wrote postings atomically. Legacy sources keep the old search
+        // until the idle backfill covers their rows too; facade signatures stay unchanged.
+        library.wp19PublishIfCovered()
     }
 
     private fun item(source: String, token: Long, entry: Listing) =

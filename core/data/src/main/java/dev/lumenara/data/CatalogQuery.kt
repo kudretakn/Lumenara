@@ -11,6 +11,7 @@ internal data class CatalogFilter(
     val genre: String = "", val language: String = "", val minRating: Double? = null,
     val hidden: List<String> = emptyList(),
     val derived: Boolean = true,
+    val searchGram: Long? = null,
 ) {
     fun predicate(alias: String, includeEpisodes: Boolean = false): CatalogPredicate {
         val parts = mutableListOf("1=1")
@@ -73,13 +74,19 @@ private fun pendingVersionPredicate(alias: String): String = """EXISTS(
 private fun browseStatement(filter: CatalogFilter, ordered: Boolean = true, includeSort: Boolean = false,
     projectionOnly: String? = null): CatalogPredicate {
     val sort = if (filter.derived) "sortKey" else "title"
-    val eligible = filter.predicate("i")
+    val original = filter.predicate("i")
+    // A capped selectivity probe chose at most 512 candidate documents. A single gram is
+    // only a necessary condition: keep instr and every visibility/version predicate unchanged.
+    val eligible = if (filter.searchGram == null) original else CatalogPredicate(
+        "${original.sql} AND i.id IN (SELECT itemId FROM wp19_search_documents WHERE documentId IN " +
+            "(SELECT documentId FROM wp19_search_grams WHERE gram=?))",
+        original.args + filter.searchGram)
     val representative = representativePredicate({ filter.predicate(it) }, filter.filtersVersions)
     // EQP: equality on kind/category -> index_items_kind_category_sortKey_id (all sources), or
     // source/kind/category -> index_items_source_kind_category_sortKey_id; otherwise kind/title.
     // The legacy fallback cannot constrain isRepresentative. Equal-title id
     // ordering may use a small right-part temp sort, not a sort of the whole catalog.
-    // instr(search, ?) has no index: evaluate during this scan and stop at the visible LIMIT.
+    // Pending upgrades retain the original streaming scan and bounded LIMIT.
     val dedupLive = filter.source.isEmpty() && filter.kind in listOf("", "LIVE") &&
         filter.shelf !in listOf("resume", "favorite", "list")
     // Preserve the previous provider-ID/title/tvgId identity, solely for multi-source LIVE.
@@ -94,7 +101,9 @@ private fun browseStatement(filter: CatalogFilter, ordered: Boolean = true, incl
     }
     // With source=? and a filtered representative OR, older SQLite versions can prefer the
     // source/category index then sort every category. Pin the streaming index for title grids.
-    val index = if (filter.shelf == "recent") "NOT INDEXED" // reverse rowid scan stops at LIMIT
+    val candidateIndex = if (filter.searchGram == null) "" else "INDEXED BY sqlite_autoindex_items_1"
+    val index = if (filter.searchGram != null) candidateIndex // probe candidate primary keys, never a kind scan
+        else if (filter.shelf == "recent") "NOT INDEXED" // reverse rowid scan stops at LIMIT
         else if (order.isEmpty() && filter.kind.isNotEmpty()) "INDEXED BY " + when {
         filter.source.isNotEmpty() && filter.category.isNotEmpty() -> "index_items_source_kind_category_sortKey_id"
         filter.category.isNotEmpty() -> "index_items_kind_category_sortKey_id"
@@ -115,10 +124,10 @@ private fun browseStatement(filter: CatalogFilter, ordered: Boolean = true, incl
     if (dedupLive && filter.kind.isEmpty()) {
         // Mixed search: group only the LIVE branch. Movie/series rows never enter a GROUP BY.
         return CatalogPredicate("""SELECT ${projection("i.catalogRow")} FROM (
-            SELECT i.*,i.rowid AS catalogRow FROM items i
+            SELECT i.*,i.rowid AS catalogRow FROM items i $candidateIndex
             WHERE ${eligible.sql} AND ${representative.sql} AND i.kind!='LIVE'
             UNION ALL
-            SELECT i.*,i.rowid AS catalogRow FROM items i
+            SELECT i.*,i.rowid AS catalogRow FROM items i $candidateIndex
             WHERE ${eligible.sql} AND ${representative.sql} AND i.kind='LIVE' $grouping
             ) i ${if (ordered) "ORDER BY ${order.replace("i.rowid", "i.catalogRow")}i.$sort,i.id" else ""}""",
             args + args)
