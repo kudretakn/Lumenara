@@ -64,6 +64,26 @@ class ArtworkTest {
             artworkRequest(context, url, false, 1920, 1080, "backdrop").data)
     }
 
+    @Test fun hubPosterFallbackUsesPosterVariantAndCacheKeyWhileBackdropKeepsItsRole() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val url = "https://image.tmdb.org/t/p/original/hub.jpg"
+        val fallback = wp05ResolveHubImage({ "" }, { url })
+        assertEquals("poster", fallback.role)
+        val hubPoster = artworkRequest(context, checkNotNull(fallback.address), false, 720, 405, fallback.role)
+        val regularPoster = artworkRequest(context, url, false, 232, 348)
+        assertEquals("https://image.tmdb.org/t/p/w342/hub.jpg", hubPoster.data)
+        assertEquals(regularPoster.diskCacheKey, hubPoster.diskCacheKey)
+        assertEquals(regularPoster.memoryCacheKey, hubPoster.memoryCacheKey)
+        var posterCalled = false
+        val wide = wp05ResolveHubImage({ url }, { posterCalled = true; url })
+        assertFalse(posterCalled)
+        assertEquals("backdrop", wide.role)
+        assertEquals("https://image.tmdb.org/t/p/w780/hub.jpg",
+            artworkRequest(context, checkNotNull(wide.address), false, 720, 405, wide.role).data)
+        val missing = wp05ResolveHubImage({ null }, { null })
+        assertNull(missing.address)
+    }
+
     @Test fun missingImageIsRequestedOnlyOncePerSession() = runBlocking {
         withLoader { loader, _, server, _ ->
             server.enqueue(MockResponse().setResponseCode(404))

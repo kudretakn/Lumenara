@@ -6,6 +6,9 @@ import android.os.Handler
 import android.os.Looper
 import android.view.FrameMetrics
 import android.view.Window
+import android.view.Choreographer
+import android.os.Process
+import android.os.Trace
 import java.util.concurrent.ConcurrentHashMap
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -60,6 +63,8 @@ internal fun Modifier.categoryFirstDraw(ready: Boolean, transitions: PerfTransit
 /** Fixed event names only: never pass content titles, IDs or addresses. Enabled in release. */
 internal object Perf {
     private val marks = ConcurrentHashMap<String, Long>()
+    // Updated by the public frame callback before traversal, on the same main thread as draw.
+    private var frameVsyncNanos = 0L
     val transitions = PerfTransitions(SystemClock::elapsedRealtime) { Log.i("LumenaraPerf", it) }
     fun zapStart() = transitions.zapStart()
     fun zapCancel() = transitions.zapCancel()
@@ -75,34 +80,47 @@ internal object Perf {
         Log.i("LumenaraPerf", "$label ms=${SystemClock.elapsedRealtime() - start}")
     }
 
-    /** Debug-only UI frame timings; one summary per foreground session, no per-frame logs. */
+    /** Draw timestamps correlate with external gfxinfo/atrace; they are not presentation times. */
+    fun hubDraw(label: String) {
+        val uptime = SystemClock.uptimeMillis()
+        Trace.beginSection(label)
+        Log.i("LumenaraPerf", "$label process_ms=${uptime - Process.getStartUptimeMillis()} " +
+            "uptime_ms=$uptime draw_ns=${System.nanoTime()} " +
+            "frame_vsync_ns=$frameVsyncNanos")
+        Trace.endSection()
+    }
+
+    /** Release too, including FIRST_DRAW_FRAME. One bounded summary, no per-frame log traffic. */
     fun observeFrames(window: Window): () -> Unit {
-        if (!BuildConfig.DEBUG) return {}
+        val choreographer = Choreographer.getInstance()
+        frameVsyncNanos = 0L
+        val frameClock = object : Choreographer.FrameCallback {
+            override fun doFrame(frameTimeNanos: Long) {
+                frameVsyncNanos = frameTimeNanos
+                choreographer.postFrameCallback(this)
+            }
+        }
         val refreshRate = window.decorView.display?.refreshRate?.takeIf { it > 0f } ?: 60f
         val budgetNs = (1_000_000_000L / refreshRate).toLong()
-        var frames = 0L
-        var overBudget = 0L
-        var totalNs = 0L
-        var maxNs = 0L
+        val stats = Wp05FrameStats(budgetNs)
         var droppedReports = 0L
         val listener = Window.OnFrameMetricsAvailableListener { _, metrics, dropped ->
             droppedReports += dropped
-            if (metrics.getMetric(FrameMetrics.FIRST_DRAW_FRAME) == 0L) {
-                val duration = metrics.getMetric(FrameMetrics.TOTAL_DURATION)
-                if (duration > 0) {
-                    frames++
-                    totalNs += duration
-                    maxNs = maxOf(maxNs, duration)
-                    if (duration > budgetNs) overBudget++
-                }
-            }
+            stats.add(metrics.getMetric(FrameMetrics.TOTAL_DURATION),
+                metrics.getMetric(FrameMetrics.FIRST_DRAW_FRAME) != 0L)
         }
         window.addOnFrameMetricsAvailableListener(listener, Handler(Looper.getMainLooper()))
+        choreographer.postFrameCallback(frameClock)
         return {
+            choreographer.removeFrameCallback(frameClock)
+            frameVsyncNanos = 0L
             window.removeOnFrameMetricsAvailableListener(listener)
-            if (frames > 0) Log.i("LumenaraPerf",
-                "ui_frames count=$frames avg_ms=${totalNs / frames / 1_000_000.0} " +
-                    "max_ms=${maxNs / 1_000_000.0} over_budget_pct=${100.0 * overBudget / frames} " +
+            if (stats.count > 0) Log.i("LumenaraPerf",
+                "ui_frames count=${stats.count} avg_ms=${stats.totalNs / stats.count / 1_000_000.0} " +
+                    "max_ms=${stats.maxNs / 1_000_000.0} over_budget_pct=${100.0 * stats.overBudget / stats.count} " +
+                    "p50_upper_ms=${stats.percentileUpperMs(50)} p95_upper_ms=${stats.percentileUpperMs(95)} " +
+                    "percentile_cap_ms=10000 over_32ms=${stats.over32} over_50ms=${stats.over50} " +
+                    "first_draw_count=${stats.firstDrawCount} first_draw_max_ms=${stats.firstDrawMaxNs / 1_000_000.0} " +
                     "budget_ms=${budgetNs / 1_000_000.0} dropped_reports=$droppedReports")
         }
     }
