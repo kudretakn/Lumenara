@@ -18,14 +18,15 @@ import androidx.lifecycle.*
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.tv.material3.*
 import dev.lumenara.data.Item
-import dev.lumenara.data.nextItem
-import dev.lumenara.data.seriesOrder
+import dev.lumenara.data.wp14SeriesCatalog
+import dev.lumenara.data.Wp14SeriesCatalog
 import dev.lumenara.design.*
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.takeWhile
 import dev.lumenara.catalog.*
 import dev.lumenara.vlc.VlcInput
 import kotlinx.coroutines.*
@@ -69,6 +70,7 @@ internal fun VlcScreen(
     delayReady: Boolean,
     changeSubtitleDelay: (Long) -> Unit,
     ownership: PlaybackOwnership? = null,
+    seriesCatalog: Wp14SeriesCatalog? = null,
 ) {
     val sleepCountdown = sleepTimerVersion.let { sleepTimer.showCountdown() }
     val life by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
@@ -79,12 +81,16 @@ internal fun VlcScreen(
     val playbackMutex = remember { Mutex() }
     // Access under playbackMutex: one native player and surface for this screen lifetime.
     val engineHolder = remember { arrayOfNulls<MediaPlayer>(1) }
+    val scope = rememberCoroutineScope()
+    val episodeCatalog = seriesCatalog ?: rememberWp14SeriesCatalog(if (item.kind == "EPISODE") group else emptyList())
+    val currentEpisodeCatalog by rememberUpdatedState(episodeCatalog)
     fun move(delta: Int) {
         if (item.kind == "LIVE") { zap(delta); return }
-        val rows = if (item.kind == "EPISODE") group.seriesOrder() else group
-        val target = if (item.kind == "EPISODE" && delta == 1) rows.nextItem(item)
-            else rows.indexOfFirst { it.id == item.id }.takeIf { it >= 0 }?.let { rows.getOrNull(it + delta) }
-        target?.let { select(it, rows) }
+        scope.launch {
+            val rows = if (item.kind == "EPISODE") (episodeCatalog ?: wp14SeriesCatalog(group)).items else group
+            val target = rows.indexOfFirst { it.id == item.id }.takeIf { it >= 0 }?.let { rows.getOrNull(it + delta) }
+            target?.let { select(it, rows) }
+        }
     }
     BackHandler { if (panel) panel = false else if (!fullscreen.dismiss()) back() }
     if (!life.isAtLeast(Lifecycle.State.STARTED)) return
@@ -107,34 +113,17 @@ internal fun VlcScreen(
     }
     val refreshCurrentUi by rememberUpdatedState<(MediaPlayer) -> Unit> { refreshPlayerUi(it) }
     val currentLivePlaying by rememberUpdatedState(livePlaying)
-    val uiVisible = panel || !fullscreen.guide && !sleepCountdown && fullscreen.bannerUntil > fullscreen.now
+    val uiVisible = panel || !fullscreen.guide && !fullscreen.finished && !sleepCountdown && fullscreen.bannerVisible
     LaunchedEffect(player, item.id, uiVisible) {
         val p = player ?: return@LaunchedEffect
         withContext(Dispatchers.Main.immediate) {
-            refreshCurrentUi(p)
             if (uiVisible) wallClockTicks(500).collect { refreshCurrentUi(p) }
         }
     }
+    val currentUiVisible by rememberUpdatedState(uiVisible)
+    var trackRevision by remember(item.id) { mutableLongStateOf(0) }
     var receivedSubtitleDelayUs by remember(item.id, player) { mutableLongStateOf(0L) }
     var frameRate by remember(item.id, retry.generation) { mutableStateOf<Float?>(null) }
-    LaunchedEffect(player, item.id, activeMediaId, retry.generation) {
-        val p = player ?: return@LaunchedEffect
-        if (activeMediaId != item.id) return@LaunchedEffect
-        withContext(Dispatchers.Main.immediate) {
-            requireMainThread()
-            while (frameRate == null && player === p && !p.isReleased) {
-                val media = p.media
-                try {
-                    frameRate = (0 until (media?.trackCount ?: 0)).asSequence()
-                        .mapNotNull { media?.getTrack(it) as? org.videolan.libvlc.interfaces.IMedia.VideoTrack }
-                        .filter { it.frameRateNum > 0 && it.frameRateDen > 0 }
-                        .map { it.frameRateNum.toFloat() / it.frameRateDen }
-                        .firstOrNull()
-                } finally { media?.release() }
-                delay(500)
-            }
-        }
-    }
     var message by remember { mutableStateOf("") }
     var subtitleNotice by remember(item.id) { mutableStateOf("") }
     val subtitleSearch = rememberSubtitleSearchState(model, item, status = { subtitleNotice = it }) {
@@ -142,7 +131,6 @@ internal fun VlcScreen(
         panel = false
     }
     var preferenceKey by remember(item.id) { mutableStateOf("") }
-    val scope = rememberCoroutineScope()
     var audioTracks by remember(item.id) { mutableStateOf(emptyList<MediaPlayer.TrackDescription>()) }
     var textTracks by remember(item.id) { mutableStateOf(emptyList<MediaPlayer.TrackDescription>()) }
     var languages by remember(item.id) { mutableStateOf(emptyMap<Int, String>()) }
@@ -177,17 +165,15 @@ internal fun VlcScreen(
     val subtitlePlayer = player.takeIf { activeMediaId == item.id }
     val inputGeneration = mediaGeneration
     // One engine writer: changing the shared delay restarts this effect immediately.
-    LaunchedEffect(subtitlePlayer, inputGeneration, delayMs, delayReady, nativePlaying) {
+    LaunchedEffect(subtitlePlayer, inputGeneration, delayMs, delayReady, nativePlaying, trackRevision) {
         val p = subtitlePlayer ?: return@LaunchedEffect
         if (!delayReady) return@LaunchedEffect
         withContext(Dispatchers.Main.immediate) {
-            wallClockTicks(500).collect {
-                requireMainThread()
-                if (p !== player || p.isReleased || inputGeneration != mediaGeneration) return@collect
-                val requestedUs = delayMs * 1000
-                if (p.spuDelay != requestedUs) p.setSpuDelay(requestedUs)
-                receivedSubtitleDelayUs = p.spuDelay
-            }
+            requireMainThread()
+            if (p !== player || p.isReleased || inputGeneration != mediaGeneration) return@withContext
+            val requestedUs = delayMs * 1000
+            if (p.spuDelay != requestedUs) p.setSpuDelay(requestedUs)
+            receivedSubtitleDelayUs = p.spuDelay
         }
     }
     LaunchedEffect(subtitlePlayer, subtitle?.uri) {
@@ -261,22 +247,25 @@ internal fun VlcScreen(
     }
     val refreshCurrentSlave by rememberUpdatedState<(MediaPlayer) -> Unit> { refreshSlave(it) }
     val resolvedSlaveUri = slaveUri
-    LaunchedEffect(subtitlePlayer, inputGeneration, subtitle?.uri, resolvedSlaveUri, nativePlaying) {
+    LaunchedEffect(subtitlePlayer, inputGeneration, subtitle?.uri, resolvedSlaveUri, nativePlaying, activeSubtitle) {
         val p = subtitlePlayer
         val uri = resolvedSlaveUri
         android.util.Log.d("LumenaraVlc", "subtitle attach effect player=${p != null} generation=$mediaGeneration subtitle=${subtitle != null} resolved=${uri != null} eventPlaying=$nativePlaying")
-        if (p == null || uri == null) return@LaunchedEffect
+        if (p == null || uri == null || !nativePlaying || activeSubtitle) return@LaunchedEffect
         var decision = ""
         // The playback effect owns playbackMutex until disposal. Never acquire
         // it here: attachment must run while that input is still playing.
         withContext(Dispatchers.Main.immediate) {
-            wallClockTicks(250).collect { now ->
+            wallClockTicks(250).takeWhile {
+                !activeSubtitle && (if (attached == null) slaveAttempts < 3
+                else slaveTrack == null || awaitingSlaveSelection)
+            }.collect { now ->
                 if (p !== player || inputGeneration != mediaGeneration) return@collect
-                refreshCurrentSlave(p)
                 // A successful addSlave only queues the request; confirm an actual ES.
-                if (attached != null && slaveTrack == null && now - slaveAddedAt >= 2000) {
+                if (attached != null && (slaveTrack == null || awaitingSlaveSelection) && now - slaveAddedAt >= 2000) {
                     android.util.Log.d("LumenaraVlc", "subtitle attach timed out waiting for track attempt=$slaveAttempts")
                     attached = null
+                    slaveTrack = null
                     awaitingSlaveSelection = false
                 }
                 // Playing can precede effect startup or be followed by Opening.
@@ -307,57 +296,60 @@ internal fun VlcScreen(
             }
         }
     }
-    LaunchedEffect(subtitlePlayer, inputGeneration, subtitle?.uri) {
+    val trackSignatures = remember(subtitlePlayer, inputGeneration) { arrayOf("", "") }
+    LaunchedEffect(subtitlePlayer, inputGeneration, subtitle?.uri, trackRevision) {
         val p = subtitlePlayer ?: return@LaunchedEffect
         val key = model.repo.preferenceKey(item)
-        var audioSignature = ""
-        var textSignature = ""
         withContext(Dispatchers.Main.immediate) {
-            wallClockTicks(500).collect {
-                requireMainThread()
-                if (p !== player || inputGeneration != mediaGeneration) return@collect
-                val audio = p.audioTracks?.toList().orEmpty()
-                val text = p.spuTracks?.toList().orEmpty()
-                val currentAudio = audio.joinToString { "${it.id}:${it.name}" }
-                val currentText = text.joinToString { "${it.id}:${it.name}" }
-                val audioChanged = currentAudio != audioSignature
-                if (audioChanged || currentText != textSignature) {
-                    audioSignature = currentAudio
-                    textSignature = currentText
-                    audioTracks = audio
-                    textTracks = text
-                    val media = p.media
-                    try {
-                        languages = (0 until (media?.trackCount ?: 0)).mapNotNull { index ->
-                            media?.getTrack(index)?.let { track -> track.id to track.language.orEmpty() }
-                        }.toMap()
-                    } finally { media?.release() }
-                    val savedAudio = model.prefs.playbackChoice("audio", key)
-                    val savedText = model.prefs.playbackChoice("text", key)
-                    val chosenAudio = audio.filter { trackPreferenceRank(savedAudio, languages[it.id], it.id.toString()) < 2 }
-                        .minByOrNull { trackPreferenceRank(savedAudio, languages[it.id], it.id.toString()) }
-                        ?: audio.firstOrNull { isTurkish(languages[it.id]) || it.name.contains("Turkish", true) || it.name.contains("Türkçe", true) }
-                        ?: audio.firstOrNull { it.id >= 0 }
-                    // A subtitle ES change must not reapply the audio default.
-                    if (audioChanged) chosenAudio?.let { if (p.audioTrack != it.id) p.setAudioTrack(it.id) }
-                    val dubbed = productionName(item.title, item.year).version == AudioVersion.DUBBED ||
-                        chosenAudio?.let { isTurkish(languages[it.id]) || it.name.contains("Turkish", true) || it.name.contains("Türkçe", true) } == true
-                    // An explicitly attached subtitle takes precedence over automatic language defaults.
-                    if (currentSubtitle == null) {
-                        if (subtitlesDisabled(savedText, turkishAudio = dubbed, dubbed = false)) {
-                            if (p.spuTrack != -1) p.setSpuTrack(-1)
-                        } else {
-                            val chosenText = text.filter { trackPreferenceRank(savedText, languages[it.id], it.id.toString()) < 2 }
-                                .minByOrNull { trackPreferenceRank(savedText, languages[it.id], it.id.toString()) }
-                                ?: text.firstOrNull { isTurkish(languages[it.id]) || it.name.contains("Türkçe", true) || it.name.contains("Turkish", true) }
-                            val id = chosenText?.id ?: -1
-                            if (p.spuTrack != id) p.setSpuTrack(id)
-                        }
+            requireMainThread()
+            if (p !== player || inputGeneration != mediaGeneration) return@withContext
+            val audio = p.audioTracks?.toList().orEmpty()
+            val text = p.spuTracks?.toList().orEmpty()
+            val currentAudio = audio.joinToString { "${it.id}:${it.name}" }
+            val currentText = text.joinToString { "${it.id}:${it.name}" }
+            val audioChanged = currentAudio != trackSignatures[0]
+            if (audioChanged || currentText != trackSignatures[1] || frameRate == null) {
+                audioTracks = audio
+                textTracks = text
+                val media = p.media
+                try {
+                    languages = (0 until (media?.trackCount ?: 0)).mapNotNull { index ->
+                        media?.getTrack(index)?.let { track -> track.id to track.language.orEmpty() }
+                    }.toMap()
+                    if (frameRate == null) frameRate = (0 until (media?.trackCount ?: 0)).asSequence()
+                        .mapNotNull { media?.getTrack(it) as? org.videolan.libvlc.interfaces.IMedia.VideoTrack }
+                        .filter { it.frameRateNum > 0 && it.frameRateDen > 0 }
+                        .map { it.frameRateNum.toFloat() / it.frameRateDen }.firstOrNull()
+                } finally { media?.release() }
+                val savedAudio = model.prefs.playbackChoice("audio", key)
+                val savedText = model.prefs.playbackChoice("text", key)
+                ensureActive()
+                if (p !== player || p.isReleased || inputGeneration != mediaGeneration) return@withContext
+                trackSignatures[0] = currentAudio
+                trackSignatures[1] = currentText
+                val chosenAudio = audio.filter { trackPreferenceRank(savedAudio, languages[it.id], it.id.toString()) < 2 }
+                    .minByOrNull { trackPreferenceRank(savedAudio, languages[it.id], it.id.toString()) }
+                    ?: audio.firstOrNull { isTurkish(languages[it.id]) || it.name.contains("Turkish", true) || it.name.contains("Türkçe", true) }
+                    ?: audio.firstOrNull { it.id >= 0 }
+                // A subtitle ES change must not reapply the audio default.
+                if (audioChanged) chosenAudio?.let { if (p.audioTrack != it.id) p.setAudioTrack(it.id) }
+                val dubbed = productionName(item.title, item.year).version == AudioVersion.DUBBED ||
+                    chosenAudio?.let { isTurkish(languages[it.id]) || it.name.contains("Turkish", true) || it.name.contains("Türkçe", true) } == true
+                // An explicitly attached subtitle takes precedence over automatic language defaults.
+                if (currentSubtitle == null) {
+                    if (subtitlesDisabled(savedText, turkishAudio = dubbed, dubbed = false)) {
+                        if (p.spuTrack != -1) p.setSpuTrack(-1)
+                    } else {
+                        val chosenText = text.filter { trackPreferenceRank(savedText, languages[it.id], it.id.toString()) < 2 }
+                            .minByOrNull { trackPreferenceRank(savedText, languages[it.id], it.id.toString()) }
+                            ?: text.firstOrNull { isTurkish(languages[it.id]) || it.name.contains("Türkçe", true) || it.name.contains("Turkish", true) }
+                        val id = chosenText?.id ?: -1
+                        if (p.spuTrack != id) p.setSpuTrack(id)
                     }
                 }
-                activeSubtitle = attached != null && slaveTrack != null && p.spuTrack == slaveTrack
-                refreshCurrentUi(p)
             }
+            activeSubtitle = attached != null && slaveTrack != null && p.spuTrack == slaveTrack
+            if (currentUiVisible) refreshCurrentUi(p)
         }
     }
     LaunchedEffect(subtitleSearch.open, layout, panel, fullscreen.guide, fullscreen.finished, player, retry.generation, retry.reconnecting, sleepCountdown) {
@@ -490,6 +482,7 @@ internal fun VlcScreen(
                                     MediaPlayer.Event.Opening -> {
                                         nativePlaying = false
                                         mediaGeneration++
+                                        trackRevision++
                                         android.util.Log.d("LumenaraVlc", "playback Opening generation=$mediaGeneration")
                                     }
                                     MediaPlayer.Event.Buffering -> {
@@ -507,6 +500,7 @@ internal fun VlcScreen(
                                         buffering = false
                                         nativePlaying = true
                                         inputHasPlayed = true
+                                        trackRevision++
                                         surface.keepScreenOn = true
                                         android.util.Log.d("LumenaraVlc", "playback Playing generation=$mediaGeneration")
                                         if (item.kind == "LIVE") currentLivePlaying()
@@ -525,9 +519,11 @@ internal fun VlcScreen(
                                             Perf.since("channel", "channel_video_output_ready_vlc")
                                         }
                                         refreshCurrentSlave(p)
+                                        trackRevision++
                                     }
                                     MediaPlayer.Event.ESAdded, MediaPlayer.Event.ESDeleted, MediaPlayer.Event.ESSelected -> {
                                         refreshCurrentSlave(p)
+                                        trackRevision++
                                     }
                                     MediaPlayer.Event.EncounteredError -> {
                                         nativePlaying = false
@@ -549,7 +545,7 @@ internal fun VlcScreen(
                                             model.progress(item, p.length, p.length)
                                         }
                                         if (item.kind == "EPISODE") {
-                                            fullscreen.finished = group.nextItem(item) != null
+                                            fullscreen.finished = currentEpisodeCatalog?.neighbor(item.id, 1) != null
                                             episodeEnded()
                                         }
                                     }
@@ -561,7 +557,7 @@ internal fun VlcScreen(
                                                 ownStop = ownStop, paused = paused)) reconnect()
                                     }
                                 }
-                                refreshCurrentUi(p)
+                                if (currentUiVisible) refreshCurrentUi(p)
                             }
                         }
                         val needsSurface = player !== p
@@ -711,12 +707,13 @@ internal fun VlcScreen(
         )
         if (!panel && !sleepCountdown) FullscreenOverlay(model, item, group, fullscreen, select, { panel = true },
             playerUi.position, playerUi.duration,
-            if (item.kind == "EPISODE" && group.nextItem(item) != null) next else null)
+            if (item.kind == "EPISODE" && episodeCatalog?.neighbor(item.id, 1) != null) next else null,
+            episodeCatalog = episodeCatalog)
         FrameRateMatch(model, item.kind, frameRate, layout)
         Reconnecting(retry)
         numbers?.let { NumberEntry(it) }
         SubtitleNotice(subtitleNotice) { subtitleNotice = "" }
-        SleepTimerCard(sleepTimer, sleepTimerVersion) {
+        SleepTimerCard(sleepTimer, sleepTimerVersion, onSleepTimerChanged) {
             sleepTimer.cancel()
             onSleepTimerChanged()
         }
@@ -771,7 +768,7 @@ internal fun VlcScreen(
                         }
                         if (snapshot != null)
                             model.repo.updateMark(item.id) { it.copy(position = snapshot.first, duration = snapshot.second) }
-                        val rows = if (version.kind == "EPISODE") model.repo.episodeSnapshot(version.parent).seriesOrder() else group
+                        val rows = if (version.kind == "EPISODE") wp14SeriesCatalog(model.repo.episodeSnapshot(version.parent)).items else group
                         select(version, rows)
                     }
                 } }

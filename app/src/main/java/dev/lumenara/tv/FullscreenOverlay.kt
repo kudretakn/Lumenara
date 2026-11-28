@@ -22,7 +22,7 @@ import androidx.compose.ui.unit.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
 import dev.lumenara.data.Item
-import dev.lumenara.data.nextItem
+import dev.lumenara.data.Wp14SeriesCatalog
 import dev.lumenara.design.*
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
@@ -50,12 +50,11 @@ internal class FullscreenState {
     var showLiveHint by mutableStateOf(false)
     var bannerUntil by mutableLongStateOf(0)
     var activity by mutableLongStateOf(0)
-    var now by mutableLongStateOf(System.currentTimeMillis())
+    val bannerVisible: Boolean get() = bannerUntil != 0L
     var finished by mutableStateOf(false)
     var bannerRequest by mutableLongStateOf(0)
         private set
     fun showBanner() {
-        now = System.currentTimeMillis()
         // Keep it visible without expiring until the overlay has rendered.
         bannerUntil = Long.MAX_VALUE
         bannerRequest++
@@ -63,7 +62,7 @@ internal class FullscreenState {
     fun openGuide() { guide = true; activity = System.currentTimeMillis(); bannerUntil = 0 }
     fun dismiss(): Boolean = when {
         guide -> { guide = false; true }
-        bannerUntil > now && !finished -> { bannerUntil = 0; true }
+        bannerVisible && !finished -> { bannerUntil = 0; true }
         else -> false
     }
     fun key(key: KeyEvent, live: Boolean, move: (Int) -> Unit, options: () -> Unit,
@@ -104,11 +103,12 @@ internal class FullscreenState {
 internal fun rememberFullscreenState(item: Item): FullscreenState {
     val state = remember { FullscreenState() }
     LaunchedEffect(item.id) { state.guide = false; state.finished = false; state.showBanner() }
-    LaunchedEffect(state) {
-        wallClockTicks(250).collect {
-            state.now = it
-            if (state.guide && it - state.activity >= 8000) state.guide = false
-        }
+    LaunchedEffect(state, state.guide, state.activity) {
+        if (state.guide) wp14AwaitDeadline(state.activity + 8000) { state.guide = false }
+    }
+    LaunchedEffect(state, state.bannerUntil) {
+        if (state.bannerUntil != 0L && state.bannerUntil != Long.MAX_VALUE)
+            wp14AwaitDeadline(state.bannerUntil) { state.bannerUntil = 0 }
     }
     return state
 }
@@ -118,7 +118,9 @@ internal fun BoxScope.FullscreenOverlay(
     model: LibraryModel, item: Item, group: List<Item>, state: FullscreenState,
     select: (Item, List<Item>) -> Unit, options: () -> Unit,
     position: Long, duration: Long, next: (() -> Unit)?,
+    episodeCatalog: Wp14SeriesCatalog? = null,
 ) {
+    val seriesCatalog = episodeCatalog ?: rememberWp14SeriesCatalog(if (item.kind == "EPISODE") group else emptyList())
     LaunchedEffect(state, item.kind == "LIVE") {
         if (item.kind == "LIVE" && !state.hintClaimed) {
             hintCounterLock.withLock {
@@ -146,22 +148,24 @@ internal fun BoxScope.FullscreenOverlay(
                 LumenIcon(LumenIcon.Play, contentDescription = null)
                 Column {
                     Text("Sonraki bölüm", style = LumenType.cardTitle)
-                    group.nextItem(item)?.let { episode ->
-                        val name = dev.lumenara.catalog.episodeName(episode.title, episode.category)
-                        Text("S${name.season} B${name.episode} · ${name.title}", style = LumenType.meta, maxLines = 2,
-                            color = LumenColors.onFocus)
+                    seriesCatalog?.let { catalog ->
+                        catalog.neighbor(item.id, 1)?.let { episode ->
+                            val name = catalog.names.getValue(episode.id)
+                            Text("S${name.season} B${name.episode} · ${name.title}", style = LumenType.meta, maxLines = 2,
+                                color = LumenColors.onFocus)
+                        }
                     }
                 }
             }
         }
     }
-    val bannerVisible = !state.guide && !(state.finished && next != null) && state.bannerUntil > state.now
+    val bannerVisible = !state.guide && !(state.finished && next != null) && state.bannerVisible
     if (bannerVisible) {
         LaunchedEffect(item.id, state.bannerRequest) {
             // Two frames let the banner draw before its wall-clock deadline starts.
             withFrameNanos { }; withFrameNanos { }
-            state.now = System.currentTimeMillis()
-            state.bannerUntil = state.now + Motion.bannerAutoHideMillis
+            if (state.bannerUntil == Long.MAX_VALUE)
+                state.bannerUntil = System.currentTimeMillis() + Motion.bannerAutoHideMillis
         }
     }
     AnimatedVisibility(bannerVisible, Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
@@ -169,7 +173,7 @@ internal fun BoxScope.FullscreenOverlay(
         Box(Modifier.fillMaxWidth().height(200.dp).background(LumenBrushes.scrim)
             .testTag(if (item.kind == "LIVE") "fullscreen-banner" else "vod-timeline")) {
             if (item.kind == "LIVE") {
-                LiveBanner(model, item, state)
+                LiveBanner(model, item, state, bannerVisible)
             } else {
                 val elapsed = position.coerceAtLeast(0)
                 val total = duration.coerceAtLeast(0)
@@ -194,11 +198,12 @@ private val bannerTime = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.sy
 private fun clockTime(ms: Long): String = bannerTime.format(Instant.ofEpochMilli(ms))
 
 @Composable
-private fun BoxScope.LiveBanner(model: LibraryModel, item: Item, state: FullscreenState) {
+private fun BoxScope.LiveBanner(model: LibraryModel, item: Item, state: FullscreenState, visible: Boolean) {
+    val now by rememberWp14VisibleClock(visible)
     val numbers = liveChannelNumbers(model, item.source, listOf(item))
-    val slots = liveProgrammes(model, item, state.now / 30_000 * 30_000, 86_400_000)
-    val current = slots.firstOrNull { state.now >= it.start && state.now < it.end }
-    val following = slots.firstOrNull { it.start >= (current?.end ?: state.now) }
+    val slots = liveProgrammes(model, item, now / 30_000 * 30_000, 86_400_000)
+    val current = slots.firstOrNull { now >= it.start && now < it.end }
+    val following = slots.firstOrNull { it.start >= (current?.end ?: now) }
     val logo by produceState<String?>(null, item.id, item.logo) { value = model.repo.poster(item) }
     Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
         .padding(horizontal = Spacing.screenHorizontal, vertical = Spacing.screenVertical),
@@ -214,7 +219,7 @@ private fun BoxScope.LiveBanner(model: LibraryModel, item: Item, state: Fullscre
                         color = LumenColors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Box(Modifier.size(6.dp).background(LumenColors.live, androidx.compose.foundation.shape.CircleShape))
                     Text("CANLI", style = LumenType.caption, color = LumenColors.live)
-                    Text(clockTime(state.now), style = LumenType.meta, color = LumenColors.textPrimary)
+                    Text(clockTime(now), style = LumenType.meta, color = LumenColors.textPrimary)
                 }
                 if (current != null) {
                     Row(verticalAlignment = Alignment.CenterVertically,
@@ -223,7 +228,7 @@ private fun BoxScope.LiveBanner(model: LibraryModel, item: Item, state: Fullscre
                             color = LumenColors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text("${clockTime(current.start)} – ${clockTime(current.end)}", style = LumenType.meta)
                     }
-                    ProgressLine((state.now - current.start).toFloat() / (current.end - current.start).coerceAtLeast(1),
+                    ProgressLine((now - current.start).toFloat() / (current.end - current.start).coerceAtLeast(1),
                         Modifier.widthIn(max = 560.dp))
                 }
                 if (following != null) Text("Sonra  ${clockTime(following.start)}  ${following.title}",
@@ -243,6 +248,7 @@ private fun playbackTime(ms: Long): String = "%d:%02d".format(ms / 60_000, ms / 
 @Composable
 private fun MiniGuide(model: LibraryModel, playing: Item, state: FullscreenState,
                       select: (Item, List<Item>) -> Unit, options: () -> Unit) {
+    val now by rememberWp14VisibleClock()
     var category by remember { mutableStateOf("") }
     val categories by remember(playing.source) { model.repo.categories("LIVE", playing.source) }
         .collectAsStateWithLifecycle(emptyList())
@@ -293,7 +299,7 @@ private fun MiniGuide(model: LibraryModel, playing: Item, state: FullscreenState
                     if (isTarget && positioned && focusPending) LaunchedEffect(category, positioned) {
                         currentFocus.requestFocus(); focusPending = false
                     }
-                    LiveChannelRow(model, row, row?.let { numbers[it.id] } ?: (index + 1), state.now / 30_000 * 30_000,
+                    LiveChannelRow(model, row, row?.let { numbers[it.id] } ?: (index + 1), now / 30_000 * 30_000,
                         { row?.let { Perf.mark("channel"); state.guide = false; state.showBanner(); select(it, channels.loaded()) } },
                         { state.guide = false; options() },
                         { channels.focused(index); state.activity = System.currentTimeMillis() },

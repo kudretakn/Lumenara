@@ -18,8 +18,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.*
-import dev.lumenara.catalog.displayTitle
-import dev.lumenara.catalog.episodeName
 import dev.lumenara.catalog.watched
 import dev.lumenara.data.*
 import dev.lumenara.design.*
@@ -31,9 +29,11 @@ internal fun SeriesDetails(model: LibraryModel, series: Item, play: (Item, List<
         .collectAsStateWithLifecycle(emptyList())
     val mark by remember(series.id) { model.repo.library.observeMark(series.id) }
         .collectAsStateWithLifecycle(null)
-    val episodes = remember(raw) { raw.orEmpty().seriesOrder() }
-    val byId = remember(marks) { marks.associateBy { it.id } }
-    val seasons = remember(episodes) { episodes.groupBy { it.seriesEpisode().season }.toSortedMap() }
+    val catalog = rememberWp14SeriesCatalog(raw.orEmpty())
+    val progress = rememberWp14SeriesProgress(catalog, marks)
+    val episodes = catalog?.items.orEmpty()
+    val byId = progress.marks
+    val seasons = catalog?.seasons.orEmpty()
     // A tab still enters its season and Back still returns to that tab before leaving details.
     var season by rememberSaveable(series.id) { mutableStateOf<Int?>(null) }
     var previewSeason by rememberSaveable(series.id) { mutableIntStateOf(1) }
@@ -46,11 +46,11 @@ internal fun SeriesDetails(model: LibraryModel, series: Item, play: (Item, List<
     LaunchedEffect(series.id) {
         if (!loaded) model.job("Bölüm listesi güncellendi.") { model.repo.expand(series); loaded = true }
     }
-    val loading = raw == null || (episodes.isEmpty() && busy)
+    val loading = raw == null || catalog == null || (episodes.isEmpty() && busy)
     val info = cinemaInfo(model, series)
-    val next = episodes.continueItem(marks)
-    val name = next?.let { episodeName(it.title, it.category) }
-    val hasHistory = marks.any { it.position > 0 }
+    val next = progress.continuing
+    val name = next?.let { catalog?.names?.get(it.id) }
+    val hasHistory = progress.hasHistory
     val selectedSeason = season ?: previewSeason.takeIf { it in seasons } ?: seasons.keys.firstOrNull() ?: 1
     val content = rememberLazyListState()
     BackHandler(season != null && menu == null) {
@@ -106,7 +106,7 @@ internal fun SeriesDetails(model: LibraryModel, series: Item, play: (Item, List<
                     items(seasons.keys.toList(), key = { it }) { number ->
                         val target = remember { FocusRequester() }
                         val rows = seasons.getValue(number)
-                        val complete = rows.all { ep -> byId[ep.id]?.let { watched(it.position, it.duration) } == true }
+                        val complete = number in progress.completedSeasons
                         if (season == null && seriesFocus == "season-$number") LaunchedEffect(Unit) {
                             withFrameNanos { }; target.requestFocus()
                         }
@@ -122,7 +122,7 @@ internal fun SeriesDetails(model: LibraryModel, series: Item, play: (Item, List<
             }
             item(key = "episodes") {
                 key(selectedSeason) {
-                    EpisodeShelf(model, seasons[selectedSeason].orEmpty(), episodes, byId, loading,
+                    EpisodeShelf(model, seasons[selectedSeason].orEmpty(), catalog, byId, loading,
                         enter = season != null || seriesFocus.startsWith("episode-"), restore = restoreEpisode,
                         restored = { restoreEpisode = "" }, play = play, actions = { menu = it },
                         focused = { if (season == null) seriesFocus = "episode-${it.id}" })
@@ -141,7 +141,7 @@ internal fun SeriesDetails(model: LibraryModel, series: Item, play: (Item, List<
             LaunchedEffect(ep.id) { focus.requestFocus() }
             Panel(Modifier.align(Alignment.Center).width(400.dp).testTag("episode-actions")) {
                 Column(Modifier.padding(Spacing.titleGap), verticalArrangement = Arrangement.spacedBy(Spacing.unit)) {
-                    Text(episodeName(ep.title).title.displayTitle(), style = LumenType.cardTitle, maxLines = 2)
+                    Text(catalog?.titles?.get(ep.id).orEmpty(), style = LumenType.cardTitle, maxLines = 2)
                     ListRow(onClick = { model.watched(ep, true); closeMenu() }, modifier = Modifier.focusRequester(focus)) {
                         Text("İzlendi olarak işaretle", style = LumenType.label)
                     }
@@ -182,7 +182,7 @@ private fun SeasonTab(number: Int, selected: Boolean, complete: Boolean, modifie
 }
 
 @Composable
-private fun EpisodeShelf(model: LibraryModel, episodes: List<Item>, all: List<Item>, marks: Map<String, Mark>,
+private fun EpisodeShelf(model: LibraryModel, episodes: List<Item>, catalog: Wp14SeriesCatalog?, marks: Map<String, Mark>,
     loading: Boolean, enter: Boolean, restore: String, restored: () -> Unit,
     play: (Item, List<Item>) -> Unit, actions: (Item) -> Unit, focused: (Item) -> Unit) {
     val list = rememberLazyListState()
@@ -204,7 +204,7 @@ private fun EpisodeShelf(model: LibraryModel, episodes: List<Item>, all: List<It
             val mark = marks[ep.id]
             val duration = mark?.duration ?: 0
             val position = mark?.position ?: 0
-            val name = episodeName(ep.title, ep.category)
+            val name = catalog?.names?.get(ep.id)
             val done = watched(position, duration)
             val focus = remember { FocusRequester() }
             if (target == ep.id) LaunchedEffect(target) {
@@ -212,7 +212,7 @@ private fun EpisodeShelf(model: LibraryModel, episodes: List<Item>, all: List<It
             }
             Column(Modifier.width(180.dp)) {
                 Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).testTag("episode-artwork-${ep.id}")) {
-                    FocusCard(onClick = { play(ep, all) }, onLongClick = { actions(ep) },
+                    FocusCard(onClick = { play(ep, catalog?.items.orEmpty()) }, onLongClick = { actions(ep) },
                         modifier = Modifier.fillMaxSize().testTag("episode-${ep.id}").focusRequester(focus)
                             .onFocusChanged { if (it.isFocused) { lastFocus = ep.id; focused(ep) } }
                             .semantics { stateDescription = if (done) "İzlendi" else if (position > 0) "Yarım kaldı" else "İzlenmedi" }) {
@@ -221,7 +221,7 @@ private fun EpisodeShelf(model: LibraryModel, episodes: List<Item>, all: List<It
                     }
                 }
                 Row(Modifier.padding(top = Spacing.unit), verticalAlignment = Alignment.CenterVertically) {
-                    Text("${name.episode}. ${name.title.displayTitle()}", Modifier.weight(1f), style = LumenType.label,
+                    Text("${name?.episode ?: 0}. ${catalog?.titles?.get(ep.id).orEmpty()}", Modifier.weight(1f), style = LumenType.label,
                         color = LumenColors.textPrimary, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     if (done) LumenIcon(LumenIcon.Check, "İzlendi", size = IconSizes.meta)
                 }

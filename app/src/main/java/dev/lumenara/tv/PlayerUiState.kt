@@ -30,13 +30,14 @@ internal fun requireMainThread() {
 
 internal fun readPlayerUiState(
     player: Player,
+    tracks: Tracks? = null,
     checkThread: () -> Unit = ::requireMainThread,
 ): PlayerUiState {
     checkThread()
     return PlayerUiState(
         position = player.currentPosition,
         duration = player.duration,
-        tracks = player.currentTracks,
+        tracks = tracks ?: player.currentTracks,
         isLive = player.isCurrentMediaItemLive,
         isSeekable = player.isCurrentMediaItemSeekable,
     )
@@ -59,7 +60,7 @@ internal fun rememberPlayerUiState(player: Player?, visible: Boolean = true): St
                 if (!visible) awaitCancellation()
                 while (true) {
                     delay(500)
-                    refresh()
+                    state.value = readPlayerUiState(engine, tracks = state.value.tracks)
                 }
             } finally {
                 engine.removeListener(listener)

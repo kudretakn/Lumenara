@@ -9,7 +9,9 @@ fun Item.seriesEpisode(mark: Mark? = null): SeriesEpisode {
 }
 
 fun List<Item>.seriesOrder(): List<Item> =
-    sortedWith(compareBy({ it.seriesEpisode().season }, { it.seriesEpisode().episode }, { it.id }))
+    map { it to it.seriesEpisode() }
+        .sortedWith(compareBy({ it.second.season }, { it.second.episode }, { it.second.id }))
+        .map { it.first }
 
 fun List<Item>.continueItem(marks: List<Mark>): Item? {
     val byId = marks.associateBy { it.id }
