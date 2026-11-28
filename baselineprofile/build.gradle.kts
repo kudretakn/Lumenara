@@ -1,15 +1,18 @@
 plugins {
-    id("com.android.test")
-    id("androidx.baselineprofile")
+    alias(libs.plugins.android.test)
+    alias(libs.plugins.baselineprofile)
 }
 
 android {
     namespace = "dev.lumenara.baselineprofile"
-    compileSdk = 36
+    compileSdk = libs.versions.compileSdk.get().toInt()
     defaultConfig {
-        minSdk = 28
-        targetSdk = 36
+        minSdk = libs.versions.profileMinSdk.get().toInt()
+        targetSdk = libs.versions.targetSdk.get().toInt()
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // Rechecked inside instrumentation before BaselineProfileRule.collect touches app data.
+        testInstrumentationRunnerArguments["wp20.profileSerial"] =
+            providers.environmentVariable("ANDROID_SERIAL").getOrElse("")
     }
     targetProjectPath = ":app"
     buildTypes {
@@ -27,12 +30,16 @@ androidComponents {
     beforeVariants(selector().withBuildType("debug")) { it.enable = false }
 }
 
-baselineProfile { useConnectedDevices = true }
+// Dependency bootstrap can resolve/assemble this tool without connecting to a device.
+// Only the settings-level host gate enables connected-device task creation.
+baselineProfile {
+    useConnectedDevices = providers.gradleProperty("wp20.generateProfiles").getOrElse("false").toBooleanStrict()
+}
 
 dependencies {
-    implementation("androidx.benchmark:benchmark-macro-junit4:1.5.0")
-    implementation("androidx.test.ext:junit:1.3.0")
-    implementation("androidx.test:runner:1.7.0")
-    implementation("androidx.test.uiautomator:uiautomator:2.3.0")
-    implementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    implementation(libs.benchmark.macro)
+    implementation(libs.androidx.test.junit)
+    implementation(libs.test.runner)
+    implementation(libs.uiautomator)
+    implementation(libs.okhttp.mockwebserver)
 }

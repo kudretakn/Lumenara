@@ -1,19 +1,19 @@
 plugins {
-    id("com.google.devtools.ksp")
-    id("com.google.dagger.hilt.android")
-    id("com.android.application")
-    id("org.jetbrains.kotlin.plugin.compose")
-    id("androidx.baselineprofile")
+    alias(libs.plugins.ksp)
+    alias(libs.plugins.hilt)
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.baselineprofile)
 }
 android {
     namespace = "dev.lumenara.tv"
-    compileSdk = 36
+    compileSdk = libs.versions.compileSdk.get().toInt()
     // WP10: AGP's native strip task and CI verification use this exact NDK.
-    ndkVersion = "28.2.13676358"
+    ndkVersion = libs.versions.ndk.get()
     defaultConfig {
         applicationId = "dev.lumenara.tv"
-        minSdk = 26
-        targetSdk = 36
+        minSdk = libs.versions.minSdk.get().toInt()
+        targetSdk = libs.versions.targetSdk.get().toInt()
         versionCode = 21
         versionName = "0.6.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -84,42 +84,51 @@ composeCompiler {
 }
 baselineProfile {
     automaticGenerationDuringBuild = false
+    // Plugin 1.5.0 requires source saving when automatic generation is off.
     saveInSrc = true
     mergeIntoMain = true
-    dexLayoutOptimization = true
+    // Generated profiles go to the plugin's default src/<variant>/generated/baselineProfiles;
+    // the hand-kept src/main/baseline-prof.txt is read by AGP directly.
+    dexLayoutOptimization = false
+}
+val wp20GenerateProfiles = providers.gradleProperty("wp20.generateProfiles").getOrElse("false").toBooleanStrict()
+tasks.matching { it.name.startsWith("generate") && it.name.endsWith("BaselineProfile") }.configureEach {
+    doFirst {
+        check(wp20GenerateProfiles) { "WP20 profile generation requires -Pwp20.generateProfiles=true and the emulator gate" }
+    }
 }
 dependencies {
-    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
-    baselineProfile(project(":baselineprofile"))
-    implementation("com.google.dagger:hilt-android:2.59.2")
-    ksp("com.google.dagger:hilt-compiler:2.59.2")
+    implementation(libs.profileinstaller)
+    if (findProject(":baselineprofile") != null) baselineProfile(project(":baselineprofile"))
+    implementation(libs.hilt.android)
+    ksp(libs.hilt.compiler)
     implementation(project(":core:designsystem"))
     implementation(project(":core:catalog"))
     implementation(project(":core:data"))
     implementation(project(":core:player-api"))
     implementation(project(":core:player"))
     implementation(project(":core:player-vlc"))
-    implementation("androidx.work:work-runtime-ktx:2.11.1")
-    implementation("io.coil-kt:coil-svg:2.7.0")
-    implementation("io.coil-kt:coil-compose:2.7.0")
-    implementation("com.google.zxing:core:3.5.3")
-    implementation("com.squareup.okhttp3:okhttp-tls:4.12.0")
-    androidTestImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
-    implementation(platform("androidx.compose:compose-bom:2026.05.00"))
-    implementation("androidx.compose.foundation:foundation")
-    implementation("androidx.activity:activity-compose:1.12.4")
-    implementation("androidx.tv:tv-material:1.1.0")
-    implementation("androidx.tvprovider:tvprovider:1.1.0")
-    testImplementation("junit:junit:4.13.2")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
-    androidTestImplementation("androidx.test.ext:junit:1.3.0")
-    androidTestImplementation(platform("androidx.compose:compose-bom:2026.05.00"))
-    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
-    debugImplementation(platform("androidx.compose:compose-bom:2026.05.00"))
-    debugImplementation("androidx.compose.ui:ui-test-manifest")
-    androidTestImplementation("androidx.room:room-runtime:2.8.4")
-    androidTestImplementation("androidx.test:runner:1.7.0")
-    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
+    implementation(libs.work.runtime)
+    implementation(libs.coil.svg)
+    implementation(libs.coil.compose)
+    implementation(libs.zxing)
+    implementation(libs.okhttp.tls)
+    androidTestImplementation(libs.okhttp.mockwebserver)
+    implementation(platform(libs.compose.bom))
+    implementation(libs.compose.foundation)
+    implementation(libs.activity.compose)
+    implementation(libs.tv.material)
+    implementation(libs.tvprovider)
+    testImplementation(libs.junit)
+    testImplementation(libs.coroutines.test)
+    implementation(libs.lifecycle.viewmodel.compose)
+    implementation(libs.lifecycle.runtime.compose)
+    androidTestImplementation(libs.androidx.test.junit)
+    androidTestImplementation(platform(libs.compose.bom))
+    androidTestImplementation(libs.compose.test.junit4)
+    debugImplementation(platform(libs.compose.bom))
+    debugImplementation(libs.compose.test.manifest)
+    androidTestImplementation(libs.room.runtime)
+    androidTestImplementation(libs.test.runner)
+    androidTestImplementation(libs.uiautomator)
 }

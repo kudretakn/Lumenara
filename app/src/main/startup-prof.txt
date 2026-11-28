@@ -1,0 +1,1 @@
+# WP20: startup layout rules are disabled pending same-release A/B evidence.

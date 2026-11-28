@@ -1,14 +1,14 @@
-plugins { id("com.android.library"); id("org.jetbrains.kotlin.plugin.compose") }
+plugins { alias(libs.plugins.android.library); alias(libs.plugins.kotlin.compose) }
 android {
     namespace = "dev.lumenara.design"
-    compileSdk = 36
-    defaultConfig { minSdk = 26 }
+    compileSdk = libs.versions.compileSdk.get().toInt()
+    defaultConfig { minSdk = libs.versions.minSdk.get().toInt() }
     buildFeatures { compose = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
 }
 dependencies {
-    implementation(platform("androidx.compose:compose-bom:2026.05.00"))
-    implementation("androidx.compose.foundation:foundation")
-    implementation("androidx.tv:tv-material:1.1.0")
-    testImplementation("junit:junit:4.13.2")
+    implementation(platform(libs.compose.bom))
+    implementation(libs.compose.foundation)
+    implementation(libs.tv.material)
+    testImplementation(libs.junit)
 }

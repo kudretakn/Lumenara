@@ -1,14 +1,14 @@
 plugins {
-    id("com.android.library")
-    id("com.google.devtools.ksp")
-    id("androidx.room") version "2.8.4"
+    alias(libs.plugins.android.library)
+    alias(libs.plugins.ksp)
+    alias(libs.plugins.room)
 }
 android {
     namespace = "dev.lumenara.data"
-    compileSdk = 36
+    compileSdk = libs.versions.compileSdk.get().toInt()
     buildFeatures { buildConfig = true }
     defaultConfig {
-        minSdk = 26
+        minSdk = libs.versions.minSdk.get().toInt()
         buildConfigField("String", "OPENSUBTITLES_API_KEY", "\"${System.getenv("OPENSUBTITLES_API_KEY").orEmpty().replace("\\", "\\\\").replace("\"", "\\\"")}\"")
         buildConfigField("String", "TMDB_READ_TOKEN", "\"${System.getenv("TMDB_READ_TOKEN").orEmpty().replace("\\", "\\\\").replace("\"", "\\\"")}\"")
     }
@@ -17,14 +17,14 @@ android {
 room { schemaDirectory("$projectDir/schemas") }
 dependencies {
     api(project(":core:catalog"))
-    implementation("androidx.room:room-runtime:2.8.4")
-    ksp("androidx.room:room-compiler:2.8.4")
-    implementation("androidx.room:room-ktx:2.8.4")
-    api("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("androidx.work:work-runtime-ktx:2.11.1")
-    implementation("androidx.datastore:datastore-preferences:1.2.1")
-    testImplementation("junit:junit:4.13.2")
-    testImplementation("org.json:json:20240303")
-    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
+    implementation(libs.room.runtime)
+    ksp(libs.room.compiler)
+    implementation(libs.room.ktx)
+    api(libs.okhttp.core)
+    implementation(libs.work.runtime)
+    implementation(libs.datastore.preferences)
+    testImplementation(libs.junit)
+    testImplementation(libs.json)
+    testImplementation(libs.okhttp.mockwebserver)
+    testImplementation(libs.coroutines.test)
 }

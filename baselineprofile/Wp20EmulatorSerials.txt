@@ -1,0 +1,3 @@
+# Explicit local Android TV API36 x86_64 emulator serials. Never add a TV/IP/USB serial.
+# ANDROID_SERIAL must select one entry; the host gate also verifies API, ABI and QEMU.
+emulator-5580

@@ -1,6 +1,6 @@
 package dev.lumenara.baselineprofile
 
-import android.util.Log
+import android.os.Build
 import androidx.benchmark.macro.junit4.BaselineProfileRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -19,7 +19,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/** Runs only through :app:generateBaselineProfile, against the non-debuggable app. */
+/** Opt-in API36 emulator tooling. Every requested journey must finish or generation fails. */
 @RunWith(AndroidJUnit4::class)
 class BaselineProfileGenerator {
     @get:Rule val baselineProfile = BaselineProfileRule()
@@ -29,17 +29,18 @@ class BaselineProfileGenerator {
 
     @Test
     fun startupAndBrowse() {
-        // Like LibraryJourneyTest, serve a local M3U and enable HTTP through Setup.
-        // Extra channels exercise several rows without starting any network playback.
+        requireProfileEmulator()
+        // A fresh disposable AVD makes fixture ownership explicit, without clearing app data.
+        // Existing catalogues are rejected rather than silently producing partial journeys.
         MockWebServer().use { server ->
             server.start()
             val playlist = buildString {
                 append("#EXTM3U\n")
                 repeat(48) { index ->
-                    append("#EXTINF:-1 group-title=\"Spor\",Test Kanalı $index\n")
+                    append("#EXTINF:-1 group-title=\"Wp20 Spor\",Wp20 Kanal ${index.toString().padStart(2, '0')}\n")
                     append("${server.url("/live/$index")}\n")
                 }
-                append("#EXTINF:-1 group-title=\"Filmler\",Gece Treni\n")
+                append("#EXTINF:-1 group-title=\"Wp20 Filmler\",Wp20 Gece Treni\n")
                 append("${server.url("/movie/1.mp4")}\n")
             }
             server.dispatcher = object : Dispatcher() {
@@ -49,63 +50,86 @@ class BaselineProfileGenerator {
             }
             device.executeShellCommand("am force-stop $packageName")
             device.executeShellCommand("am start -W -n $packageName/.MainActivity")
-            if (!device.wait(Until.hasObject(By.res(Pattern.compile("hub|setup-screen"))), timeout)) skip("Hub/setup unavailable before profile collection")
-            if (device.hasObject(By.res("setup-screen"))) addFixture(server.url("/list").toString())
+            check(device.wait(Until.hasObject(By.res(Pattern.compile("hub|setup-screen"))), timeout)) {
+                "WP20 Hub/setup unavailable before collection"
+            }
+            check(device.hasObject(By.res("setup-screen"))) {
+                "WP20 requires a fresh disposable API36 TV AVD with no existing release catalog"
+            }
+            addFixture(server.url("/list").toString())
 
+            // Distinct output prefixes keep browse methods out of the startup layout profile.
+            // Both collections are in one test: any missing journey fails the entire task.
             baselineProfile.collect(
                 packageName = packageName,
+                outputFilePrefix = "Wp20Startup",
                 includeInStartupProfile = true,
+                strictStability = true,
             ) {
                 killProcess()
                 pressHome()
                 startActivityAndWait()
-                if (optional(By.res("hub"), "Hub after startup") == null) return@collect
-
-                optional(By.res(Pattern.compile("hub-.*TV")), "Live navigation")?.click()
-                val liveCategory = firstCategory()
-                if (liveCategory != null) {
-                    liveCategory.click()
-                    optional(By.res("live-channels"), "Live channel grid")
-                    // DPAD scroll follows TV focus and never activates a channel.
-                    repeat(16) { device.pressDPadDown(); device.waitForIdle() }
-                } else skip("No live categories; skipping channel grid")
+                required(By.res("hub"), "Hub after cold startup")
+                required(By.res("hub-Canlı TV"), "Hub navigation")
+            }
+            baselineProfile.collect(
+                packageName = packageName,
+                outputFilePrefix = "Wp20Browse",
+                includeInStartupProfile = false,
+                strictStability = true,
+            ) {
+                killProcess()
+                pressHome()
+                startActivityAndWait()
+                required(By.res("hub"), "Hub before browsing")
+                required(By.res("hub-Canlı TV"), "Live navigation").click()
+                category("Wp20 Spor").click()
+                required(By.res("live-channels"), "Live grid")
+                val liveFocus = By.res(Pattern.compile("live-channel-.+")).focused(true)
+                val initialFocus = required(liveFocus, "Initial live channel focus").contentDescription
+                repeat(16) { device.pressDPadDown(); device.waitForIdle() }
+                check(required(liveFocus, "Live focus after scrolling").contentDescription != initialFocus) {
+                    "WP20 live DPAD scrolling did not move focus"
+                }
                 returnToHub()
 
-                optional(By.res(Pattern.compile("hub-.*Filmler")), "Movies navigation")?.click()
-                val movieCategory = firstCategory()
-                if (movieCategory != null) {
-                    movieCategory.click()
-                    optional(By.res("poster-grid"), "Movie poster grid")
-                    val poster = device.wait(Until.findObject(
-                        By.res("poster-grid").hasDescendant(By.clickable(true).desc(Pattern.compile(".+")))
-                    ), timeout)?.findObject(By.clickable(true).desc(Pattern.compile(".+")))
-                    if (poster != null) {
-                        poster.click()
-                        optional(By.res("details-content"), "Movie details")
-                    } else {
-                        skip("Empty movie category; skipping details")
-                    }
-                } else skip("No movie categories; skipping details")
+                required(By.res("hub-Filmler"), "Movies navigation").click()
+                category("Wp20 Filmler").click()
+                required(By.res("poster-grid"), "Movie grid")
+                // The slot tag is on the outer Column; the clickable focus card owns the description.
+                required(By.clickable(true).desc("Wp20 Gece Treni"), "Fixture poster").click()
+                required(By.res("details-content"), "Movie details")
                 returnToHub()
 
-                optional(By.res(Pattern.compile("hub-.*Ara")), "Search navigation")?.click()
-                optional(By.res("search-input"), "Search input")?.text = "ge"
-                // Search is debounced; wait for matching fixture/results composition.
-                android.os.SystemClock.sleep(750)
-                optional(By.res("search-results"), "Search results")
-                device.waitForIdle()
+                required(By.res("hub-Ara"), "Search navigation").click()
+                required(By.res("search-input"), "Search input").text = "Wp20 Gece"
+                required(By.res("search-results"), "Search results")
+                required(By.res(Pattern.compile("search-slot-.+")).desc("Wp20 Gece Treni"), "Populated search result")
+                returnToHub()
             }
         }
     }
 
-    private fun optional(selector: BySelector, description: String): UiObject2? =
-        device.wait(Until.findObject(selector), timeout).also { if (it == null) skip("$description unavailable; continuing") }
+    private fun requireProfileEmulator() {
+        val serial = InstrumentationRegistry.getArguments().getString("wp20.profileSerial").orEmpty()
+        check(Regex("emulator-[0-9]+").matches(serial)) { "WP20 missing host-gated emulator serial" }
+        check(Build.VERSION.SDK_INT == 36 && Build.SUPPORTED_ABIS.contains("x86_64")) {
+            "WP20 profiles require API36 x86_64"
+        }
+        check(device.executeShellCommand("getprop ro.kernel.qemu").trim() == "1") {
+            "WP20 profile generation is forbidden on physical devices"
+        }
+        check(InstrumentationRegistry.getInstrumentation().context.packageManager
+            .hasSystemFeature("android.software.leanback")) { "WP20 requires Android TV" }
+    }
 
-    private fun firstCategory(): UiObject2? {
-        if (optional(By.res("category-grid"), "Category grid") == null) return null
-        val card = By.res(Pattern.compile("category-.+")).clickable(true)
-        return device.wait(Until.findObject(By.res("category-grid").hasDescendant(card)), timeout)
-            ?.findObject(card)
+    private fun required(selector: BySelector, description: String): UiObject2 =
+        device.wait(Until.findObject(selector), timeout)
+            ?: error("WP20 missing required journey: $description")
+
+    private fun category(name: String): UiObject2 {
+        required(By.res("category-grid"), "Category grid")
+        return required(By.res("category-$name").clickable(true), "Fixture category")
     }
 
     private fun returnToHub() {
@@ -114,28 +138,25 @@ class BaselineProfileGenerator {
             device.pressBack()
             device.waitForIdle()
         }
-        optional(By.res("hub"), "Return to Hub")
+        required(By.res("hub"), "Return to Hub")
     }
 
-    private fun reveal(selector: BySelector): UiObject2? {
+    private fun reveal(selector: BySelector): UiObject2 {
         repeat(10) {
             device.findObject(selector)?.let { return it }
-            val form = device.findObject(By.res("source-setup")) ?: return null
-            form.scroll(Direction.DOWN, 0.6f)
+            required(By.res("source-setup"), "Setup form").scroll(Direction.DOWN, 0.6f)
             device.wait(Until.hasObject(selector), 1_000L)
         }
-        return optional(selector, "Setup control")
+        return required(selector, "Setup control")
     }
 
     private fun addFixture(address: String) {
-        if (optional(By.res("setup-add-m3u"), "M3U setup action")?.let { runCatching { it.click() }.isSuccess } != true) return
-        (reveal(By.res("setup-name")) ?: return).text = "Baseline Profile fixture"
-        (reveal(By.res("setup-address")) ?: return).text = address
-        (reveal(By.res("setup-advanced")) ?: return).click()
-        (reveal(By.res("setup-http-compat")) ?: return).click()
-        (reveal(By.res("setup-submit")) ?: return).click()
-        optional(By.res("hub"), "Return to Hub")
+        required(By.res("setup-add-m3u"), "M3U setup action").click()
+        reveal(By.res("setup-name")).text = "Wp20 Profile fixture"
+        reveal(By.res("setup-address")).text = address
+        reveal(By.res("setup-advanced")).click()
+        reveal(By.res("setup-http-compat")).click()
+        reveal(By.res("setup-submit")).click()
+        required(By.res("hub"), "Hub after fixture import")
     }
-
-    private fun skip(reason: String) { Log.i("BaselineProfileGenerator", reason) }
 }
