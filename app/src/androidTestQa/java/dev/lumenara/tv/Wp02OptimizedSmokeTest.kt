@@ -53,6 +53,8 @@ class Wp02OptimizedSmokeTest {
                 val directory = java.io.File(context.getExternalFilesDir(null), "wp02-failure")
                 check(directory.mkdirs() || directory.isDirectory)
                 device.dumpWindowHierarchy(java.io.File(directory, "window.xml"))
+                freshRoot()
+                device.dumpWindowHierarchy(java.io.File(directory, "window-fresh.xml"))
                 device.takeScreenshot(java.io.File(directory, "screen.png"))
             }.onFailure { android.util.Log.w("Wp02Smoke", "Failure evidence unavailable", it) }
         }
@@ -183,8 +185,7 @@ class Wp02OptimizedSmokeTest {
             await("Media3 mini-guide") { nodeWithTag("mini-guide") != null }
             closeGuide("Media3")
 
-            openPlayerOptions()
-            activate("switch Media3 to VLC") { optionWithText("Motor: Media3/VLC") }
+            activatePlayerOption("switch Media3 to VLC", "Motor: Media3/VLC")
             await("VLC surface") { nodeWithTag("vlc-player") != null }
             await("VLC options dismissed") { nodeWithTag("player-options") == null }
             settleUi()
@@ -196,8 +197,7 @@ class Wp02OptimizedSmokeTest {
             await("VLC mini-guide") { nodeWithTag("mini-guide") != null }
             closeGuide("VLC")
 
-            openPlayerOptions()
-            activate("switch VLC to Media3") { optionWithText("Motor: VLC/Media3") }
+            activatePlayerOption("switch VLC to Media3", "Motor: VLC/Media3")
             await("Media3 surface return") {
                 nodeWithTag("vlc-player") == null && nodeWithTag("player-options") == null
             }
@@ -281,33 +281,68 @@ class Wp02OptimizedSmokeTest {
         settleUi() // Let the player's frame-delayed focus restoration finish before MENU.
     }
 
-    private fun openPlayerOptions() {
-        instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_MENU)
+    private fun activatePlayerOption(label: String, text: String) {
+        // A player error may already have opened the sheet; send MENU only if needed.
+        if (nodeWithTag("player-options") == null) {
+            instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_MENU)
+        }
         await("player options") { nodeWithTag("player-options") != null }
         settleUi() // The panel requests its initial focus after its first frame.
+        activate(label, scroll = {
+            // Scroll only this sheet, without relying on row numbers or sending DOWN
+            // to the playback surface while a LazyColumn is still composing.
+            nodeWithTag("player-options")
+                ?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) == true
+        }) { optionWithText(text) }
     }
 
-    private fun optionWithText(text: String) = find(nodeWithTag("player-options")) {
-        it.isVisibleToUser && it.text?.toString() == text
+    private fun optionWithText(text: String): AccessibilityNodeInfo? {
+        val sheet = nodeWithTag("player-options") ?: return null
+        var node = find(sheet) { it.isVisibleToUser && it.text?.toString() == text }
+        // The text's immediate parent is decorative. Locate its owning DPAD row,
+        // and never escape the options sheet to a focusable player ancestor.
+        while (node != null && node != sheet) {
+            if (!node.refresh()) return null
+            if (node.isFocusable && node.isClickable) return node
+            node = node.parent
+        }
+        return null
     }
 
     private fun focusable(target: () -> AccessibilityNodeInfo?): AccessibilityNodeInfo? {
         var node = target() ?: return null
         // Text can be accessibility-focusable without owning the button's DPAD action.
-        while (!node.isFocusable || !node.isClickable) node = node.parent ?: return null
-        return node.takeIf { it.isEnabled && it.isVisibleToUser }
+        while (true) {
+            // Reacquiring rootInActiveWindow alone still returns cached descendants.
+            // In API36 failure evidence the engine row is visibly focused, but every
+            // hierarchy node says focused=false. refresh() asks the provider directly
+            // and is also available on API28, which lacks UiAutomation.clearCache().
+            if (!node.refresh()) return null
+            if (node.isFocusable && node.isClickable) {
+                return node.takeIf { it.isEnabled && it.isVisibleToUser }
+            }
+            node = node.parent ?: return null
+        }
     }
 
-    private fun activate(label: String, target: () -> AccessibilityNodeInfo?) {
+    private fun activate(
+        label: String,
+        scroll: () -> Boolean = { device.pressDPadDown() },
+        target: () -> AccessibilityNodeInfo?,
+    ) {
         settleUi()
+        var lastFocusRequest: Boolean? = null
+        val diagnostics = {
+            "last ACTION_FOCUS=$lastFocusRequest\n" + focusDiagnostics(target)
+        }
         // API28's waitForIdle can return immediately with an old accessibility tree.
         // Pace real DPAD scrolling so lazy composition can catch up; never select a
         // prefetched/offscreen row or keep a node from before a recomposition.
         var scrolls = 0
-        await("visible control: $label", 45_000) {
+        await("visible control: $label", 45_000, onTimeout = diagnostics) {
             if (focusable(target) != null) true else {
                 if (scrolls++ < 50) {
-                    device.pressDPadDown()
+                    scroll()
                     settleUi()
                     SystemClock.sleep(250)
                 }
@@ -315,16 +350,42 @@ class Wp02OptimizedSmokeTest {
             }
         }
         var focusedPolls = 0
-        await("stable DPAD focus: $label") {
+        var previous: AccessibilityNodeInfo? = null
+        await("stable DPAD focus: $label", onTimeout = diagnostics) {
             val current = focusable(target)
-            if (current?.isFocused == true) focusedPolls++ else {
+            if (current?.isFocused == true) {
+                focusedPolls = if (current == previous) focusedPolls + 1 else 1
+            } else {
                 focusedPolls = 0
-                current?.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+                // This requests input/DPAD focus, never accessibility focus or CLICK.
+                lastFocusRequest = current?.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+                if (current != null) settleUi()
             }
+            previous = current
             focusedPolls >= 3
         }
+        if (focusable(target)?.isFocused != true) {
+            fail("DPAD focus changed before OK: $label\n${diagnostics()}")
+        }
+        android.util.Log.i("Wp02Smoke", "Verified DPAD focus: $label ACTION_FOCUS=$lastFocusRequest")
         device.pressDPadCenter()
         settleUi()
+    }
+
+    private fun focusDiagnostics(target: () -> AccessibilityNodeInfo?): String {
+        fun describe(node: AccessibilityNodeInfo?): String {
+            if (node == null) return "<absent>"
+            val refreshed = node.refresh()
+            val bounds = android.graphics.Rect().also { node.getBoundsInScreen(it) }
+            return "id=${node.viewIdResourceName} text=${node.text} refreshed=$refreshed " +
+                "visible=${node.isVisibleToUser} enabled=${node.isEnabled} " +
+                "focusable=${node.isFocusable} focused=${node.isFocused} " +
+                "clickable=${node.isClickable} bounds=$bounds"
+        }
+        return "target=${describe(focusable(target))}\n" +
+            "inputFocus=${describe(instrumentation.uiAutomation.findFocus(AccessibilityNodeInfo.FOCUS_INPUT))}\n" +
+            "sheet=${describe(nodeWithTag("player-options"))}\n" +
+            "vlc=${describe(nodeWithTag("vlc-player"))}"
     }
 
     private fun settleUi() {
@@ -338,11 +399,19 @@ class Wp02OptimizedSmokeTest {
         assertTrue("UI must draw after remote input", drawn.await(10, TimeUnit.SECONDS))
     }
 
-    private fun nodeWithTag(tag: String) = find(instrumentation.uiAutomation.rootInActiveWindow) {
+    private fun freshRoot(): AccessibilityNodeInfo? {
+        val automation = instrumentation.uiAutomation
+        // Clear before lookup so a cached virtual child cannot win the search.
+        // The public UiAutomation cache API was added in API34.
+        if (Build.VERSION.SDK_INT >= 34) automation.clearCache()
+        return automation.rootInActiveWindow?.takeIf { it.refresh() }
+    }
+
+    private fun nodeWithTag(tag: String) = find(freshRoot()) {
         it.isVisibleToUser && it.viewIdResourceName == tag
     }
 
-    private fun nodeWithText(text: String) = find(instrumentation.uiAutomation.rootInActiveWindow) {
+    private fun nodeWithText(text: String) = find(freshRoot()) {
         it.isVisibleToUser && it.text?.toString() == text
     }
 
